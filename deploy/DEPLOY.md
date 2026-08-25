@@ -117,3 +117,97 @@ disk, and the config has not changed.
 - **The dev server is not a host.** `npm run dev --host` is handy for a quick
   look from another VM, but it is unoptimised, single-process and stops when
   you close the terminal. nginx serving `dist/` is the actual deployment.
+
+## The game server
+
+`/play` needs a process holding the match. nginx keeps serving the site
+exactly as before and proxies `/ws` to it.
+
+### Install Node (once)
+
+```bash
+sudo apt update
+sudo apt install -y nodejs
+node --version
+```
+
+`npm` is deliberately not installed. The only dependency, `ws`, is pure
+JavaScript with no build step and no dependencies of its own, so copying the
+folder is a complete install — and the VM needs no internet access.
+
+### Put the server in place
+
+From Windows, `server/` and `node_modules/ws` travel over the same VMware
+shared folder as `dist/`:
+
+```bash
+sudo rm -rf /opt/rivalblocks-game
+sudo mkdir -p /opt/rivalblocks-game/node_modules
+sudo cp -r /mnt/hgfs/<share-name>/server /opt/rivalblocks-game/
+sudo cp -r /mnt/hgfs/<share-name>/node_modules/ws /opt/rivalblocks-game/node_modules/
+sudo chown -R www-data:www-data /opt/rivalblocks-game
+```
+
+Check it starts before handing it to systemd:
+
+```bash
+sudo -u www-data node /opt/rivalblocks-game/server/server.js
+```
+
+Expect `Blockout Royale match server on ws://127.0.0.1:8081`. Ctrl-C.
+
+### Run it under systemd (once)
+
+```bash
+sudo cp /mnt/hgfs/<share-name>/deploy/rivalblocks-game.service \
+        /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now rivalblocks-game
+systemctl status rivalblocks-game
+```
+
+### Reload nginx with the proxy
+
+```bash
+sudo cp /mnt/hgfs/<share-name>/deploy/nginx.conf \
+        /etc/nginx/sites-available/rivalblocks
+sudo nginx -t
+sudo systemctl reload nginx
+```
+
+### Test
+
+From another machine, open `http://<vm-ip>/play` in two browser windows, join
+with two names, and play a round.
+
+If the board never appears, the handshake is the first suspect:
+
+```bash
+curl -i -N \
+  -H "Connection: Upgrade" -H "Upgrade: websocket" \
+  -H "Sec-WebSocket-Version: 13" -H "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==" \
+  http://localhost/ws
+```
+
+Expect `HTTP/1.1 101 Switching Protocols`. Anything else means the `location
+/ws` block did not take, or the service is down — check
+`journalctl -u rivalblocks-game -n 50`.
+
+### Redeploying the game
+
+```bash
+sudo systemctl stop rivalblocks-game
+# re-copy server/ as above
+sudo systemctl start rivalblocks-game
+```
+
+nginx needs nothing unless its config changed.
+
+### What is on the wire
+
+Traffic between browser and VM is plain `ws://` on port 80. Anyone running
+Wireshark on this network reads player names, every move, and the full board
+state as JSON, with no decryption step. That is fine here — the protocol
+carries no credentials and no personal data, and the site is already plain
+HTTP on a trusted internal network. Put TLS in front of both before this goes
+anywhere wider.
