@@ -5,6 +5,7 @@ import ThemeToggle from './ThemeToggle.jsx'
 const links = [
   { to: '/games', label: 'Games' },
   { to: '/servers', label: 'Servers' },
+  { to: '/play', label: 'Play' },
   { to: '/about', label: 'Studio' },
 ]
 

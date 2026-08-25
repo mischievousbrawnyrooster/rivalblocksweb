@@ -58,12 +58,21 @@ export default function GameDetail() {
             </p>
 
             <div className="mt-8 flex flex-wrap gap-3">
-              <button
-                type="button"
-                className="bg-flare px-7 py-3.5 text-xs font-bold uppercase tracking-[0.12em] text-on-flare transition-opacity hover:opacity-90"
-              >
-                Play free
-              </button>
+              {game.slug === 'blockout-royale' ? (
+                <Link
+                  to="/play"
+                  className="bg-flare px-7 py-3.5 text-xs font-bold uppercase tracking-[0.12em] text-on-flare transition-opacity hover:opacity-90"
+                >
+                  Play in browser
+                </Link>
+              ) : (
+                <button
+                  type="button"
+                  className="bg-flare px-7 py-3.5 text-xs font-bold uppercase tracking-[0.12em] text-on-flare transition-opacity hover:opacity-90"
+                >
+                  Play free
+                </button>
+              )}
               <Link
                 to="/servers"
                 className="border border-line px-7 py-3.5 text-xs font-bold uppercase tracking-[0.12em] text-muted transition-colors hover:border-flare hover:text-flare"
