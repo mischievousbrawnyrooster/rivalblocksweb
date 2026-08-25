@@ -77,3 +77,48 @@ export function removePlayer(state, id) {
   const i = state.players.findIndex((p) => p.id === id)
   if (i !== -1) state.players.splice(i, 1)
 }
+
+const DIRS = { up: [0, -1], down: [0, 1], left: [-1, 0], right: [1, 0] }
+
+/** Clears the board and hands pieces to the first MAX_PLAYERS in join order. */
+export function startRound(state) {
+  state.tiles.fill('solid')
+  state.warnAt.fill(0)
+  state.winner = null
+  state.nextCollapseAt = state.now + COLLAPSE_EVERY_MS
+  state.players.forEach((p, i) => {
+    p.playing = i < MAX_PLAYERS
+    p.alive = p.playing
+    if (p.playing) {
+      ;[p.x, p.y] = SPAWNS[i]
+      // Backdated, or the very first move of the round hits its own cooldown.
+      p.lastMoveAt = state.now - MOVE_COOLDOWN_MS
+    }
+  })
+  state.phase = 'playing'
+}
+
+/** Applies one step. Returns false, silently, for anything illegal. */
+export function move(state, id, dir) {
+  if (state.phase !== 'playing') return false
+
+  const p = state.players.find((q) => q.id === id)
+  if (!p || !p.playing || !p.alive) return false
+  if (state.now - p.lastMoveAt < MOVE_COOLDOWN_MS) return false
+
+  const step = DIRS[dir]
+  if (!step) return false
+
+  const x = p.x + step[0]
+  const y = p.y + step[1]
+  if (x < 0 || y < 0 || x >= SIZE || y >= SIZE) return false
+  if (state.tiles[y * SIZE + x] === 'gone') return false
+  if (state.players.some((o) => o !== p && o.playing && o.alive && o.x === x && o.y === y)) {
+    return false
+  }
+
+  p.x = x
+  p.y = y
+  p.lastMoveAt = state.now
+  return true
+}
