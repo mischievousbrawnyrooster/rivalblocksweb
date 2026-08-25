@@ -13,6 +13,22 @@
   --color-warn: var(--warn);
   --color-idle: var(--idle);
 
+  /* Board. Kept separate from the surface/bg pair: a standing block and a
+     hole have to be told apart at a glance, which those two never were. */
+  --color-tile: var(--tile);
+  --color-hole: var(--hole);
+
+  /* Player pieces. Deliberately their own tokens rather than reused status
+     colours — a piece must never wear the same colour as a tile state. */
+  --color-player-1: var(--player-1);
+  --color-player-2: var(--player-2);
+  --color-player-3: var(--player-3);
+  --color-player-4: var(--player-4);
+  --color-player-5: var(--player-5);
+  --color-player-6: var(--player-6);
+  --color-player-7: var(--player-7);
+  --color-player-8: var(--player-8);
+
   --font-display: ui-sans-serif, system-ui, 'Segoe UI', Roboto, sans-serif;
   --font-mono: ui-monospace, 'Cascadia Mono', 'Consolas', monospace;
 }
@@ -30,6 +46,22 @@
   --live: #4ade80;
   --warn: #fbbf24;
   --idle: #9ca3af;
+
+  /* A standing block reads as lit concrete; a hole is a genuine void. These
+     two carry ~3:1 against each other, which surface/bg never did. */
+  --tile: #5c5c68;
+  --hole: #08080a;
+
+  /* Light in dark mode, so the piece letter (text-bg) reads dark on top.
+     Eight distinct hues, none of them amber — that belongs to warning tiles. */
+  --player-1: #ff8a3d;
+  --player-2: #4ade80;
+  --player-3: #38bdf8;
+  --player-4: #c084fc;
+  --player-5: #f472b6;
+  --player-6: #2dd4bf;
+  --player-7: #f87171;
+  --player-8: #a3a3f0;
 
   --grid: #ffffff0a;
 
@@ -49,6 +81,21 @@
   --live: #15803d;
   --warn: #b45309;
   --idle: #6b7280;
+
+  /* Stone block on a pale board, and a hole that is still a hole — dark
+     against light gives this pairing ~8:1 here. */
+  --tile: #b8b2a2;
+  --hole: #16161a;
+
+  /* Dark in light mode, so the piece letter (text-bg) reads light on top. */
+  --player-1: #c2410c;
+  --player-2: #15803d;
+  --player-3: #0369a1;
+  --player-4: #6d28d9;
+  --player-5: #a21caf;
+  --player-6: #0f766e;
+  --player-7: #b91c1c;
+  --player-8: #3730a3;
 
   --grid: #16161a0d;
 

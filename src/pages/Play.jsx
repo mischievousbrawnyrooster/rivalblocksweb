@@ -21,19 +21,34 @@ const KEYS = {
 // since `line` already carries enough contrast against `bg`/`surface` in
 // each. The `warn` glyph below still layers on top for the flash cue.
 const TILE = {
-  solid: 'bg-surface ring-1 ring-inset ring-line',
+  solid: 'bg-tile ring-1 ring-inset ring-line',
   warn: 'bg-warn text-bg ring-1 ring-inset ring-line',
-  gone: 'bg-bg',
+  gone: 'bg-hole',
 }
 
-// Each piece also carries its initial, so players are told apart without
-// relying on colour.
+// Own tokens, not reused status colours — a piece must never wear the same
+// colour as a tile state, or you cannot tell a player from the floor. Each
+// piece also carries its initial, so players are told apart without colour.
+// One entry per spawn point on the server. If capacity ever outgrows this
+// list, PIECE[slot] is undefined and pieces render unstyled.
 const PIECE = [
-  'bg-flare text-on-flare',
-  'bg-live text-bg',
-  'bg-warn text-bg',
-  'bg-idle text-bg',
+  'bg-player-1 text-bg',
+  'bg-player-2 text-bg',
+  'bg-player-3 text-bg',
+  'bg-player-4 text-bg',
+  'bg-player-5 text-bg',
+  'bg-player-6 text-bg',
+  'bg-player-7 text-bg',
+  'bg-player-8 text-bg',
 ]
+
+// Each kind gets its own glyph, so a pickup is never identified by colour.
+const POWERUP = {
+  shield: { glyph: '◈', label: 'Shield', blurb: 'Survive one collapse — you get shoved clear.' },
+  dash: { glyph: '»', label: 'Dash', blurb: 'Move twice as fast for a few seconds.' },
+  sinkhole: { glyph: '✖', label: 'Sinkhole', blurb: 'Flag the tile under the nearest rival.' },
+  patch: { glyph: '✚', label: 'Patch', blurb: 'Rebuild every hole next to you.' },
+}
 
 function statusLine(game, myId) {
   if (!game) return 'Connecting to the match server.'
@@ -83,6 +98,13 @@ export default function Play() {
     }
   }, [])
 
+  const useHeld = useCallback(() => {
+    const ws = wsRef.current
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({ t: 'use' }))
+    }
+  }, [])
+
   const connect = useCallback((playerName) => {
     const scheme = window.location.protocol === 'https:' ? 'wss' : 'ws'
     const ws = new WebSocket(`${scheme}://${window.location.host}/ws`)
@@ -114,6 +136,11 @@ export default function Play() {
   useEffect(() => {
     if (status !== 'live') return undefined
     function onKey(e) {
+      if (e.code === 'Space') {
+        e.preventDefault() // space scrolls the page by default
+        useHeld()
+        return
+      }
       const dir = KEYS[e.code]
       if (!dir) return
       e.preventDefault() // arrows must not scroll the page mid-round
@@ -121,7 +148,7 @@ export default function Play() {
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [status, send])
+  }, [status, send, useHeld])
 
   // ---------- Name entry ----------
   if (status === 'idle') {
@@ -189,10 +216,23 @@ export default function Play() {
     if (p.alive) occupied.set(p.y * size + p.x, { player: p, slot: i })
   })
 
+  const powerups = game?.powerups ?? {}
+  const me = game ? game.players.find((p) => p.id === myId) : null
+  const held = me && me.held ? POWERUP[me.held] : null
+
+  // The scoreboard lists everyone connected, not just this round's four.
+  const slotOf = new Map(slots.map((p, i) => [p.id, i]))
+  const board = game
+    ? [...game.players].sort((x, y) => y.wins - x.wins || x.name.localeCompare(y.name))
+    : []
+
   return (
-    <section className="mx-auto max-w-5xl px-5 py-12">
+    <section className="mx-auto max-w-6xl px-5 py-12">
       <div className="flex flex-wrap items-baseline justify-between gap-3">
-        <h1 className="display text-3xl">Blockout Royale</h1>
+        <div className="flex flex-wrap items-baseline gap-3">
+          <h1 className="display text-3xl">Blockout Royale</h1>
+          {game?.arena && <span className="rule-label">{game.arena} arena</span>}
+        </div>
         <Link
           to="/games/blockout-royale"
           className="text-xs uppercase tracking-[0.16em] text-muted hover:text-flare"
@@ -214,6 +254,7 @@ export default function Play() {
         >
           {(game?.tiles ?? []).map((t, i) => {
             const here = occupied.get(i)
+            const pickup = POWERUP[powerups[i]]
             return (
               <div
                 key={i}
@@ -222,6 +263,11 @@ export default function Play() {
                 {t === 'warn' && (
                   <span aria-hidden="true" className="absolute right-0.5 top-0.5 leading-none">
                     ▲
+                  </span>
+                )}
+                {pickup && (
+                  <span aria-hidden="true" className="absolute text-sm leading-none text-fg">
+                    {pickup.glyph}
                   </span>
                 )}
                 {here && (
@@ -237,25 +283,72 @@ export default function Play() {
         </div>
 
         <div>
-          <p className="rule-label">In the round</p>
+          <div className="flex items-baseline justify-between">
+            <p className="rule-label">Scoreboard</p>
+            <p className="rule-label">Wins</p>
+          </div>
           <ul className="mt-3 space-y-2">
-            {slots.map((p, i) => (
-              <li key={p.id} className="flex items-center gap-2.5 text-sm">
-                <span
-                  className={`flex h-5 w-5 items-center justify-center text-[0.65rem] font-bold ${PIECE[i]}`}
-                  aria-hidden="true"
-                >
-                  {p.name.slice(0, 1).toUpperCase()}
-                </span>
-                <span className={p.alive ? '' : 'text-muted line-through'}>{p.name}</span>
-                {p.id === myId && <span className="rule-label">you</span>}
-              </li>
-            ))}
-            {slots.length === 0 && <li className="text-sm text-muted">Nobody yet.</li>}
+            {board.map((p) => {
+              const slot = slotOf.get(p.id)
+              return (
+                <li key={p.id} className="flex items-center gap-2.5 text-sm">
+                  <span
+                    className={`flex h-5 w-5 shrink-0 items-center justify-center text-[0.65rem] font-bold ${
+                      // A spectator has no piece colour, so it gets an outline.
+                      slot === undefined ? 'text-muted ring-1 ring-inset ring-line' : PIECE[slot]
+                    }`}
+                    aria-hidden="true"
+                  >
+                    {p.name.slice(0, 1).toUpperCase()}
+                  </span>
+                  <span
+                    className={`truncate ${p.playing && !p.alive ? 'text-muted line-through' : ''}`}
+                  >
+                    {p.name}
+                  </span>
+                  {p.id === myId && <span className="rule-label shrink-0">you</span>}
+                  <span className="ml-auto font-mono text-xs tabular-nums">
+                    {p.wins}
+                    <span className="sr-only"> wins</span>
+                  </span>
+                </li>
+              )
+            })}
+            {board.length === 0 && <li className="text-sm text-muted">Nobody yet.</li>}
           </ul>
 
+          <p className="rule-label mt-8">Carrying</p>
+          <div aria-live="polite" className="mt-3">
+            {held ? (
+              <>
+                <button
+                  type="button"
+                  onClick={useHeld}
+                  className="flex w-full items-center gap-2.5 border border-flare px-3 py-2.5 text-left text-sm text-flare transition-colors hover:bg-flare hover:text-on-flare"
+                >
+                  <span aria-hidden="true" className="text-base leading-none">
+                    {held.glyph}
+                  </span>
+                  <span className="font-bold uppercase tracking-[0.08em]">{held.label}</span>
+                  <span className="ml-auto text-[0.6875rem] tracking-[0.16em]">SPACE</span>
+                </button>
+                <p className="mt-2 text-xs leading-relaxed text-muted">{held.blurb}</p>
+              </>
+            ) : (
+              <p className="text-sm text-muted">
+                Nothing. Walk over a marked tile to pick one up.
+              </p>
+            )}
+            {me?.shielded && (
+              <p className="mt-2 text-xs text-live">◈ Shielded — one collapse absorbed.</p>
+            )}
+            {me?.dashing && <p className="mt-2 text-xs text-live">» Dashing.</p>}
+          </div>
+
           <p className="rule-label mt-8">Controls</p>
-          <p className="mt-2 text-sm text-muted">Arrow keys or WASD.</p>
+          <p className="mt-2 text-sm text-muted">
+            Arrow keys or WASD to move. Space to use what you are carrying.
+          </p>
           <div className="mt-3 grid w-40 grid-cols-3 gap-1.5">
             <span />
             <Arrow dir="up" glyph="▲" label="Move up" onMove={send} />
@@ -267,6 +360,14 @@ export default function Play() {
             <Arrow dir="down" glyph="▼" label="Move down" onMove={send} />
             <span />
           </div>
+          <button
+            type="button"
+            onClick={useHeld}
+            disabled={!held}
+            className="mt-2 w-40 border border-line py-2.5 text-xs font-bold uppercase tracking-[0.12em] text-muted transition-colors enabled:hover:border-flare enabled:hover:text-flare disabled:opacity-40"
+          >
+            Use
+          </button>
         </div>
       </div>
     </section>

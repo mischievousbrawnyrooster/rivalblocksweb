@@ -8,6 +8,7 @@ import {
   addPlayer,
   removePlayer,
   move,
+  usePowerup,
   tick,
   snapshot,
   TICK_MS,
@@ -39,6 +40,8 @@ wss.on('connection', (ws) => {
       ws.send(JSON.stringify({ t: 'welcome', id: player.id, size: SIZE }))
     } else if (msg?.t === 'move' && player) {
       move(match, player.id, msg.dir)
+    } else if (msg?.t === 'use' && player) {
+      usePowerup(match, player.id)
     }
   })
 
