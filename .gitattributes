@@ -1,0 +1,7 @@
+# Deployed to Linux from a Windows checkout. A shell script or a config file
+# that arrives with CRLF fails in ways that are miserable to debug — runit
+# reports "bad interpreter: /bin/sh^M" and nginx rejects directives outright.
+*.run text eol=lf
+*.sh text eol=lf
+*.service text eol=lf
+*.conf text eol=lf

@@ -216,3 +216,70 @@ state as JSON, with no decryption step. That is fine here — the protocol
 carries no credentials and no personal data, and the site is already plain
 HTTP on a trusted internal network. Put TLS in front of both before this goes
 anywhere wider.
+
+## On Void Linux instead of Ubuntu
+
+Everything above assumes Debian conventions. Void differs in four places; the
+rest of the sequence — building, copying `dist/`, copying `server/` and
+`node_modules/ws` — is unchanged.
+
+### Packages
+
+```sh
+sudo xbps-install -S nodejs nginx
+```
+
+Nothing else. `ws` is pure JavaScript with no dependencies of its own, so
+there is no compiler, no node-gyp and no Python in the chain. Void's `nodejs`
+includes npm, so you can build on the box instead of copying `dist/` in.
+
+### nginx config lives in conf.d
+
+There is no `sites-available` / `sites-enabled` on Void — that is a Debian
+convention. Use:
+
+```sh
+sudo cp nginx.conf /etc/nginx/conf.d/rivalblocks.conf
+sudo nginx -t
+sudo sv reload nginx
+```
+
+**Void's stock `/etc/nginx/nginx.conf` already contains its own
+`server { listen 80; ... }` block.** Two default servers on port 80 means
+yours may not win. Comment the bundled one out, or give yours a real
+`server_name` in place of `_`.
+
+### There is no www-data
+
+Every `chown www-data:www-data` above needs the user nginx actually runs as.
+Find it, then use it everywhere including the service file:
+
+```sh
+grep -E '^\s*user' /etc/nginx/nginx.conf
+```
+
+### runit, not systemd
+
+Ignore `rivalblocks-game.service`; use `rivalblocks-game.run`.
+
+```sh
+sudo mkdir -p /etc/sv/rivalblocks-game
+sudo cp rivalblocks-game.run /etc/sv/rivalblocks-game/run
+sudo chmod +x /etc/sv/rivalblocks-game/run
+sudo ln -s /etc/sv/rivalblocks-game /var/service/
+```
+
+The symlink into `/var/service/` is what starts it and enables it at boot —
+there is no separate enable step. runit restarts the process whenever it
+exits, so `Restart=always` needs no equivalent.
+
+| systemd | runit |
+|---|---|
+| `systemctl status rivalblocks-game` | `sv status rivalblocks-game` |
+| `systemctl stop rivalblocks-game` | `sv down rivalblocks-game` |
+| `systemctl start rivalblocks-game` | `sv up rivalblocks-game` |
+| `systemctl restart rivalblocks-game` | `sv restart rivalblocks-game` |
+| `journalctl -u rivalblocks-game` | install `socklog-void`, then read `/var/log/socklog/` |
+| disable | `sudo rm /var/service/rivalblocks-game` |
+
+Redeploying the game becomes `sv down`, re-copy `server/`, `sv up`.
