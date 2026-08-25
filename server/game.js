@@ -122,3 +122,110 @@ export function move(state, id, dir) {
   p.lastMoveAt = state.now
   return true
 }
+
+function startCountdown(state) {
+  state.phase = 'countdown'
+  state.phaseUntil = state.now + COUNTDOWN_MS
+  state.winner = null
+}
+
+function endRound(state, survivor) {
+  state.phase = 'over'
+  state.winner = survivor ? survivor.name : null
+  state.phaseUntil = state.now + OVER_MS
+}
+
+// ponytail: rescans the whole grid once per pick. At 81 tiles and three picks
+// that is nothing; revisit only if the grid ever gets large.
+function collapse(state, rng) {
+  for (let n = 0; n < COLLAPSE_COUNT; n++) {
+    const solid = []
+    for (let i = 0; i < state.tiles.length; i++) {
+      if (state.tiles[i] === 'solid') solid.push(i)
+    }
+    if (solid.length === 0) return
+    const i = solid[Math.floor(rng() * solid.length)]
+    state.tiles[i] = 'warn'
+    state.warnAt[i] = state.now + WARNING_MS
+  }
+}
+
+/** Turns due warnings into holes and takes anyone standing on them with it. */
+function resolveWarnings(state) {
+  for (let i = 0; i < state.tiles.length; i++) {
+    if (state.tiles[i] !== 'warn' || state.now < state.warnAt[i]) continue
+    state.tiles[i] = 'gone'
+    for (const p of state.players) {
+      if (p.playing && p.alive && p.y * SIZE + p.x === i) p.alive = false
+    }
+  }
+}
+
+/**
+ * Advances the match by dt milliseconds. `rng` is injectable so the collapse
+ * order is deterministic under test; nothing else uses it.
+ */
+export function tick(state, dt, rng = Math.random) {
+  state.now += dt
+
+  if (state.phase === 'waiting') {
+    if (state.players.length >= MIN_PLAYERS) startCountdown(state)
+    return
+  }
+
+  if (state.phase === 'countdown') {
+    if (state.players.length < MIN_PLAYERS) {
+      state.phase = 'waiting'
+    } else if (state.now >= state.phaseUntil) {
+      startRound(state)
+    }
+    return
+  }
+
+  if (state.phase === 'over') {
+    if (state.now < state.phaseUntil) return
+    if (state.players.length >= MIN_PLAYERS) {
+      startCountdown(state)
+    } else {
+      state.phase = 'waiting'
+      state.winner = null
+    }
+    return
+  }
+
+  // playing
+  while (state.now >= state.nextCollapseAt) {
+    collapse(state, rng)
+    state.nextCollapseAt += COLLAPSE_EVERY_MS
+  }
+  resolveWarnings(state)
+
+  const standing = state.players.filter((p) => p.playing && p.alive)
+  if (standing.length <= 1) endRound(state, standing[0] ?? null)
+}
+
+/**
+ * The one message shape broadcast to clients.
+ * ponytail: full-state broadcast every tick, no diffing. 81 tiles and four
+ * players is a small object, and a client never needs earlier messages to
+ * render. Delta-encode only if the grid ever exceeds ~400 tiles.
+ */
+export function snapshot(state) {
+  const timed = state.phase === 'countdown' || state.phase === 'over'
+  return {
+    t: 'state',
+    phase: state.phase,
+    size: SIZE,
+    secs: timed ? Math.max(0, Math.ceil((state.phaseUntil - state.now) / 1000)) : 0,
+    winner: state.winner,
+    tiles: state.tiles,
+    players: state.players.map(({ id, name, x, y, playing, alive }) => ({
+      id,
+      name,
+      x,
+      y,
+      playing,
+      alive,
+    })),
+  }
+}
