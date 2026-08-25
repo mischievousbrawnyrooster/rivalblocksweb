@@ -148,6 +148,11 @@ sudo cp -r /mnt/hgfs/<share-name>/node_modules/ws /opt/rivalblocks-game/node_mod
 sudo chown -R www-data:www-data /opt/rivalblocks-game
 ```
 
+`server/package.json` (just `{ "type": "module" }`) rides along inside that
+`cp -r`. It is what tells Node these files are ES modules regardless of the
+version `apt` gave you — do not "clean it up" as redundant, the service
+won't start without it.
+
 Check it starts before handing it to systemd:
 
 ```bash
