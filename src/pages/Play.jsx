@@ -211,16 +211,19 @@ export default function Play() {
             return (
               <div
                 key={i}
-                className={`flex aspect-square items-center justify-center text-[0.65rem] font-bold ${TILE[t]}`}
+                className={`relative flex aspect-square items-center justify-center text-[0.65rem] font-bold ${TILE[t]}`}
               >
-                {here ? (
+                {t === 'warn' && (
+                  <span aria-hidden="true" className="absolute right-0.5 top-0.5 leading-none">
+                    ▲
+                  </span>
+                )}
+                {here && (
                   <span
                     className={`flex h-4/5 w-4/5 items-center justify-center ${PIECE[here.slot]}`}
                   >
                     {here.player.name.slice(0, 1).toUpperCase()}
                   </span>
-                ) : (
-                  t === 'warn' && <span aria-hidden="true">▲</span>
                 )}
               </div>
             )
