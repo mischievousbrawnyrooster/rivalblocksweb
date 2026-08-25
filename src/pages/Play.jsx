@@ -14,9 +14,15 @@ const KEYS = {
   KeyD: 'right',
 }
 
+// Solid and warn are standing tiles, so both get an inset ring that reads as
+// a raised block; gone is flat and empty. That is a structural difference,
+// not just a colour one, so a hole is legible without relying on colour
+// perception (the board's hard constraint) — and it holds up in both themes,
+// since `line` already carries enough contrast against `bg`/`surface` in
+// each. The `warn` glyph below still layers on top for the flash cue.
 const TILE = {
-  solid: 'bg-surface',
-  warn: 'bg-warn text-bg',
+  solid: 'bg-surface ring-1 ring-inset ring-line',
+  warn: 'bg-warn text-bg ring-1 ring-inset ring-line',
   gone: 'bg-bg',
 }
 

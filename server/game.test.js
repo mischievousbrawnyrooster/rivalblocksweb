@@ -62,6 +62,10 @@ test('names are trimmed, capped, stripped of control characters, never empty', (
   assert.equal(sanitizeName(42), '42')
 })
 
+test('an oversized name is bounded before the per-character work, not after', () => {
+  assert.equal(sanitizeName('a'.repeat(10000)).length, 16)
+})
+
 /** A match in the `playing` phase with n players and no random collapses. */
 function playing(n) {
   const m = createMatch()
@@ -135,6 +139,25 @@ test('an eliminated player cannot move', () => {
   const p = m.players[0]
   p.alive = false
   assert.equal(move(m, p.id, 'right'), false)
+})
+
+test('a spectator cannot move even in a legal direction', () => {
+  const m = playing(5)
+  const spectator = m.players[4]
+  assert.equal(spectator.playing, false)
+  assert.equal(move(m, spectator.id, 'right'), false)
+  assert.deepEqual([spectator.x, spectator.y], [0, 0])
+})
+
+test('inherited Object properties are not accepted as directions', () => {
+  const m = playing(2)
+  const p = m.players[0]
+  const [x0, y0] = [p.x, p.y]
+  for (const dir of ['constructor', 'toString', '__proto__', 'valueOf', 'hasOwnProperty']) {
+    assert.equal(move(m, p.id, dir), false, `${dir} must be rejected`)
+    assert.deepEqual([p.x, p.y], [x0, y0], `${dir} must not move the player`)
+    assert.ok(Number.isInteger(p.x) && Number.isInteger(p.y), `${dir} must not leave NaN position`)
+  }
 })
 
 /** Drops the tile under a player and ticks once so it resolves. */

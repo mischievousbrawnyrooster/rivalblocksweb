@@ -22,6 +22,16 @@
 
 ---
 
+## Post-implementation corrections (2026-08-06)
+
+A final whole-branch review found three defects after this plan was executed. They are fixed in the working tree, but the code blocks further down this document still show the **original, pre-fix** versions — do not re-run those blocks verbatim if this plan is ever replayed. The fixes:
+
+- **`server/game.js` — `move()` accepted inherited `Object` properties (`constructor`, `toString`, `__proto__`, ...) as directions**, driving player position to `NaN` and making elimination impossible. Fixed by looking up `DIRS` with `Object.hasOwn` instead of a bare `DIRS[dir]` truthy check.
+- **`src/pages/Play.jsx` — solid tiles and holes were distinguishable by colour alone** (`bg-surface` vs `bg-bg`, ~1.1:1 contrast), violating the colour-alone constraint above. Fixed by adding `ring-1 ring-inset ring-line` to standing tiles (`solid`, `warn`), leaving holes flat — a structural cue, not just a colour shift.
+- **`server/game.js` — `sanitizeName` bounded the input length only after `split`/`filter`/`join`**, so an oversized WebSocket frame could OOM the process before `try/catch` in `server/server.js` could help. Fixed by slicing to 256 chars before the per-character work, and by capping `maxPayload: 4096` on the `WebSocketServer` in `server/server.js`.
+
+---
+
 ### Task 0: Baseline commit
 
 The repository has zero commits and every file is untracked. Later tasks commit

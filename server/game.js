@@ -25,9 +25,11 @@ export const SPAWNS = [
 
 const NAME_MAX = 16
 
-// A code-point test rather than a regex range. An escape sequence for a
-// control character is exactly the kind of thing an editor or a copy-paste
-// silently mangles; arithmetic on the code point cannot be mangled.
+// A unit test rather than a regex range. An escape sequence for a control
+// character is exactly the kind of thing an editor or a copy-paste silently
+// mangles; arithmetic on the code unit cannot be mangled. Note: split('')
+// iterates UTF-16 code units, not code points, so a surrogate pair is seen
+// as two units here — both are above the control-character range anyway.
 const isPrintable = (ch) => {
   const code = ch.codePointAt(0)
   return code > 31 && code !== 127
@@ -36,6 +38,9 @@ const isPrintable = (ch) => {
 /** Trims, strips control characters, caps length, and never returns empty. */
 export function sanitizeName(raw) {
   const clean = String(raw ?? '')
+    // Bound the input before the expensive per-character work below, so an
+    // oversized frame can't force a huge split/filter/join allocation.
+    .slice(0, 256)
     .split('')
     .filter(isPrintable)
     .join('')
@@ -106,7 +111,7 @@ export function move(state, id, dir) {
   if (!p || !p.playing || !p.alive) return false
   if (state.now - p.lastMoveAt < MOVE_COOLDOWN_MS) return false
 
-  const step = DIRS[dir]
+  const step = Object.hasOwn(DIRS, dir) ? DIRS[dir] : null
   if (!step) return false
 
   const x = p.x + step[0]

@@ -18,7 +18,10 @@ const HOST = process.env.HOST || '127.0.0.1'
 const PORT = Number(process.env.PORT) || 8081
 
 const match = createMatch()
-const wss = new WebSocketServer({ host: HOST, port: PORT })
+// ws defaults to a 100 MiB maxPayload; the largest legal message here is a
+// short join frame, so bound it hard to keep an oversized frame from ever
+// reaching the message handler.
+const wss = new WebSocketServer({ host: HOST, port: PORT, maxPayload: 4096 })
 
 wss.on('connection', (ws) => {
   let player = null
