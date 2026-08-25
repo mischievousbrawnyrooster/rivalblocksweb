@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
+  <title>RivalBlocks</title>
+  <!-- Safari pinned-tab mask: one flat silhouette, no colour. Safari tints it. -->
+  <path d="M16 3 28 10v12L16 29 4 22V10Z" fill="#000"/>
+</svg>

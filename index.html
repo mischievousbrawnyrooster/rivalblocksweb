@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>RivalBlocks — Multiplayer block games on servers we run ourselves</title>
+    <meta
+      name="description"
+      content="RivalBlocks builds competitive multiplayer block games and operates its own game servers in twelve regions at 128 tick."
+    />
+    <!-- Applies the stored or system theme before first paint so it never flashes. -->
+    <script>
+      (function () {
+        try {
+          var stored = localStorage.getItem('rb-theme')
+          var dark = stored
+            ? stored === 'dark'
+            : !window.matchMedia('(prefers-color-scheme: light)').matches
+          document.documentElement.dataset.theme = dark ? 'dark' : 'light'
+        } catch (e) {
+          /* private mode: keep the dark default */
+        }
+      })()
+    </script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.jsx"></script>
+  </body>
+</html>

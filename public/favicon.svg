@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
+  <title>RivalBlocks</title>
+  <!-- One isometric cube, same projection as BlockArt: half-width 12, half-depth 7.
+       Transparent background so it reads on light and dark tab bars alike. -->
+  <polygon points="16,3 28,10 16,17 4,10" fill="#ff6b1a"/>
+  <polygon points="4,10 16,17 16,29 4,22" fill="#c44f11"/>
+  <polygon points="16,17 28,10 28,22 16,29" fill="#8f3a0c"/>
+</svg>

@@ -1,0 +1,114 @@
+@import 'tailwindcss';
+
+/* Tokens resolve to runtime vars so a data-theme flip restyles everything. */
+@theme inline {
+  --color-bg: var(--bg);
+  --color-surface: var(--surface);
+  --color-line: var(--line);
+  --color-fg: var(--fg);
+  --color-muted: var(--muted);
+  --color-flare: var(--flare);
+  --color-on-flare: var(--on-flare);
+  --color-live: var(--live);
+  --color-warn: var(--warn);
+  --color-idle: var(--idle);
+
+  --font-display: ui-sans-serif, system-ui, 'Segoe UI', Roboto, sans-serif;
+  --font-mono: ui-monospace, 'Cascadia Mono', 'Consolas', monospace;
+}
+
+/* Dark is the default. The inline script in index.html always sets an
+   explicit data-theme, so light only needs to override. */
+:root {
+  --bg: #16161a;
+  --surface: #1d1d22;
+  --line: #2b2b31;
+  --fg: #ecebe6;
+  --muted: #8f8d86;
+  --flare: #ff6b1a;
+  --on-flare: #16161a;
+  --live: #4ade80;
+  --warn: #fbbf24;
+  --idle: #9ca3af;
+
+  --grid: #ffffff0a;
+
+  --art-top: #3d3d47;
+  --art-left: #292930;
+  --art-right: #1e1e24;
+}
+
+[data-theme='light'] {
+  --bg: #ecebe6;
+  --surface: #f6f5f1;
+  --line: #d5d0c3;
+  --fg: #16161a;
+  --muted: #5c5952;
+  --flare: #b4470a;
+  --on-flare: #ffffff;
+  --live: #15803d;
+  --warn: #b45309;
+  --idle: #6b7280;
+
+  --grid: #16161a0d;
+
+  --art-top: #ffffff;
+  --art-left: #dcd7c8;
+  --art-right: #c5bfae;
+}
+
+html {
+  scroll-behavior: smooth;
+  color-scheme: dark;
+}
+[data-theme='light'] {
+  color-scheme: light;
+}
+
+body {
+  background: var(--bg);
+  color: var(--fg);
+  font-family: var(--font-display);
+  -webkit-font-smoothing: antialiased;
+}
+
+/* The blueprint grid that gives the direction its name. */
+.blueprint {
+  background-image: linear-gradient(var(--grid) 1px, transparent 1px),
+    linear-gradient(90deg, var(--grid) 1px, transparent 1px);
+  background-size: 28px 28px;
+}
+
+/* Structural display type: tight, heavy, uppercase. */
+.display {
+  font-weight: 800;
+  letter-spacing: -0.025em;
+  text-transform: uppercase;
+  line-height: 0.95;
+}
+
+.rule-label {
+  font-size: 0.6875rem;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+:where(a, button, input, [tabindex]):focus-visible {
+  outline: 2px solid var(--flare);
+  outline-offset: 2px;
+  border-radius: 1px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html {
+    scroll-behavior: auto;
+  }
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
