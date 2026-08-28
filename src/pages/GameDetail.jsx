@@ -58,9 +58,9 @@ export default function GameDetail() {
             </p>
 
             <div className="mt-8 flex flex-wrap gap-3">
-              {game.slug === 'blockout-royale' ? (
+              {game.playPath ? (
                 <Link
-                  to="/play"
+                  to={game.playPath}
                   className="bg-flare px-7 py-3.5 text-xs font-bold uppercase tracking-[0.12em] text-on-flare transition-opacity hover:opacity-90"
                 >
                   Play in browser

@@ -28,9 +28,11 @@ export const POWERUP_EVERY_MS = 4000
 export const POWERUP_MAX = 5
 export const POWERUP_KINDS = ['shield', 'dash', 'sinkhole', 'patch']
 export const DASH_MS = 2500
-// `now` advances in whole TICK_MS steps, so any cooldown under one tick means
-// exactly one move per tick — double normal speed, and still bounded. A zero
-// cooldown would let a scripted client cross the board within a single tick.
+// `now` only ever advances inside tick(), so every move message arriving
+// between two ticks reads the same clock. Any cooldown above zero therefore
+// means exactly one move per tick — double normal speed, and still bounded no
+// matter how fast a client sends. A zero cooldown would remove that bound and
+// let a scripted client cross the board within a single tick.
 export const DASH_COOLDOWN_MS = 50
 
 // Opposite corners first, so a two-player round starts as far apart as it can,

@@ -159,3 +159,26 @@ body {
     transition-duration: 0.01ms !important;
   }
 }
+
+/* Victory confetti. Purely decorative — the win itself is announced as text in
+   a role="status" panel, so nothing is lost when this does not run. */
+@keyframes confetti-fall {
+  from {
+    transform: translate3d(0, -12vh, 0) rotate(0deg);
+  }
+  to {
+    transform: translate3d(var(--drift, 0), 108vh, 0) rotate(var(--spin, 360deg));
+  }
+}
+
+.confetti {
+  animation-name: confetti-fall;
+  animation-timing-function: linear;
+  animation-fill-mode: forwards;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .confetti {
+    display: none;
+  }
+}

@@ -53,8 +53,19 @@ wss.on('connection', (ws) => {
   ws.on('error', () => ws.close())
 })
 
+// Advance by real elapsed time rather than by the nominal tick. setInterval
+// drifts under load, and a fixed step means every duration in the match — the
+// collapse rate, the countdown, powerup spawns — silently runs slow when the
+// box is busy.
+// Clamped, because a stall or a laptop sleep would otherwise hand the
+// simulation one enormous step and collapse the whole board at once. The
+// catch-up loops in tick() handle the remainder on the following ticks.
+let last = Date.now()
 setInterval(() => {
-  tick(match, TICK_MS)
+  const now = Date.now()
+  const dt = Math.min(now - last, TICK_MS * 5)
+  last = now
+  tick(match, dt)
   const frame = JSON.stringify(snapshot(match))
   for (const client of wss.clients) {
     if (client.readyState === client.OPEN) client.send(frame)

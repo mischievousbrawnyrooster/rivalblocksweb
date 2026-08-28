@@ -7,8 +7,9 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
-    "test": "node --test src/lib/lib.test.js server/game.test.js",
-    "game": "node server/server.js"
+    "test": "node --test src/lib/lib.test.js server/game.test.js server/fracture.test.js",
+    "game": "node server/server.js",
+    "fracture": "node server/fracture-server.js"
   },
   "dependencies": {
     "react": "^19.2.8",

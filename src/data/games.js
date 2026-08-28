@@ -3,39 +3,59 @@
 export const games = [
   {
     slug: 'fracture-line',
+    playPath: '/play/fracture-line',
+    playBlurb:
+      'The arena from above. Shoot a firing line through cover, seal it behind ' +
+      'you with a charge of your own, and take what the floor gives you. Up to ' +
+      'eight operators, first to twelve eliminations. Drop in alone and the ' +
+      'arena fills itself.',
     title: 'Fracture Line',
     tagline: 'Win on ground you made.',
-    genre: '5v5 competitive block-destruction shooter',
+    genre: 'Free-for-all block-destruction shooter, up to 8',
     status: 'Live — Season 4',
     statusTone: 'live',
     flagship: true,
     platforms: ['PC', 'PS5', 'Xbox Series X|S'],
     art: { variant: 'arena', seed: 1701 },
     blurb:
-      'Every wall in Fracture Line is destructible and rebuildable mid-fight. ' +
-      'Blow a firing line through a wall, then seal it behind you. The map you ' +
-      'win on is one you carved yourself.',
+      'Every wall in Fracture Line comes apart under fire, and every operator ' +
+      'carries the charges to put one back. Blow a firing line through cover, ' +
+      'then seal it behind you. The map you win on is one you carved yourself.',
     features: [
       {
-        title: 'Structural destruction',
+        title: 'Cover comes apart',
         body:
-          'Blocks carry load. Cut the supports under a tower and the floors above ' +
-          'come down on whoever is holding them. Nothing is scripted — the ' +
-          'simulation decides what falls.',
+          'Every slab in the arena takes damage and falls. Chew through the wall ' +
+          'between you and a held angle rather than walking around it, and watch ' +
+          'the concrete go from cracked to holed to gone.',
       },
       {
         title: 'Build to hold',
         body:
-          'Every operator carries block charges. Wall a doorway, ramp a rooftop, ' +
-          'or bridge a gap under fire. Ground taken is ground you have to keep ' +
-          'standing.',
+          'Every operator carries block charges. Wall a doorway, cut a lane in ' +
+          'half, or throw a bulwark up around yourself under fire. Ground taken ' +
+          'is ground you have to keep standing.',
       },
       {
-        title: 'Ranked that means something',
+        title: 'The arena repairs itself',
         body:
-          'Placement over ten matches, visible MMR, and a per-season reset that ' +
-          'does not quietly hand you back your old rank. Leaderboards are ' +
-          'regional and public.',
+          'Breaches in the map close over. A wall you knock down buys you a lane ' +
+          'for a while, not for the rest of the match, so an arena never wears ' +
+          'flat. What you build yourself is yours to maintain — that never heals.',
+      },
+      {
+        title: 'A kit you find, not one you pick',
+        body:
+          'No loadouts. Overcharged rounds, shotguns, blades, line charges, ' +
+          'medkits and cover generators sit on the floor, one slot each, and the ' +
+          'fight over the slot is as often the fight that decides the round.',
+      },
+      {
+        title: 'Four arenas, no filler',
+        body:
+          'Kiln, Substation, Drydock and Scrapyard. Every one is rotationally ' +
+          'symmetric, so no half of the map is the good half and no spawn is the ' +
+          'short straw.',
       },
       {
         title: '128-tick, everywhere',
@@ -48,10 +68,10 @@ export const games = [
     serverNote:
       'Ranked integrity depends on the server, not the client. We run ours.',
     shots: [
-      { seed: 21, caption: 'Breach opened through a load-bearing wall — Kiln' },
-      { seed: 34, caption: 'Rebuilt catwalk holding a contested roof — Substation' },
-      { seed: 47, caption: 'Structural collapse after support loss — Kiln' },
-      { seed: 58, caption: 'Round start, both towers intact — Drydock' },
+      { seed: 21, caption: 'Firing line opened through standing cover — Kiln' },
+      { seed: 34, caption: 'Bulwark thrown up under contact — Substation' },
+      { seed: 47, caption: 'Line charge levelling a lane — Drydock' },
+      { seed: 58, caption: 'Cover knitting itself back together — Scrapyard' },
     ],
   },
   {
@@ -101,6 +121,10 @@ export const games = [
   },
   {
     slug: 'blockout-royale',
+    playPath: '/play/blockout-royale',
+    playBlurb:
+      'The full shrinking-grid brawl, scaled down to eight players. Tiles flash ' +
+      'before they drop. Stand on one when it goes and you are out.',
     title: 'Blockout Royale',
     tagline: 'Four minutes. Thirty-two players. No floor.',
     genre: 'Round-based party brawler, 32 players',
