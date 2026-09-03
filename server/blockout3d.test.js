@@ -57,9 +57,9 @@ test('joining assigns rising ids and nobody has a piece yet', () => {
   assert.equal(m.players.length, 1)
 })
 
-test('a name is trimmed, stripped of control characters and never empty', () => {
+test('a name is trimmed, stripped of control characters, and internal spaces survive', () => {
   assert.equal(sanitizeName('  ada  '), 'ada')
-  assert.equal(sanitizeName('a b'), 'ab')
+  assert.equal(sanitizeName('a b'), 'a b')
   assert.equal(sanitizeName('   '), 'Player')
   assert.equal(sanitizeName(null), 'Player')
 })

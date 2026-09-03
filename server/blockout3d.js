@@ -95,14 +95,14 @@ const isPrintable = (ch) => {
   return code > 31 && code !== 127
 }
 
-/** Trims, strips control characters and spaces, caps length, and never returns empty. */
+/** Trims, strips control characters, caps length, and never returns empty. */
 export function sanitizeName(raw) {
   const clean = String(raw ?? '')
     // Bound the input before the per-character work below, so an oversized
     // frame cannot force a huge split/filter/join allocation.
     .slice(0, 256)
     .split('')
-    .filter((ch) => isPrintable(ch) && ch !== ' ')
+    .filter(isPrintable)
     .join('')
     .trim()
     .slice(0, NAME_MAX)
