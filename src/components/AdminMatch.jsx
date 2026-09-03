@@ -188,13 +188,13 @@ export default function AdminMatch({ adminKey }) {
         adminKey={adminKey}
       />
       <MatchPanel
-        title="Blastworks — last one standing"
+        title="Blastworks: last one standing"
         path="/blast-ws"
         controllable
         adminKey={adminKey}
       />
       <MatchPanel
-        title="Blastworks — deathmatch"
+        title="Blastworks: deathmatch"
         path="/blast-dm-ws"
         controllable
         adminKey={adminKey}

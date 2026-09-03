@@ -578,10 +578,9 @@ export default function Blastworks() {
         <h1 className="display mt-2 text-4xl sm:text-5xl">Blastworks</h1>
         <p className="mt-5 leading-relaxed text-muted">
           Everyone opens sealed into their own corner of the plant. Blast a way
-          out, and whatever the rubble gives you is the kit you fight with — a
+          out, and whatever the rubble gives you is the kit you fight with: a
           longer charge, another bomb, a boot to punt one down a gallery. Blasts
-          set off other blasts, so the best kills are the ones you set up three
-          walls away.
+          set off other blasts, so the best kills are set up three walls away.
         </p>
         {status === 'full' && (
           <p className="mt-5 border-l-2 border-warn pl-4 text-sm text-warn">

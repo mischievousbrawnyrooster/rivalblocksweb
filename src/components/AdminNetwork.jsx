@@ -117,7 +117,7 @@ export default function AdminNetwork() {
         uncompressed JSON over plain ws://, with permessage-deflate off. What is
         listed here is byte for byte what a capture on the wire shows, which is
         the whole reason the protocol is shaped this way. Arrays longer than
-        eight entries are folded in the viewer only — the frame itself is intact.
+        eight entries are folded in the viewer only. The frame itself is intact.
       </p>
     </div>
   )

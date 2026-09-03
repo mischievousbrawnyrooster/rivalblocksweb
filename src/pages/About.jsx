@@ -96,7 +96,7 @@ export default function About() {
         <h2 className="display mt-2 text-3xl sm:text-4xl">We hire slowly</h2>
         <p className="mx-auto mt-5 max-w-xl leading-relaxed text-muted">
           There are no open roles right now. When there are, they go on the
-          mailing list before anywhere else — mostly netcode and infrastructure,
+          mailing list before anywhere else. Mostly netcode and infrastructure,
           occasionally engine.
         </p>
         <Link

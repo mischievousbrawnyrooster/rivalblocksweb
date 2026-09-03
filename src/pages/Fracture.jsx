@@ -1078,10 +1078,10 @@ export default function Fracture() {
         <p className="rule-label">Fracture Line</p>
         <h1 className="display mt-2 text-4xl sm:text-5xl">Fracture Line</h1>
         <p className="mt-5 leading-relaxed text-muted">
-          The arena from above. Every wall in here takes damage and comes down; the map knits its
-          own back together, but anything you build is yours to hold. Take what the floor gives you
-          — rounds that punch through cover, a blade, a line charge — and put twelve operators down
-          before anyone does the same to you. Short of a full arena, the roster fills itself.
+          The arena from above. Every wall takes damage and comes down. The map knits its own back
+          together, but anything you build is yours to hold. Take what the floor gives you, rounds
+          that punch through cover, a blade, a line charge, and put twelve operators down first.
+          Short of a full arena, the roster fills itself.
         </p>
         {status === 'full' && (
           <p className="mt-5 border-l-2 border-warn pl-4 text-sm text-warn">
@@ -1318,7 +1318,7 @@ export default function Fracture() {
                 />
               </div>
               <p aria-live="polite" className="mt-1.5 text-xs text-muted">
-                {dashLeft > 0 ? `Recharging — ${(dashLeft / 1000).toFixed(1)}s` : 'Ready — shift'}
+                {dashLeft > 0 ? `Recharging ${(dashLeft / 1000).toFixed(1)}s` : 'Ready, shift'}
               </p>
             </div>
 

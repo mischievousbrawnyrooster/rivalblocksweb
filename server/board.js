@@ -16,13 +16,13 @@ export const BOARDS = [
     file: 'board-blastworks-lastman.json',
     game: 'blastworks',
     mode: 'lastman',
-    title: 'Blastworks — Last man standing',
+    title: 'Blastworks: Last man standing',
   },
   {
     file: 'board-blastworks-deathmatch.json',
     game: 'blastworks',
     mode: 'deathmatch',
-    title: 'Blastworks — Deathmatch',
+    title: 'Blastworks: Deathmatch',
   },
 ]
 

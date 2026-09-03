@@ -22,7 +22,7 @@ export default function LeaderboardPage() {
           <p className="mt-5 max-w-xl leading-relaxed text-muted">
             Every round of Blockout Royale and every match of Fracture Line
             and Blastworks, on every server. A result goes on the board the
-            moment it finishes and stays there — nothing is cleared between
+            moment it finishes and stays there. Nothing is cleared between
             sessions.
           </p>
         </div>

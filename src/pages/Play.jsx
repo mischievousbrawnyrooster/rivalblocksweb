@@ -41,7 +41,7 @@ const PIECE = [
 
 // Each kind gets its own glyph, so a pickup is never identified by colour.
 const POWERUP = {
-  shield: { glyph: '◈', label: 'Shield', blurb: 'Survive one collapse — you get shoved clear.' },
+  shield: { glyph: '◈', label: 'Shield', blurb: 'Survive one collapse. You get shoved clear.' },
   dash: { glyph: '»', label: 'Dash', blurb: 'Move twice as fast for a few seconds.' },
   sinkhole: { glyph: '✖', label: 'Sinkhole', blurb: 'Flag the tile under the nearest rival.' },
   patch: { glyph: '✚', label: 'Patch', blurb: 'Rebuild the three by three around you.' },
@@ -617,7 +617,7 @@ export default function Play() {
               <p className="text-sm text-muted">Nothing. Walk over a marked tile to pick one up.</p>
             )}
             {me?.shielded && (
-              <p className="mt-2 text-xs text-live">◈ Shielded — one collapse absorbed.</p>
+              <p className="mt-2 text-xs text-live">◈ Shielded. One collapse absorbed.</p>
             )}
             {me?.seeing && <p className="mt-2 text-xs text-live">◎ Reading the next wave.</p>}
             {me?.dashing && <p className="mt-2 text-xs text-live">» Dashing.</p>}

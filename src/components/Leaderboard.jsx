@@ -67,7 +67,7 @@ export default function Leaderboard({ entries = [], limit = TOP_N, you = null, f
             </span>
             <span className="min-w-0 flex-1 truncate">
               {p.name}
-              {mine(p.name) && <span className="sr-only"> — you</span>}
+              {mine(p.name) && <span className="sr-only">, you</span>}
             </span>
             <span className="w-6 shrink-0 text-right font-mono text-xs text-muted tabular-nums">
               {p.wins}
@@ -123,7 +123,7 @@ export default function Leaderboard({ entries = [], limit = TOP_N, you = null, f
                   {mine(p.name) ? '▸' : ''}
                 </span>
                 {p.name}
-                {mine(p.name) && <span className="sr-only"> — you</span>}
+                {mine(p.name) && <span className="sr-only">, you</span>}
               </td>
               <td className="py-2 pr-3 text-right font-mono">{p.wins}</td>
               <td className="py-2 pr-3 text-right font-mono text-muted">{p.matches}</td>

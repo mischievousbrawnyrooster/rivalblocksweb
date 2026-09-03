@@ -7,4 +7,4 @@ dist/
 
 # The standing leaderboard, written at runtime by the match servers. It is
 # state, not source: BOARD_DIR points somewhere outside the repo in production.
-data/
+/data/
