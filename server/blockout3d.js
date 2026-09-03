@@ -228,3 +228,180 @@ export function ensureBots(state) {
     seat(state, BOT_NAMES.find((n) => !taken.has(n)) ?? `Unit ${state.nextId}`, true)
   }
 }
+
+const DIRS = [
+  [0, -1],
+  [0, 1],
+  [-1, 0],
+  [1, 0],
+]
+
+// The grid stays square; the ARENA is carved out of it by starting some tiles
+// already gone. Nothing downstream needs to know — holes are holes, whether the
+// collapse made them or the generator did.
+// `square` is first so a fixed rng of 0 gives the plain stack under test.
+export const ARENAS = ['square', 'disc', 'diamond', 'cross', 'ring', 'scatter']
+
+/** Carves one floor into shape. */
+function carve(state, z, arena, rng) {
+  const c = (SIZE - 1) / 2
+  const r = SIZE / 2
+  for (let y = 0; y < SIZE; y++) {
+    for (let x = 0; x < SIZE; x++) {
+      const dx = x - c
+      const dy = y - c
+      const dist = Math.hypot(dx, dy)
+      let solid = true
+      if (arena === 'disc') solid = dist <= r - 0.5
+      else if (arena === 'diamond') solid = Math.abs(dx) + Math.abs(dy) <= c + 0.5
+      else if (arena === 'cross') solid = Math.abs(dx) <= c / 2.5 || Math.abs(dy) <= c / 2.5
+      else if (arena === 'ring') solid = dist <= r - 0.5 && dist >= r / 2.6
+      else if (arena === 'scatter') solid = rng() > 0.12
+      if (!solid) state.tiles[idx(x, y, z)] = 'gone'
+    }
+  }
+}
+
+/**
+ * Fills in every solid region of one floor except the largest.
+ *
+ * Per floor, not per stack: two regions on the same floor cannot reach each
+ * other, and a floor above is not a route between them — you can drop onto a
+ * floor but never climb back off it under your own power.
+ */
+function keepLargestRegion(state, z) {
+  const base = z * SIZE * SIZE
+  const seen = new Set()
+  let largest = []
+
+  for (let n = 0; n < SIZE * SIZE; n++) {
+    const start = base + n
+    if (state.tiles[start] !== 'solid' || seen.has(start)) continue
+    const cells = [start]
+    seen.add(start)
+    for (let head = 0; head < cells.length; head++) {
+      const [x, y] = xyz(cells[head])
+      for (const [dx, dy] of DIRS) {
+        const nx = x + dx
+        const ny = y + dy
+        if (nx < 0 || ny < 0 || nx >= SIZE || ny >= SIZE) continue
+        const j = idx(nx, ny, z)
+        if (state.tiles[j] !== 'solid' || seen.has(j)) continue
+        seen.add(j)
+        cells.push(j)
+      }
+    }
+    if (cells.length > largest.length) largest = cells
+  }
+
+  const keep = new Set(largest)
+  for (let n = 0; n < SIZE * SIZE; n++) {
+    const i = base + n
+    if (state.tiles[i] === 'solid' && !keep.has(i)) state.tiles[i] = 'gone'
+  }
+}
+
+/**
+ * Moves each spawn to the nearest solid tile of floor 0, so a carved-away
+ * corner never starts someone inside a hole. Claimed tiles are not reused, so
+ * two players can never be snapped onto each other.
+ */
+function snapSpawns(state) {
+  const exits = (x, y) => {
+    let n = 0
+    for (const [dx, dy] of DIRS) {
+      const nx = x + dx
+      const ny = y + dy
+      if (nx < 0 || ny < 0 || nx >= SIZE || ny >= SIZE) continue
+      if (state.tiles[idx(nx, ny, 0)] === 'solid') n++
+    }
+    return n
+  }
+
+  const taken = new Set()
+  return SPAWNS.map(([sx, sy]) => {
+    let best = -1
+    let bestKey = Infinity
+    for (let n = 0; n < SIZE * SIZE; n++) {
+      if (state.tiles[n] !== 'solid' || taken.has(n)) continue
+      const [x, y] = xyz(n)
+      // A tile with a single exit is a death trap the moment that exit goes,
+      // so openness outranks proximity.
+      const key = (exits(x, y) >= 2 ? 0 : 1) * 1e6 + (x - sx) ** 2 + (y - sy) ** 2
+      if (key < bestKey) {
+        bestKey = key
+        best = n
+      }
+    }
+    if (best === -1) return [sx, sy]
+    taken.add(best)
+    const [x, y] = xyz(best)
+    return [x, y]
+  })
+}
+
+/** Clears the stack and hands pieces to the first MAX_PLAYERS in join order. */
+export function startRound(state, rng = Math.random) {
+  // Bots are seated by the tick, not here. Laying the stack out for one person
+  // would hand them the round on the very next tick.
+  if (state.players.length < MIN_PLAYERS) {
+    state.phase = 'waiting'
+    state.winner = null
+    state.winnerId = null
+    state.final = false
+    return
+  }
+
+  state.tiles.fill('solid')
+  state.warnAt.fill(0)
+  state.warnBy.fill(0)
+  state.winner = null
+  state.bottom = FLOORS - 1
+  state.nextCollapseAt = state.now + COLLAPSE_EVERY_MS
+  state.voidAt = state.now + VOID_FIRST_MS
+  state.nextWave = []
+  state.powerups = {}
+  state.nextPowerupAt = state.now + POWERUP_EVERY_MS
+
+  for (let z = 0; z < FLOORS; z++) {
+    state.arenas[z] = ARENAS[Math.floor(rng() * ARENAS.length)]
+    carve(state, z, state.arenas[z], rng)
+    keepLargestRegion(state, z)
+  }
+
+  state.nextWave = pickWave(state, rng)
+  const spawns = snapSpawns(state)
+
+  state.players.forEach((p, i) => {
+    p.playing = i < MAX_PLAYERS
+    p.alive = p.playing
+    p.held = null
+    p.shielded = false
+    p.dashUntil = 0
+    p.seeingUntil = 0
+    p.dir = [0, 0]
+    p.face = [1, 0]
+    p.fallUntil = 0
+    p.fallBy = 0
+    p.stompAt = 0
+    p.stompReadyAt = 0
+    p.z = 0
+    if (p.playing) {
+      // Centre of the tile: positions are continuous, tiles are not.
+      p.x = spawns[i][0] + 0.5
+      p.y = spawns[i][1] + 0.5
+    }
+  })
+
+  // One on the floor before the first tick, placed last so it lands on carved
+  // ground rather than in the void or under a player.
+  spawnPowerup(state, rng)
+  state.phase = 'playing'
+}
+
+// Replaced in Task 5.
+function pickWave() {
+  return []
+}
+// Replaced in Task 8.
+function spawnPowerup() {}
