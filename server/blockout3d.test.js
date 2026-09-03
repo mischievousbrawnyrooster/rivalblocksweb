@@ -16,6 +16,13 @@ import {
   startRound,
   ARENAS,
   MIN_PLAYERS,
+  input,
+  stepPlayers,
+  SPEED_BASE,
+  AIR_SPEED,
+  DASH_MS,
+  DASH_MULT,
+  usePowerup,
 } from './blockout3d.js'
 
 test('a new match is a full stack with nobody on it', () => {
@@ -176,4 +183,87 @@ test('carving never strands a solid tile in a region of its own', () => {
     }
     assert.equal(seen.size, solid.length, `floor ${z} is one region`)
   }
+})
+
+test('a held direction moves a player at the ground speed', () => {
+  const m = playing(2)
+  const p = m.players[0]
+  p.x = 6.5
+  p.y = 6.5
+  assert.equal(input(m, p.id, [1, 0]), true)
+  stepPlayers(m, 1000)
+  assert.ok(Math.abs(p.x - (6.5 + SPEED_BASE)) < 1e-6, `moved to ${p.x}`)
+  assert.equal(p.y, 6.5, 'no drift on the other axis')
+})
+
+test('a diagonal is not faster than a straight line', () => {
+  const m = playing(2)
+  const p = m.players[0]
+  p.x = 6.5
+  p.y = 6.5
+  input(m, p.id, [1, 1])
+  stepPlayers(m, 1000)
+  const moved = Math.hypot(p.x - 6.5, p.y - 6.5)
+  assert.ok(Math.abs(moved - SPEED_BASE) < 1e-6, `travelled ${moved}`)
+})
+
+test('a direction is remembered until another one arrives', () => {
+  const m = playing(2)
+  const p = m.players[0]
+  p.x = 6.5
+  input(m, p.id, [1, 0])
+  stepPlayers(m, 100)
+  stepPlayers(m, 100)
+  assert.ok(p.x > 6.5 + SPEED_BASE * 0.15, 'kept going without a second message')
+})
+
+test('a garbage direction is refused and changes nothing', () => {
+  const m = playing(2)
+  const p = m.players[0]
+  p.x = 6.5
+  for (const bad of [null, 'up', [1], [NaN, 0], [Infinity, 0], {}, [1, 2, 3]]) {
+    assert.equal(input(m, p.id, bad), false, JSON.stringify(bad))
+  }
+  stepPlayers(m, 1000)
+  assert.equal(p.x, 6.5)
+})
+
+test('movement is clamped to the grid rather than walking off the array', () => {
+  const m = playing(2)
+  const p = m.players[0]
+  p.x = 1.5
+  p.y = 1.5
+  input(m, p.id, [-1, 0])
+  stepPlayers(m, 5000)
+  assert.ok(p.x >= 0 && p.x <= SIZE, `x stayed in bounds at ${p.x}`)
+})
+
+test('a dash multiplies ground speed for its duration', () => {
+  const m = playing(2)
+  const p = m.players[0]
+  p.x = 6.5
+  p.held = 'dash'
+  usePowerup(m, p.id)
+  input(m, p.id, [1, 0])
+  stepPlayers(m, 100)
+  assert.ok(Math.abs(p.x - (6.5 + SPEED_BASE * DASH_MULT * 0.1)) < 1e-6, `at ${p.x}`)
+})
+
+test('steering mid-drop is slower than running', () => {
+  const m = playing(2)
+  const p = m.players[0]
+  p.x = 6.5
+  p.fallUntil = m.now + 10000
+  input(m, p.id, [1, 0])
+  stepPlayers(m, 1000)
+  assert.ok(Math.abs(p.x - (6.5 + AIR_SPEED)) < 1e-6, `at ${p.x}`)
+})
+
+test('facing follows the last real direction, not a released key', () => {
+  const m = playing(2)
+  const p = m.players[0]
+  input(m, p.id, [0, 1])
+  assert.deepEqual(p.face, [0, 1])
+  input(m, p.id, [0, 0])
+  assert.deepEqual(p.face, [0, 1], 'standing still does not erase which way you face')
 })

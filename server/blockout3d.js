@@ -399,6 +399,56 @@ export function startRound(state, rng = Math.random) {
   state.phase = 'playing'
 }
 
+/**
+ * Sets the direction a player is holding. Returns false, silently, for anything
+ * that is not a finite two-component vector — a NaN here would put a body at
+ * NaN and make it permanently un-eliminable, which is the same failure the
+ * grid games guard against with `Object.hasOwn(DIRS, dir)`.
+ */
+export function input(state, id, dir) {
+  if (state.phase !== 'playing') return false
+  const p = state.players.find((q) => q.id === id)
+  if (!p || !p.playing || !p.alive) return false
+  if (!Array.isArray(dir) || dir.length !== 2) return false
+  const [dx, dy] = dir
+  if (!Number.isFinite(dx) || !Number.isFinite(dy)) return false
+
+  const len = Math.hypot(dx, dy)
+  // A normalised vector, so holding two keys is not a faster way to travel.
+  p.dir = len > 0 ? [dx / len, dy / len] : [0, 0]
+  // Releasing everything leaves you facing the way you were, which is what a
+  // blink needs — a hop into wherever the key happened to be let go is not it.
+  if (len > 0) p.face = p.dir
+  return true
+}
+
+/** Advances every body by dt, on the ground or in the air. */
+export function stepPlayers(state, dt) {
+  const secs = dt / 1000
+  for (const p of state.players) {
+    if (!p.playing || !p.alive) continue
+    const [dx, dy] = p.dir
+    if (dx === 0 && dy === 0) continue
+    const speed = p.fallUntil
+      ? AIR_SPEED
+      : SPEED_BASE * (state.now < p.dashUntil ? DASH_MULT : 1)
+    // Clamped to the grid rather than to the arena: the arena edge is carved
+    // `gone`, so walking off it is a fall and needs no rule of its own.
+    p.x = Math.max(0, Math.min(SIZE, p.x + dx * speed * secs))
+    p.y = Math.max(0, Math.min(SIZE, p.y + dy * speed * secs))
+  }
+}
+
+// Replaced in Task 8.
+export function usePowerup(state, id) {
+  const p = state.players.find((q) => q.id === id)
+  if (!p || !p.held) return false
+  const kind = p.held
+  p.held = null
+  if (kind === 'dash') p.dashUntil = state.now + DASH_MS
+  return true
+}
+
 // Replaced in Task 5.
 function pickWave() {
   return []
