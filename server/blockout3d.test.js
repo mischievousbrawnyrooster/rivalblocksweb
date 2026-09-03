@@ -23,6 +23,9 @@ import {
   DASH_MS,
   DASH_MULT,
   usePowerup,
+  tileUnder,
+  resolveFalls,
+  FALL_MS,
 } from './blockout3d.js'
 
 test('a new match is a full stack with nobody on it', () => {
@@ -266,4 +269,135 @@ test('facing follows the last real direction, not a released key', () => {
   assert.deepEqual(p.face, [0, 1])
   input(m, p.id, [0, 0])
   assert.deepEqual(p.face, [0, 1], 'standing still does not erase which way you face')
+})
+
+test('losing the tile under you starts a drop, it does not teleport you', () => {
+  const m = playing(2)
+  const p = m.players[0]
+  m.tiles[tileUnder(m, p)] = 'gone'
+  resolveFalls(m)
+  assert.ok(p.fallUntil > m.now, 'a drop is in progress')
+  assert.equal(p.z, 0, 'still on the floor being left')
+  m.now += FALL_MS
+  resolveFalls(m)
+  assert.equal(p.z, 1)
+  assert.equal(p.fallUntil, 0)
+  assert.equal(p.alive, true, 'a fall is a life, not the round')
+})
+
+test('landing on a hole keeps falling without a second trigger', () => {
+  const m = playing(2)
+  const p = m.players[0]
+  m.tiles[idx(Math.floor(p.x), Math.floor(p.y), 0)] = 'gone'
+  m.tiles[idx(Math.floor(p.x), Math.floor(p.y), 1)] = 'gone'
+  resolveFalls(m)
+  m.now += FALL_MS
+  resolveFalls(m)
+  assert.equal(p.z, 1)
+  assert.ok(p.fallUntil > m.now, 'chained straight into a second drop')
+  m.now += FALL_MS
+  resolveFalls(m)
+  assert.equal(p.z, 2)
+})
+
+test('a drop off the bottom floor ends the player', () => {
+  const m = playing(2)
+  const p = m.players[0]
+  p.z = m.bottom
+  m.tiles[tileUnder(m, p)] = 'gone'
+  resolveFalls(m)
+  m.now += FALL_MS
+  resolveFalls(m)
+  assert.equal(p.alive, false)
+  assert.equal(p.deaths, 1)
+})
+
+test('landing on somebody drives them down a floor too', () => {
+  const m = playing(2)
+  const [a, b] = m.players
+  b.x = a.x
+  b.y = a.y
+  b.z = 1
+  m.tiles[tileUnder(m, a)] = 'gone'
+  resolveFalls(m)
+  m.now += FALL_MS
+  resolveFalls(m)
+  assert.equal(a.z, 1, 'the lander arrived')
+  assert.ok(b.fallUntil > m.now, 'and shoved the occupant off')
+  assert.equal(b.fallBy, a.id, 'credited to whoever landed on them')
+})
+
+test('a landing that ends somebody on the bottom floor is a kill', () => {
+  const m = playing(2)
+  const [a, b] = m.players
+  a.z = m.bottom - 1
+  b.z = m.bottom
+  b.x = a.x
+  b.y = a.y
+  m.tiles[tileUnder(m, a)] = 'gone'
+  resolveFalls(m)
+  m.now += FALL_MS
+  resolveFalls(m)
+  m.now += FALL_MS
+  resolveFalls(m)
+  assert.equal(b.alive, false)
+  assert.equal(a.kills, 1)
+  assert.equal(b.deaths, 1)
+})
+
+test('a shield is spent to stay on the floor, once', () => {
+  const m = playing(2)
+  const p = m.players[0]
+  p.shielded = true
+  m.tiles[tileUnder(m, p)] = 'gone'
+  resolveFalls(m)
+  assert.equal(p.fallUntil, 0, 'shoved aside rather than dropped')
+  assert.equal(p.shielded, false, 'and the shield is gone')
+  assert.equal(p.z, 0)
+  assert.equal(m.tiles[tileUnder(m, p)], 'solid')
+})
+
+test('a shield with nowhere to be shoved is still spent and you still fall', () => {
+  const m = playing(2)
+  const p = m.players[0]
+  p.shielded = true
+  // Erase floor 0 entirely, so there is nowhere on it to stand.
+  for (let n = 0; n < SIZE * SIZE; n++) m.tiles[n] = 'gone'
+  resolveFalls(m)
+  assert.equal(p.shielded, false)
+  assert.ok(p.fallUntil > m.now)
+})
+
+test('nobody credits themselves with a kill for their own drop', () => {
+  const m = playing(2)
+  const p = m.players[0]
+  p.z = m.bottom
+  m.tiles[tileUnder(m, p)] = 'gone'
+  resolveFalls(m)
+  m.now += FALL_MS
+  resolveFalls(m)
+  assert.equal(p.kills, 0)
+})
+
+test('a fall of your own making credits nobody, even after somebody shoved you', () => {
+  const m = playing(2)
+  const [a, b] = m.players
+  b.z = 1
+  b.x = a.x
+  b.y = a.y
+  m.tiles[tileUnder(m, a)] = 'gone'
+  resolveFalls(m)
+  m.now += FALL_MS
+  resolveFalls(m)
+  m.now += FALL_MS
+  resolveFalls(m)
+  assert.equal(b.alive, true, 'the shove cost a floor, not the round')
+  // Much later, on their own, they walk into a hole and run out of stack.
+  b.z = m.bottom
+  m.tiles[tileUnder(m, b)] = 'gone'
+  resolveFalls(m)
+  m.now += FALL_MS
+  resolveFalls(m)
+  assert.equal(b.alive, false)
+  assert.equal(a.kills, 0, 'a shove a minute ago is not a kill now')
 })

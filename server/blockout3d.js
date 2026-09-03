@@ -439,6 +439,107 @@ export function stepPlayers(state, dt) {
   }
 }
 
+/** The stack index of the tile a body's centre is over. */
+export const tileUnder = (state, p) =>
+  idx(Math.min(SIZE - 1, Math.floor(p.x)), Math.min(SIZE - 1, Math.floor(p.y)), p.z)
+
+/** The first solid tile of this floor next to a body, or null. */
+function adjacentSolid(state, p) {
+  const x0 = Math.min(SIZE - 1, Math.floor(p.x))
+  const y0 = Math.min(SIZE - 1, Math.floor(p.y))
+  for (const [dx, dy] of DIRS) {
+    const x = x0 + dx
+    const y = y0 + dy
+    if (x < 0 || y < 0 || x >= SIZE || y >= SIZE) continue
+    if (state.tiles[idx(x, y, p.z)] === 'solid') return [x + 0.5, y + 0.5]
+  }
+  return null
+}
+
+/** Takes a player out of the round, crediting `by` if there was one. */
+export function eliminate(state, p, by) {
+  if (!p.alive) return
+  p.alive = false
+  p.fallUntil = 0
+  p.deaths += 1
+  // Your own hole is nobody's kill, and neither is the void's.
+  if (!by || by === p.id) return
+  const killer = state.players.find((q) => q.id === by)
+  if (killer) killer.kills += 1
+}
+
+/**
+ * Begins a drop, unless a shield can pay for it.
+ *
+ * The shield is spent whether or not there is anywhere to be shoved, which is
+ * how the flat game does it too: an item that only costs you something when it
+ * works is an item you never have to think about.
+ */
+export function startFall(state, p, by = 0) {
+  if (!p.playing || !p.alive || p.fallUntil) return
+  if (p.shielded) {
+    p.shielded = false
+    const safe = adjacentSolid(state, p)
+    if (safe) {
+      p.x = safe[0]
+      p.y = safe[1]
+      return
+    }
+  }
+  p.fallUntil = state.now + FALL_MS
+  p.fallBy = by
+}
+
+/**
+ * Starts drops for anyone standing over nothing, and lands the drops that are
+ * due.
+ *
+ * A landing that arrives on top of somebody drives them down as well, and the
+ * credit travels with it: whoever started the chain owns every elimination it
+ * causes. That is what makes a stomp into a hole above a rival a play rather
+ * than an accident.
+ *
+ * A drop that begins in the same pass as a landing is a chain and keeps its
+ * author (`p.fallBy`). A drop that begins because a body is simply standing
+ * over a hole is its own doing and credits nobody — `fallBy` otherwise
+ * survives a landing forever, so a shove from a minute ago would still get
+ * the kill for an unrelated walk into a hole later.
+ */
+export function resolveFalls(state) {
+  for (const p of state.players) {
+    if (!p.playing || !p.alive) continue
+
+    // Whether this pass just landed the body. A drop beginning in the same
+    // pass as a landing is a chain and keeps its author. A drop beginning
+    // because somebody is standing over a hole is their own doing.
+    let landed = false
+
+    if (p.fallUntil) {
+      if (state.now < p.fallUntil) continue
+      p.fallUntil = 0
+      if (p.z >= state.bottom) {
+        // Nothing under the bottom floor but the void.
+        eliminate(state, p, p.fallBy)
+        continue
+      }
+      p.z += 1
+      landed = true
+      // Anyone already standing where this landed goes down as well.
+      for (const o of state.players) {
+        if (o === p || !o.playing || !o.alive || o.fallUntil) continue
+        if (o.z !== p.z) continue
+        if (Math.floor(o.x) !== Math.floor(p.x) || Math.floor(o.y) !== Math.floor(p.y)) continue
+        startFall(state, o, p.fallBy || p.id)
+      }
+    }
+
+    if (!p.fallUntil && state.tiles[tileUnder(state, p)] === 'gone') {
+      // A warned tile is still floor. Only a hole drops you.
+      startFall(state, p, landed ? p.fallBy : 0)
+    }
+  }
+}
+
 // Replaced in Task 8.
 export function usePowerup(state, id) {
   const p = state.players.find((q) => q.id === id)
