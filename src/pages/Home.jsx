@@ -1,12 +1,11 @@
 import { Link } from 'react-router-dom'
 import BlockArt from '../components/BlockArt.jsx'
 import GameCard from '../components/GameCard.jsx'
+import GameCarousel from '../components/GameCarousel.jsx'
 import NewsletterForm from '../components/NewsletterForm.jsx'
 import { games } from '../data/games.js'
 import { fleetStats } from '../data/servers.js'
 import { useTitle } from '../lib/useTitle.js'
-
-const flagship = games.find((g) => g.flagship)
 
 export default function Home() {
   useTitle('Multiplayer block games on servers we run ourselves')
@@ -14,64 +13,30 @@ export default function Home() {
   return (
     <>
       {/* ---------- Hero ---------- */}
-      <section className="blueprint border-b border-line">
-        <div className="mx-auto grid max-w-6xl items-center gap-12 px-5 py-16 lg:grid-cols-2 lg:py-24">
+      <GameCarousel games={games} />
+
+      {/* ---------- Fleet ---------- */}
+      <section className="border-b border-line">
+        <dl className="mx-auto flex max-w-6xl flex-wrap gap-x-10 gap-y-4 px-5 py-8">
           <div>
-            <p className="inline-block bg-flare px-2.5 py-1 text-[0.6875rem] font-bold uppercase tracking-[0.14em] text-on-flare">
-              {flagship.status}
-            </p>
-            <h1 className="display mt-5 text-5xl sm:text-6xl lg:text-7xl">
-              {flagship.title}
-            </h1>
-            <p className="mt-5 border-l-2 border-flare pl-4 text-lg leading-relaxed text-muted">
-              {flagship.blurb}
-            </p>
-
-            <div className="mt-8 flex flex-wrap gap-3">
-              <Link
-                to={`/games/${flagship.slug}`}
-                className="bg-flare px-7 py-3.5 text-xs font-bold uppercase tracking-[0.12em] text-on-flare transition-opacity hover:opacity-90"
-              >
-                Play free
-              </Link>
-              <Link
-                to="/games"
-                className="border border-line px-7 py-3.5 text-xs font-bold uppercase tracking-[0.12em] text-muted transition-colors hover:border-flare hover:text-flare"
-              >
-                All games
-              </Link>
-            </div>
-
-            <dl className="mt-10 flex flex-wrap gap-x-8 gap-y-4 border-t border-line pt-6">
-              <div>
-                <dt className="rule-label">Regions</dt>
-                <dd className="mt-1 font-mono text-xl">{fleetStats.regions}</dd>
-              </div>
-              <div>
-                <dt className="rule-label">Tick rate</dt>
-                <dd className="mt-1 font-mono text-xl">{fleetStats.tickRate}</dd>
-              </div>
-              <div>
-                <dt className="rule-label">Uptime</dt>
-                <dd className="mt-1 font-mono text-xl">{fleetStats.uptime}%</dd>
-              </div>
-              <div>
-                <dt className="rule-label">Players online</dt>
-                <dd className="mt-1 font-mono text-xl">
-                  {fleetStats.players.toLocaleString('en-US')}
-                </dd>
-              </div>
-            </dl>
+            <dt className="rule-label">Regions</dt>
+            <dd className="mt-1 font-mono text-xl">{fleetStats.regions}</dd>
           </div>
-
-          <div className="flex justify-center">
-            <BlockArt
-              variant={flagship.art.variant}
-              seed={flagship.art.seed}
-              className="w-full max-w-lg"
-            />
+          <div>
+            <dt className="rule-label">Tick rate</dt>
+            <dd className="mt-1 font-mono text-xl">{fleetStats.tickRate}</dd>
           </div>
-        </div>
+          <div>
+            <dt className="rule-label">Uptime</dt>
+            <dd className="mt-1 font-mono text-xl">{fleetStats.uptime}%</dd>
+          </div>
+          <div>
+            <dt className="rule-label">Players online</dt>
+            <dd className="mt-1 font-mono text-xl">
+              {fleetStats.players.toLocaleString('en-US')}
+            </dd>
+          </div>
+        </dl>
       </section>
 
       {/* ---------- Games ---------- */}
@@ -111,9 +76,9 @@ export default function Home() {
             </p>
             <p className="mt-4 leading-relaxed text-muted">
               That is why every region runs at {fleetStats.tickRate} tick instead
-              of one showcase region, why Deepshaft worlds keep simulating while
-              you are logged out, and why a bad night shows up on our status page
-              before it shows up on yours.
+              of one showcase region, why a Blastworks chain resolves the same
+              way for everyone standing near it, and why a bad night shows up on
+              our status page before it shows up on yours.
             </p>
             <Link
               to="/servers"

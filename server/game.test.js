@@ -24,6 +24,11 @@ import {
   DASH_COOLDOWN_MS,
   ARENAS,
   MIN_PLAYERS,
+  BOT_FILL_TO,
+  wantBots,
+  BLINK_TILES,
+  FORESIGHT_MS,
+  canRun,
 } from './game.js'
 
 test('a new match is a full board with nobody on it', () => {
@@ -304,7 +309,7 @@ test('the snapshot carries everything a client needs and nothing private', () =>
   assert.equal(s.players.length, 2)
   assert.deepEqual(
     Object.keys(s.players[0]).sort(),
-    ['alive', 'dashing', 'held', 'id', 'name', 'playing', 'shielded', 'wins', 'x', 'y'],
+    ['alive', 'bot', 'dashing', 'held', 'id', 'name', 'playing', 'seeing', 'shielded', 'wins', 'x', 'y'],
     'lastMoveAt and dashUntil stay server-side',
   )
   assert.equal(s.winner, null)
@@ -519,7 +524,7 @@ test('the snapshot carries powerups and per-player powerup state', () => {
   assert.deepEqual(s.powerups, { 9: 'dash' })
   assert.deepEqual(
     Object.keys(s.players[0]).sort(),
-    ['alive', 'dashing', 'held', 'id', 'name', 'playing', 'shielded', 'wins', 'x', 'y'],
+    ['alive', 'bot', 'dashing', 'held', 'id', 'name', 'playing', 'seeing', 'shielded', 'wins', 'x', 'y'],
   )
   assert.equal(s.players[0].held, 'shield')
   assert.equal(s.players[0].dashing, false)
@@ -646,4 +651,238 @@ test('no spawn is a dead-end spike with a single exit', () => {
       assert.ok(exits >= 2, `${name}: ${p.name} spawned at ${p.x},${p.y} with only ${exits} exit(s)`)
     }
   }
+})
+
+
+// --- bots -----------------------------------------------------------------
+
+test('nothing runs in an empty room, and an operator can lift that', () => {
+  const m = createMatch()
+  m.botFill = BOT_FILL_TO
+
+  for (let i = 0; i < 5; i++) tick(m, TICK_MS, () => 0.5)
+  assert.equal(m.players.length, 0, 'bots took the board with nobody watching')
+  assert.equal(m.phase, 'waiting')
+  assert.equal(canRun(m), false)
+
+  // Somebody arrives; the lobby is held for them to decide.
+  const person = addPlayer(m, 'someone')
+  for (let i = 0; i < 3; i++) tick(m, TICK_MS, () => 0.5)
+  assert.equal(m.players.length, 1, 'bots arrived without being asked for')
+  assert.equal(m.phase, 'waiting')
+
+  wantBots(m)
+  for (let i = 0; i < 3; i++) tick(m, TICK_MS, () => 0.5)
+  assert.ok(m.players.filter((p) => p.bot).length > 0, 'asking for bots got none')
+  assert.equal(m.phase, 'countdown')
+
+  removePlayer(m, person.id)
+  tick(m, TICK_MS, () => 0.5)
+  assert.equal(m.phase, 'waiting', 'the bots carried on to an empty room')
+  assert.equal(m.players.length, 0)
+  assert.equal(m.botsWanted, false)
+
+  m.botsOnly = true
+  for (let i = 0; i < 3; i++) tick(m, TICK_MS, () => 0.5)
+  assert.equal(m.players.length, BOT_FILL_TO)
+  assert.equal(snapshot(m).botsOnly, true)
+})
+
+test('two people start a round between them, with no bots involved', () => {
+  const m = createMatch()
+  m.botFill = BOT_FILL_TO
+  addPlayer(m, 'one')
+  for (let i = 0; i < 3; i++) tick(m, TICK_MS, () => 0.5)
+  assert.equal(m.phase, 'waiting', 'a lone player was dropped straight into a round')
+
+  addPlayer(m, 'two')
+  for (let i = 0; i < 3; i++) tick(m, TICK_MS, () => 0.5)
+  assert.equal(m.phase, 'countdown')
+  assert.equal(m.players.filter((p) => p.bot).length, 0, 'bots joined an uninvited round')
+})
+
+test('a person always displaces a bot rather than sitting behind one', () => {
+  const m = createMatch()
+  m.botFill = MAX_PLAYERS
+  addPlayer(m, 'host')
+  wantBots(m)
+  tick(m, TICK_MS, () => 0.5)
+  assert.equal(m.players.length, MAX_PLAYERS)
+
+  const late = addPlayer(m, 'late')
+  assert.ok(late, 'a person was turned away from a board full of bots')
+  assert.equal(late.bot, false)
+  assert.equal(m.players.length, MAX_PLAYERS, 'the board overflowed')
+})
+
+test('bots keep off tiles that have been flagged', () => {
+  const m = createMatch()
+  m.botFill = 3
+  addPlayer(m, 'watcher')
+  wantBots(m)
+  // Run a whole round and count how often a bot is caught standing on a tile
+  // that had already been flagged when it last had a chance to move.
+  let caught = 0
+  let chances = 0
+  for (let i = 0; i < 900; i++) {
+    tick(m, TICK_MS, () => 0.5)
+    if (m.phase !== 'playing') continue
+    for (const b of m.players) {
+      if (!b.bot || !b.alive || !b.playing) continue
+      chances++
+      if (m.tiles[b.y * SIZE + b.x] === 'warn') caught++
+    }
+  }
+  assert.ok(chances > 100, 'the round never really ran')
+  assert.ok(caught / chances < 0.25, `bots sat on flagged ground ${Math.round((caught / chances) * 100)}% of the time`)
+})
+
+test('a bot plays by every rule a person does', () => {
+  const m = createMatch()
+  m.botFill = 4
+  addPlayer(m, 'watcher')
+  wantBots(m)
+  for (let i = 0; i < 600; i++) {
+    tick(m, TICK_MS, () => 0.5)
+    for (const p of m.players) {
+      if (!p.playing || !p.alive) continue
+      assert.notEqual(m.tiles[p.y * SIZE + p.x], 'gone', `${p.name} is standing on a hole`)
+      assert.ok(p.x >= 0 && p.x < SIZE && p.y >= 0 && p.y < SIZE, `${p.name} left the board`)
+    }
+    // And never two pieces on one tile.
+    const on = m.players.filter((p) => p.playing && p.alive).map((p) => p.y * SIZE + p.x)
+    assert.equal(new Set(on).size, on.length, 'two pieces share a tile')
+  }
+})
+
+
+// --- the wider kit --------------------------------------------------------
+
+test('a blink clears a hole, and lands somewhere you could stand', () => {
+  const m = playing(2)
+  const p = m.players[0]
+  // A clean lane east with a hole in the middle of it.
+  p.x = 4
+  p.y = 7
+  p.face = [1, 0]
+  for (let x = 4; x <= 4 + BLINK_TILES; x++) m.tiles[7 * SIZE + x] = 'solid'
+  m.tiles[7 * SIZE + 5] = 'gone'
+  m.tiles[7 * SIZE + 6] = 'gone'
+  m.players[1].x = 0
+  m.players[1].y = 0
+
+  p.held = 'blink'
+  assert.equal(usePowerup(m, p.id), true)
+  assert.equal(p.x, 4 + BLINK_TILES, `landed at ${p.x}`)
+  assert.equal(p.y, 7)
+  assert.equal(m.tiles[p.y * SIZE + p.x], 'solid', 'landed on something that is not there')
+})
+
+test('a blink into nothing is refused rather than fatal', () => {
+  const m = playing(2)
+  const p = m.players[0]
+  p.x = 4
+  p.y = 7
+  p.face = [1, 0]
+  for (let n = 1; n <= BLINK_TILES; n++) m.tiles[7 * SIZE + 4 + n] = 'gone'
+  m.players[1].x = 0
+  m.players[1].y = 0
+
+  p.held = 'blink'
+  assert.equal(usePowerup(m, p.id), false)
+  assert.equal(p.held, 'blink', 'a refused blink ate the pickup')
+  assert.equal(p.x, 4, 'a refused blink still moved them')
+})
+
+test('a swap trades places with the nearest rival', () => {
+  const m = playing(3)
+  const [p, near, far] = m.players
+  p.x = 2
+  p.y = 2
+  near.x = 4
+  near.y = 2
+  far.x = 12
+  far.y = 12
+
+  p.held = 'swap'
+  assert.equal(usePowerup(m, p.id), true)
+  assert.equal(p.x, 4, 'did not take their place')
+  assert.equal(p.y, 2)
+  assert.equal(near.x, 2, 'they did not take yours')
+  assert.equal(near.y, 2)
+  assert.equal(far.x, 12, 'the wrong rival was moved')
+})
+
+test('a swap with nobody left is refused rather than wasted', () => {
+  const m = playing(2)
+  const [p, other] = m.players
+  other.alive = false
+  p.held = 'swap'
+  assert.equal(usePowerup(m, p.id), false)
+  assert.equal(p.held, 'swap')
+})
+
+test('the next wave is chosen before it lands, and only a seer is told', () => {
+  const m = playing(2)
+  assert.ok(m.nextWave.length > 0, 'no wave was lined up')
+  assert.ok(
+    m.nextWave.every((i) => m.tiles[i] === 'solid'),
+    'a wave was lined up on ground that is already gone',
+  )
+
+  // Nobody sees it by default, whoever asks.
+  assert.deepEqual(snapshot(m).soon, [])
+  assert.deepEqual(snapshot(m, m.players[0].id).soon, [])
+
+  const p = m.players[0]
+  p.held = 'foresight'
+  usePowerup(m, p.id)
+  assert.deepEqual(snapshot(m, p.id).soon, m.nextWave, 'a seer was told nothing')
+  assert.deepEqual(snapshot(m, m.players[1].id).soon, [], 'somebody else was told')
+  assert.deepEqual(snapshot(m).soon, [], 'the shared frame carried it')
+
+  m.now += FORESIGHT_MS
+  assert.deepEqual(snapshot(m, p.id).soon, [], 'foresight never wore off')
+})
+
+test('the wave that lands is the wave that was promised', () => {
+  const m = playing(2)
+  const promised = [...m.nextWave]
+  m.nextCollapseAt = m.now
+  tick(m, TICK_MS, () => 0.5)
+
+  for (const i of promised) {
+    assert.notEqual(m.tiles[i], 'solid', `${i} was promised and never flagged`)
+  }
+  assert.notDeepEqual(m.nextWave, promised, 'the following wave was never lined up')
+})
+
+
+test('a round names its winner and identifies them', () => {
+  const m = playing(3)
+  const [a, b, c] = m.players
+  b.alive = false
+  c.alive = false
+  tick(m, TICK_MS, () => 0.5)
+
+  assert.equal(m.phase, 'over')
+  assert.equal(m.winner, a.name)
+  assert.equal(m.winnerId, a.id, 'the winner was named but not identified')
+  assert.equal(snapshot(m).winnerId, a.id)
+  assert.equal(a.wins, 1)
+
+  // And it does not leak into the next round.
+  m.now += OVER_MS
+  tick(m, TICK_MS, () => 0.5)
+  assert.equal(snapshot(m).winnerId, null, 'last round’s winner carried over')
+})
+
+test('a round nobody survives is credited to nobody', () => {
+  const m = playing(2)
+  for (const p of m.players) p.alive = false
+  tick(m, TICK_MS, () => 0.5)
+  assert.equal(m.phase, 'over')
+  assert.equal(m.winner, null)
+  assert.equal(m.winnerId, null)
+  assert.ok(m.players.every((p) => p.wins === 0), 'a mutual loss was scored as a win')
 })

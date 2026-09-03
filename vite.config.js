@@ -19,6 +19,10 @@ export default defineConfig({
       // and in nginx, so '/ws-fracture' would be swallowed by the rule above
       // and quietly served the wrong game.
       '/fracture-ws': { target: 'ws://127.0.0.1:8082', ws: true },
+      '/blast-ws': { target: 'ws://127.0.0.1:8083', ws: true },
+      // Same binary, second mode. Its own process, so one crashing takes
+      // nothing else with it.
+      '/blast-dm-ws': { target: 'ws://127.0.0.1:8084', ws: true },
     },
   },
 })

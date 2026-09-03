@@ -62,7 +62,27 @@ export const POWERUP_KINDS = [
   'medkit',
   'sword',
   'bomb',
+  'mine',
+  'grapple',
+  'cloak',
 ]
+
+// A charge left on the floor. It arms after a beat — long enough that you
+// cannot drop one under somebody's feet — and then takes the first person who
+// walks onto it. The only thing in the kit that holds ground while you are
+// somewhere else.
+export const MINE_ARM_MS = 900
+export const MINE_RADIUS = 1.1
+export const MINE_LIFE_MS = 25000
+
+// A line fired at cover that pulls you to it. It stops where a round would
+// stop, so it can never put you through a wall.
+export const GRAPPLE_RANGE = 9
+export const GRAPPLE_GAP = RADIUS + 0.12
+
+// You render to everyone else as an outline. Your own view is unchanged, and
+// the markers and minimap lose you too — that is most of what it buys.
+export const CLOAK_MS = 4500
 export const SPRINT_MS = 2500
 export const OVERCHARGE_MS = 4000
 // How many layers of cover an overcharged round punches through. Infinite: an
@@ -216,6 +236,8 @@ export function createMatch(rng = Math.random, arena = ARENAS[Math.floor(rng() *
     nextBulletId: 1,
     bombs: [],
     nextBombId: 1,
+    mines: [],
+    nextMineId: 1,
     // Sparse: cell index -> kind. Only occupied cells travel, which keeps the
     // broadcast small and the Wireshark view readable.
     powerups: {},
@@ -227,6 +249,11 @@ export function createMatch(rng = Math.random, arena = ARENAS[Math.floor(rng() *
     arena,
     players: [],
     nextId: 1,
+    // Set from the operator console. Off means no match runs without a person
+    // in it, which is how it sits in normal use.
+    botsOnly: false,
+    // Nobody gets bots until somebody asks for them.
+    botsWanted: false,
     winner: null,
     winnerId: null,
     // How many participants to top up to with bots. Zero leaves the arena
@@ -286,6 +313,7 @@ function seat(state, name, bot) {
     adUntil: 0,
     swordUntil: 0,
     bombUntil: 0,
+    cloakUntil: 0,
     input: { dx: 0, dy: 0, aim: 0, fire: false },
   }
   state.players.push(player)
@@ -297,8 +325,39 @@ function seat(state, name, bot) {
  * people arrive. Called every tick, so a match is never short of opponents and
  * never holding a slot a person could use.
  */
+/**
+ * Whether the match is allowed to run at all. Bots exist to fill a board for a
+ * person, not to play by themselves: with nobody watching, a server grinding
+ * through matches is pure waste. An operator can lift this from the console
+ * when they want to watch the bots go at it.
+ */
+export const canRun = (state) => state.botsOnly || state.players.some((p) => !p.bot)
+
+/**
+ * Bots are opt-in. Somebody who turns up first gets the choice: hold the lobby
+ * open for other people, or start now against the machine. Filling the arena
+ * the instant one person arrives takes that choice away, and a match against
+ * bots you did not ask for is worse than a short wait.
+ */
+export function wantBots(state) {
+  state.botsWanted = true
+  return true
+}
+
 export function ensureBots(state, rng = Math.random) {
+  // Nobody here: clear the bots out rather than leave them playing to nobody,
+  // and forget the request, so the next person to arrive gets the choice fresh.
+  if (!canRun(state)) {
+    for (const bot of state.players.filter((p) => p.bot)) removePlayer(state, bot.id)
+    state.botsWanted = false
+    return
+  }
   if (!state.botFill) return
+  // Held open until somebody asks, or an operator says otherwise.
+  if (!state.botsWanted && !state.botsOnly) {
+    for (const bot of state.players.filter((p) => p.bot)) removePlayer(state, bot.id)
+    return
+  }
   const humans = state.players.filter((p) => !p.bot).length
   const bots = state.players.filter((p) => p.bot)
   const want = Math.max(0, Math.min(state.botFill, MAX_PLAYERS) - humans)
@@ -437,6 +496,7 @@ function respawn(state, p) {
   p.shotgunUntil = 0
   p.swordUntil = 0
   p.bombUntil = 0
+  p.cloakUntil = 0
   // Dying at least buys you your screen back.
   p.adUntil = 0
   p.charges = BUILD_CHARGES
@@ -452,6 +512,7 @@ export function startMatch(state, rng = Math.random, arena = ARENAS[Math.floor(r
   carve(state, arena, rng)
   state.bullets = []
   state.bombs = []
+  state.mines = []
   state.powerups = {}
   state.nextPowerupAt = state.now + POWERUP_EVERY_MS
   state.nextRepairAt = state.now + REPAIR_EVERY_MS
@@ -882,6 +943,67 @@ function driveBots(state, rng) {
   }
 }
 
+/**
+ * Fires a line along your aim. If it bites cover inside GRAPPLE_RANGE you are
+ * pulled up to it; if it finds nothing, the pickup is not spent.
+ *
+ * Walked out in steps rather than teleported, exactly like a dash, so it can
+ * never put you through the wall it caught.
+ */
+function grapple(state, p) {
+  const dx = Math.cos(p.aim)
+  const dy = Math.sin(p.aim)
+  let landed = 0
+  for (let d = 0.1; d <= GRAPPLE_RANGE; d += 0.1) {
+    const x = p.x + dx * d
+    const y = p.y + dy * d
+    if (!inBounds(Math.floor(x), Math.floor(y))) break
+    if (blocked(state, x, y)) break
+    landed = d
+  }
+  // Nothing worth pulling towards: too short to be a grapple.
+  if (landed < GRAPPLE_GAP + 0.5) return false
+  p.x += dx * landed
+  p.y += dy * landed
+  state.events.push({ k: 'grapple', by: p.id, x: r2(p.x), y: r2(p.y) })
+  return true
+}
+
+/** Arms a charge where you are standing. */
+function layMine(state, p) {
+  state.mines.push({
+    id: state.nextMineId++,
+    owner: p.id,
+    x: r2(p.x),
+    y: r2(p.y),
+    armAt: state.now + MINE_ARM_MS,
+    dieAt: state.now + MINE_LIFE_MS,
+  })
+}
+
+/** Takes anyone standing on an armed mine, and clears the spent ones. */
+function resolveMines(state) {
+  if (state.mines.length === 0) return
+  const live = []
+  for (const m of state.mines) {
+    if (state.now >= m.dieAt) continue
+    if (state.now < m.armAt) {
+      live.push(m)
+      continue
+    }
+    const caught = state.players.find(
+      (q) => q.alive && q.id !== m.owner && Math.hypot(q.x - m.x, q.y - m.y) <= MINE_RADIUS,
+    )
+    if (!caught) {
+      live.push(m)
+      continue
+    }
+    state.events.push({ k: 'blast', by: m.owner, tiles: [], range: 0 })
+    wound(state, caught, caught.hp, m.owner, m.x, m.y)
+  }
+  state.mines = live
+}
+
 export function usePowerup(state, id) {
   if (state.phase !== 'playing') return false
   const p = state.players.find((q) => q.id === id)
@@ -898,6 +1020,13 @@ export function usePowerup(state, id) {
   else if (kind === 'medkit') p.hp = Math.min(p.hp + MEDKIT_HEAL, OVERHEAL_MAX)
   else if (kind === 'sword') p.swordUntil = state.now + SWORD_MS
   else if (kind === 'bomb') p.bombUntil = state.now + BOMB_MS
+  else if (kind === 'cloak') p.cloakUntil = state.now + CLOAK_MS
+  else if (kind === 'mine') layMine(state, p)
+  else if (kind === 'grapple' && !grapple(state, p)) {
+    // The line found nothing. Keep the pickup rather than eat it for a miss.
+    p.held = kind
+    return false
+  }
   else if (kind === 'popup') {
     // Everyone but you. Spending it on a corpse would be a waste, so the dead
     // are spared too.
@@ -1105,8 +1234,16 @@ export function tick(state, dt, rng = Math.random) {
   state.events = []
   ensureBots(state, rng)
 
+  if (!canRun(state) && state.phase !== 'waiting') {
+    // The last person left mid-match. Stand it down rather than let the bots
+    // play it out to an empty room.
+    state.phase = 'waiting'
+    state.winner = null
+    state.winnerId = null
+  }
+
   if (state.phase === 'waiting') {
-    if (state.players.length >= MIN_PLAYERS) startMatch(state, rng)
+    if (canRun(state) && state.players.length >= MIN_PLAYERS) startMatch(state, rng)
     return
   }
 
@@ -1124,6 +1261,7 @@ export function tick(state, dt, rng = Math.random) {
   driveBots(state, rng)
   movePlayers(state, dt)
   moveBullets(state, dt)
+  resolveMines(state)
 
   // Fuses run down after movement, so the tick you step off the line is the
   // tick that saves you.
@@ -1173,6 +1311,8 @@ export function snapshot(state) {
       state.phase === 'over' ? Math.max(0, Math.ceil((state.phaseUntil - state.now) / 1000)) : 0,
     winner: state.winner,
     winnerId: state.winnerId,
+    botsOnly: state.botsOnly,
+    botsWanted: state.botsWanted,
     target: KILL_TARGET,
     min: MIN_PLAYERS,
     // Sent so the client can draw a meter without hardcoding the cooldown it
@@ -1187,6 +1327,12 @@ export function snapshot(state) {
     walls: state.walls,
     powerups: state.powerups,
     bullets: state.bullets.map((b) => ({ id: b.id, x: r2(b.x), y: r2(b.y), p: b.hot })),
+    // Armed mines only. One still arming is not yet a threat, and telling
+    // everyone exactly where it landed the instant it was dropped would make it
+    // useless.
+    mines: state.mines
+      .filter((m) => state.now >= m.armAt)
+      .map((m) => ({ id: m.id, x: m.x, y: m.y, by: m.owner })),
     bombs: state.bombs.map((b) => ({
       id: b.id,
       x: b.cx,
@@ -1217,6 +1363,7 @@ export function snapshot(state) {
       shotgun: state.now < p.shotgunUntil,
       sword: state.now < p.swordUntil,
       bomb: state.now < p.bombUntil,
+      cloaked: state.now < p.cloakUntil,
     })),
   }
 }

@@ -2,7 +2,8 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 import BlockArt from '../components/BlockArt.jsx'
 import { games } from '../data/games.js'
-import { makeWallTiles } from '../lib/wallTiles.js'
+import { makeWallTiles, styleFor } from '../lib/wallTiles.js'
+import { makeBombArt } from '../lib/fireTiles.js'
 import { useTitle } from '../lib/useTitle.js'
 
 // The ad is for one of the studio's other titles, copy straight out of the
@@ -92,6 +93,21 @@ const POWERUP = {
     label: 'Bombs',
     blurb: 'Your block charges become bombs. Each one levels a whole line.',
   },
+  mine: {
+    glyph: '⊗',
+    label: 'Mine',
+    blurb: 'Arms where you drop it and takes the first rival onto it.',
+  },
+  grapple: {
+    glyph: '⌐',
+    label: 'Grapple',
+    blurb: 'Fires a line at cover and pulls you to it.',
+  },
+  cloak: {
+    glyph: '◌',
+    label: 'Cloak',
+    blurb: 'You show as an outline to everyone else, and drop off their map.',
+  },
   popup: {
     glyph: '▣',
     label: 'Popup ad',
@@ -163,7 +179,7 @@ function statusLine(game, myId) {
 }
 
 export default function Fracture() {
-  useTitle('Fracture Line — Browser Trial')
+  useTitle('Fracture Line')
 
   const [name, setName] = useState('')
   const [status, setStatus] = useState('idle') // idle | connecting | live | closed | full
@@ -371,7 +387,11 @@ export default function Fracture() {
     let theme = null
     let colour = {}
     let tiles = null
+    let bombArt = null
     let tilesPx = 0
+    // The arena's material is part of what the tiles are, so a change of arena
+    // rebuilds them exactly like a change of size or theme.
+    let tilesStyle = null
     const readTheme = () => {
       const css = getComputedStyle(document.documentElement)
       const v = (n) => css.getPropertyValue(n).trim()
@@ -399,6 +419,7 @@ export default function Fracture() {
         theme = nowTheme
         readTheme()
         tiles = null
+        bombArt = null
       }
 
       const [a, b, t] = bracket(buf, performance.now() - DELAY_MS)
@@ -438,32 +459,36 @@ export default function Fracture() {
       ctx.fillRect(0, 0, canvas.width, canvas.height)
       ctx.setTransform(1, 0, 0, 1, -offX, -offY)
 
-      // Floor grid. Faint, and the only thing on screen that is decoration.
-      ctx.strokeStyle = colour.grid
-      ctx.lineWidth = 1
-      ctx.globalAlpha = 0.35
-      ctx.beginPath()
-      for (let x = Math.max(1, Math.floor(camX)); x < Math.min(w, camX + viewW + 1); x++) {
-        ctx.moveTo(x * u, 0)
-        ctx.lineTo(x * u, h * u)
+      // Every tile in the arena's own material, prepared once. This has to
+      // come before anything is drawn with it — the floor below is the first
+      // thing that needs it.
+      // Damage reads structurally: unbroken, fractured with a bitten corner,
+      // then holed with the reinforcement showing. Never by tint alone.
+      const px = Math.max(8, Math.round(u))
+      const style = styleFor(a.arena)
+      if (!tiles || tilesPx !== px || tilesStyle !== style) {
+        tiles = makeWallTiles(colour, px, style)
+        bombArt = makeBombArt(colour, px)
+        tilesPx = px
+        tilesStyle = style
       }
-      for (let y = Math.max(1, Math.floor(camY)); y < Math.min(h, camY + viewH + 1); y++) {
-        ctx.moveTo(0, y * u)
-        ctx.lineTo(w * u, y * u)
+
+      // The floor the arena is built on. Culled to the camera like everything
+      // else on the board.
+      const fx0 = Math.max(0, Math.floor(camX) - 1)
+      const fx1 = Math.min(w - 1, Math.ceil(camX + viewW) + 1)
+      const fy0 = Math.max(0, Math.floor(camY) - 1)
+      const fy1 = Math.min(h - 1, Math.ceil(camY + viewH) + 1)
+      for (let gy = fy0; gy <= fy1; gy++) {
+        for (let gx = fx0; gx <= fx1; gx++) {
+          const cut = tiles.floor[(gx * 7 + gy * 13) % tiles.floor.length]
+          ctx.drawImage(cut, gx * u, gy * u, u, u)
+        }
       }
-      ctx.stroke()
-      ctx.globalAlpha = 1
 
       // Walls. Each slab is a prepared tile rather than a path built per cell
       // per frame — the art can carry detail this way, and blitting 500 images
       // is cheaper than pathing 500 outlines and cracks.
-      // Damage reads structurally: unbroken, fractured with a bitten corner,
-      // then holed with the reinforcement showing. Never by tint alone.
-      const px = Math.max(8, Math.round(u))
-      if (!tiles || tilesPx !== px) {
-        tiles = makeWallTiles(colour, px)
-        tilesPx = px
-      }
 
       // Cull to the camera. The arena is 960 cells and most of them are off
       // screen at this zoom; drawing them all was fine at 32x20 and is waste now.
@@ -519,29 +544,68 @@ export default function Fracture() {
         ctx.globalAlpha = 1
       }
 
-      // Bombs. The bar through the middle shows which way it will go off, and
-      // the ring closing in is the fuse — both shapes, so neither depends on
-      // being able to pick the colour out.
+      // Line charges. The shell is the same cast body the other game uses, so
+      // a bomb looks like a bomb across the catalogue; the bar through it is
+      // this game's own tell, showing which axis it will level. Both are shapes
+      // rather than colours, so neither needs to be told apart by hue.
       for (const bomb of a.bombs ?? []) {
         const bx = (bomb.x + 0.5) * u
         const by = (bomb.y + 0.5) * u
         const left = a.bombFuse ? bomb.in / a.bombFuse : 1
-        ctx.fillStyle = colour.edge
-        ctx.fillRect(bx - u * 0.4, by - u * 0.4, u * 0.8, u * 0.8)
+
+        // Swells and settles, faster the closer the fuse gets to the end.
+        const beat = 1 + 0.07 * Math.sin(performance.now() / (40 + 160 * left))
+        const size = u * beat
+        ctx.drawImage(bombArt.art, bx - size / 2, by - size / 2, size, size)
+
+        // The lane it is going to take out.
         ctx.strokeStyle = colour.warn
-        ctx.lineWidth = Math.max(1, u * 0.1)
+        ctx.lineWidth = Math.max(1, u * 0.11)
+        ctx.lineCap = 'round'
         ctx.beginPath()
         if (bomb.axis === 'x') {
-          ctx.moveTo(bx - u * 0.42, by)
-          ctx.lineTo(bx + u * 0.42, by)
+          ctx.moveTo(bx - u * 0.46, by + u * 0.06)
+          ctx.lineTo(bx + u * 0.46, by + u * 0.06)
         } else {
-          ctx.moveTo(bx, by - u * 0.42)
-          ctx.lineTo(bx, by + u * 0.42)
+          ctx.moveTo(bx, by - u * 0.4)
+          ctx.lineTo(bx, by + u * 0.5)
         }
         ctx.stroke()
+
+        // The spark on the fuse, brightening as it burns down.
+        const sx = bx - size / 2 + bombArt.fuseX * size
+        const sy = by - size / 2 + bombArt.fuseY * size
+        ctx.fillStyle = colour.warn
+        ctx.globalAlpha = 0.5 + 0.5 * (1 - left)
         ctx.beginPath()
-        ctx.arc(bx, by, u * (0.15 + 0.4 * left), 0, Math.PI * 2)
+        ctx.arc(sx, sy, u * (0.05 + 0.05 * (1 - left)), 0, Math.PI * 2)
+        ctx.fill()
+        ctx.globalAlpha = 1
+
+        // And the countdown, closing on the shell.
+        ctx.lineWidth = Math.max(1, u * 0.07)
+        ctx.beginPath()
+        ctx.arc(bx, by, u * (0.18 + 0.3 * left), 0, Math.PI * 2)
         ctx.stroke()
+      }
+
+      // Mines. A ring of teeth rather than a dot, so it is not mistaken for a
+      // pickup, and only the armed ones are ever sent.
+      for (const mine of a.mines ?? []) {
+        const mx = mine.x * u
+        const my = mine.y * u
+        ctx.strokeStyle = mine.by === myIdRef.current ? colour.flare : colour.warn
+        ctx.lineWidth = Math.max(1, u * 0.07)
+        ctx.beginPath()
+        ctx.arc(mx, my, u * 0.24, 0, Math.PI * 2)
+        ctx.stroke()
+        for (let k = 0; k < 6; k++) {
+          const ang = (k / 6) * Math.PI * 2 + performance.now() / 900
+          ctx.beginPath()
+          ctx.moveTo(mx + Math.cos(ang) * u * 0.24, my + Math.sin(ang) * u * 0.24)
+          ctx.lineTo(mx + Math.cos(ang) * u * 0.38, my + Math.sin(ang) * u * 0.38)
+          ctx.stroke()
+        }
       }
 
       // Bullets. A pierced round is drawn as a longer streak, so it is told
@@ -567,6 +631,22 @@ export default function Fracture() {
       const drawnAt = new Map()
       a.players.forEach((from, slot) => {
         if (!from.alive) return
+        // Cloaked, and not you: an outline and nothing else. No fill, no icon,
+        // no health pips — the shape is all anybody gets.
+        if (from.cloaked && from.id !== myIdRef.current) {
+          const to0 = playersB.get(from.id)
+          const cx = (to0 && to0.alive ? lerp(from.x, to0.x, t) : from.x) * u
+          const cy = (to0 && to0.alive ? lerp(from.y, to0.y, t) : from.y) * u
+          ctx.globalAlpha = 0.3
+          ctx.strokeStyle = colour.muted
+          ctx.lineWidth = Math.max(1, u * 0.05)
+          ctx.beginPath()
+          ctx.arc(cx, cy, u * 0.34, 0, Math.PI * 2)
+          ctx.stroke()
+          ctx.globalAlpha = 1
+          drawnAt.set(from.id, { x: cx, y: cy })
+          return
+        }
         const to = playersB.get(from.id)
         const x = (to && to.alive ? lerp(from.x, to.x, t) : from.x) * u
         const y = (to && to.alive ? lerp(from.y, to.y, t) : from.y) * u
@@ -804,6 +884,9 @@ export default function Fracture() {
 
       for (const q of a.players) {
         if (!q.alive || q.id === myIdRef.current) continue
+        // A cloak takes you off the edge markers too, which is most of what it
+        // is for.
+        if (q.cloaked) continue
         const at = offscreen(q.x, q.y)
         if (!at) continue
         const r = u * 0.3
@@ -875,6 +958,7 @@ export default function Fracture() {
       for (const q of a.players) {
         if (!q.alive) continue
         const mine = q.id === myIdRef.current
+        if (q.cloaked && !mine) continue // and off the minimap
         ctx.fillStyle = tintOf.get(q.id)
         ctx.beginPath()
         ctx.arc(mmX + q.x * ms, mmY + q.y * ms, ms * (mine ? 1.5 : 1.1), 0, Math.PI * 2)
@@ -989,7 +1073,7 @@ export default function Fracture() {
     return (
       <section className="blueprint mx-auto max-w-xl px-5 py-20">
         <p className="rule-label">Fracture Line</p>
-        <h1 className="display mt-2 text-4xl sm:text-5xl">Browser trial</h1>
+        <h1 className="display mt-2 text-4xl sm:text-5xl">Fracture Line</h1>
         <p className="mt-5 leading-relaxed text-muted">
           The arena from above. Every wall in here takes damage and comes down; the map knits its
           own back together, but anything you build is yours to hold. Take what the floor gives you
@@ -1077,7 +1161,7 @@ export default function Fracture() {
       <div className="flex flex-wrap items-baseline justify-between gap-3">
         <div className="flex flex-wrap items-baseline gap-3">
           <h1 className="display text-3xl">Fracture Line</h1>
-          <span className="rule-label">top-down trial</span>
+          <span className="rule-label">top-down</span>
           {hud?.arena && <span className="rule-label">{hud.arena}</span>}
         </div>
         <Link
@@ -1091,6 +1175,31 @@ export default function Fracture() {
       <p aria-live="polite" className="mt-3 border-l-2 border-flare pl-4 text-sm text-muted">
         {statusLine(hud, myId)}
       </p>
+        {hud?.phase === 'waiting' && (
+          <div className="mt-4 border border-line bg-surface p-5">
+            <p className="rule-label">Lobby</p>
+            <p className="mt-2 text-sm leading-relaxed text-muted">
+              {hud.players.length} of {hud.min} in. Hold on for other people, or
+              start now and the arena fills itself.
+            </p>
+            <div className="mt-4 flex flex-wrap items-center gap-3">
+              <button
+                type="button"
+                onClick={() => send({ t: 'ready' })}
+                disabled={hud.botsWanted}
+                className="bg-flare px-6 py-3 text-xs font-bold uppercase tracking-[0.12em] text-on-flare transition-opacity enabled:hover:opacity-90 disabled:opacity-40"
+              >
+                {hud.botsWanted ? 'Filling the arena' : 'Start with bots'}
+              </button>
+              <span aria-live="polite" className="text-xs text-muted">
+                {hud.botsWanted
+                  ? 'Bots on their way in.'
+                  : 'Waiting for players. Anyone who joins takes a bot’s place.'}
+              </span>
+            </div>
+          </div>
+        )}
+
       <p aria-live="assertive" className="sr-only">
         {adLeft > 0 && !ad.closed ? 'An advertisement is covering the arena.' : ''}
       </p>
@@ -1232,6 +1341,7 @@ export default function Fracture() {
               <p aria-live="polite" className="mt-1.5 truncate text-xs text-live">
                 {[
                   me?.deathless && '★ Untouchable',
+                  me?.cloaked && '◌ Cloaked',
                   me?.shielded && '◈ Shielded',
                   me?.overcharged && '✶ Overcharged',
                   me?.sword && '† Sword',

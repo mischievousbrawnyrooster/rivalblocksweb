@@ -14,18 +14,17 @@ export default function PlayIndex() {
     <>
       <header className="blueprint border-b border-line">
         <div className="mx-auto max-w-6xl px-5 py-16">
-          <p className="rule-label">Browser trials</p>
+          <p className="rule-label">Play</p>
           <h1 className="display mt-2 text-4xl sm:text-5xl">Play now</h1>
           <p className="mt-5 max-w-xl leading-relaxed text-muted">
-            Cut-down builds of two of our titles, running in the browser against
-            the same servers everyone else is on. No account, no download — pick
-            one and drop in.
+            Three titles, running in the browser against the same servers
+            everyone else is on. No account, no download — pick one and drop in.
           </p>
         </div>
       </header>
 
       <div className="mx-auto max-w-6xl px-5 py-16">
-        <div className="grid gap-7 md:grid-cols-2">
+        <div className="grid gap-7 md:grid-cols-2 lg:grid-cols-3">
           {playable.map((game) => (
             <article
               key={game.slug}
@@ -55,8 +54,8 @@ export default function PlayIndex() {
         </div>
 
         <p className="mt-10 border-l-2 border-line pl-4 text-sm leading-relaxed text-muted">
-          Both trials need at least two players in the arena before a match
-          starts. If nobody else is on, bring someone.
+          Every match needs at least two in the arena before it starts. Short of
+          that, the roster fills itself.
         </p>
       </div>
     </>

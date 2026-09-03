@@ -7,9 +7,11 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
-    "test": "node --test src/lib/lib.test.js server/game.test.js server/fracture.test.js",
+    "test": "node --test src/lib/lib.test.js server/game.test.js server/fracture.test.js server/blastworks.test.js",
     "game": "node server/server.js",
-    "fracture": "node server/fracture-server.js"
+    "fracture": "node server/fracture-server.js",
+    "blast": "node server/blastworks-server.js",
+    "blast:dm": "node server/blastworks-dm.js"
   },
   "dependencies": {
     "react": "^19.2.8",

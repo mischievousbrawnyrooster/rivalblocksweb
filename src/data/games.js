@@ -75,74 +75,117 @@ export const games = [
     ],
   },
   {
-    slug: 'deepshaft',
-    title: 'Deepshaft',
-    tagline: 'The world keeps digging without you.',
-    genre: 'Co-op survival sandbox, 1–8 players',
-    status: 'Live',
+    slug: 'blastworks',
+    playPath: '/play/blastworks',
+    playBlurb:
+      'Everyone opens sealed into their own corner of the plant. Blast a way ' +
+      'out, take what the rubble gives you, and set a charge where somebody ' +
+      'else is going to be. Blasts set off other blasts.',
+    title: 'Blastworks',
+    tagline: 'Everything here is load-bearing.',
+    genre: 'Free-for-all demolition brawler, up to 8',
+    status: 'Live — Season 2',
     statusTone: 'live',
     flagship: false,
     platforms: ['PC', 'PS5', 'Xbox Series X|S', 'Switch 2'],
-    art: { variant: 'cavern', seed: 907 },
+    art: { variant: 'platforms', seed: 733 },
     blurb:
-      'A persistent voxel world that keeps simulating while you are offline. ' +
-      'Water still floods, ore still processes, and whatever you left running ' +
-      'is still running when you come back.',
+      'A working plant packed wall to wall with material. Charges throw a cross ' +
+      'down four galleries at once, take one crate out of each, and set off ' +
+      'anything else already ticking. The plant refills what you clear, so the ' +
+      'map you fought through is never the map you fight back through.',
     features: [
       {
-        title: 'Persistent, always',
+        title: 'Hard steel, soft stock',
         body:
-          'Your world is a process on our hardware, not a save file on your ' +
-          'machine. Log off mid-build and the pumps keep pumping. Come back a ' +
-          'week later to a full smelter or a flooded shaft.',
+          'The lattice of posts holding the roof up never moves. Everything ' +
+          'packed between them does. Learning which is which, at a glance and ' +
+          'at a run, is most of the game.',
       },
       {
-        title: 'Eight players, one world',
+        title: 'Chains',
         body:
-          'No instancing and no sharding. Everyone digs the same rock, and the ' +
-          'tunnel you cut is there for everyone else, permanently.',
+          'A charge that reaches another charge sets it off, and that one sets ' +
+          'off the next. The best kills in Blastworks are laid three galleries ' +
+          'away from the person they land on.',
       },
       {
-        title: 'Depth is the difficulty curve',
+        title: 'The plant refills',
         body:
-          'Pressure, heat and dark scale with depth rather than with a slider. ' +
-          'How far down you go is how hard the game is.',
+          'Stock comes back on the floor while the shift runs. A gallery you ' +
+          'opened is a gallery you have to keep open, so nobody ever finishes ' +
+          'a match standing in the empty room they cleared in the first minute.',
+      },
+      {
+        title: 'Whatever the rubble gives you',
+        body:
+          'No loadouts. Longer arms, another charge, better boots, a kick and a ' +
+          'lifting glove are all buried in the stock, and you lose the lot when ' +
+          'you go down. Whoever is ahead has the most to lose.',
+      },
+      {
+        title: 'Four floors',
+        body:
+          'Foundry, Magazine, Dry House and Scrap Line. Every one is ' +
+          'rotationally symmetric, so no corner is the good corner.',
       },
     ],
     serverNote:
-      'Persistent worlds are only a promise if someone keeps the machine on. ' +
-      'That machine is ours.',
+      'Chains only resolve the same way for everyone if one machine decides ' +
+      'them. That machine is ours.',
     shots: [
-      { seed: 11, caption: 'Lit main shaft at depth 400' },
-      { seed: 25, caption: 'Flooded side gallery, pumps active' },
-      { seed: 39, caption: 'Ore processing line running unattended' },
-      { seed: 63, caption: 'Cavern breach into open void' },
+      { seed: 12, caption: 'Opening charge into packed stock — Foundry' },
+      { seed: 29, caption: 'Four-charge chain down a gallery — Magazine' },
+      { seed: 47, caption: 'Kicked charge running a lane — Dry House' },
+      { seed: 66, caption: 'Stock refilling behind a cleared route — Scrap Line' },
     ],
   },
   {
     slug: 'blockout-royale',
     playPath: '/play/blockout-royale',
     playBlurb:
-      'The full shrinking-grid brawl, scaled down to eight players. Tiles flash ' +
-      'before they drop. Stand on one when it goes and you are out.',
+      'One shrinking grid, up to eight, one life each. Tiles flash before they ' +
+      'drop. Stand on one when it goes and the round is over for you.',
     title: 'Blockout Royale',
-    tagline: 'Four minutes. Thirty-two players. No floor.',
-    genre: 'Round-based party brawler, 32 players',
+    tagline: 'Stay up. That is the whole job.',
+    genre: 'Round-based survival brawler, up to 8',
     status: 'Open Beta',
     statusTone: 'beta',
     flagship: false,
     platforms: ['PC', 'iOS', 'Android'],
     art: { variant: 'platforms', seed: 512 },
     blurb:
-      'Thirty-two players on a shrinking platform grid. Blocks fall away under ' +
-      'your feet on a timer you can hear coming. Rounds last four minutes, and ' +
-      'you queue again before you have stopped laughing.',
+      'A platform grid that is busy disappearing. Tiles flash a warning, then ' +
+      'drop out from under whoever is still standing on them. Rounds are over ' +
+      'in under a minute, and you are queued again before you have stopped ' +
+      'arguing about the last one.',
     features: [
       {
-        title: 'Four-minute rounds',
+        title: 'The floor is the clock',
         body:
-          'Long enough to matter, short enough that losing costs you nothing. ' +
-          'Queue, play, requeue.',
+          'Tiles go in waves, and the board tells you which ones a beat before ' +
+          'they do. There is no timer on screen because the floor is the timer.',
+      },
+      {
+        title: 'One life, one round',
+        body:
+          'No respawns. Go down and you watch the rest of it, which takes ' +
+          'seconds, and then the next one starts. Losing costs you nothing but ' +
+          'the argument.',
+      },
+      {
+        title: 'Six boards, never the same twice',
+        body:
+          'Square, disc, diamond, cross, ring and scatter. The arena is cut out ' +
+          'of the grid before the round starts, so the shape you are surviving ' +
+          'on is new every time.',
+      },
+      {
+        title: 'Something to spend',
+        body:
+          'A shield to survive one drop, a dash to outrun a wave, a sinkhole to ' +
+          'flag the tile under somebody else, and a patch to put floor back. ' +
+          'One at a time, and when you use it is the whole decision.',
       },
       {
         title: 'Cross-play, phone to desktop',
@@ -150,20 +193,14 @@ export const games = [
           'One matchmaking pool across PC and mobile. Touch controls are built ' +
           'for the game rather than bolted onto it.',
       },
-      {
-        title: 'Matchmaking under ten seconds',
-        body:
-          'Capacity is pre-warmed in every region, so a match is waiting rather ' +
-          'than being spun up when you press play.',
-      },
     ],
     serverNote:
       'Instant queues need spare capacity sitting idle. Ours does.',
     shots: [
-      { seed: 8, caption: 'Opening grid, all tiles intact' },
-      { seed: 16, caption: 'Mid-round collapse, outer ring gone' },
-      { seed: 44, caption: 'Final eight on the centre island' },
-      { seed: 71, caption: 'Last tile standing' },
+      { seed: 8, caption: 'Opening board, every tile intact — square' },
+      { seed: 16, caption: 'Wave flagged, a beat before it drops — ring' },
+      { seed: 44, caption: 'Down to the centre island — disc' },
+      { seed: 71, caption: 'Last tile standing — scatter' },
     ],
   },
 ]

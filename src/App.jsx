@@ -7,6 +7,7 @@ import Servers from './pages/Servers.jsx'
 import Play from './pages/Play.jsx'
 import Fracture from './pages/Fracture.jsx'
 import PlayIndex from './pages/PlayIndex.jsx'
+import Blastworks from './pages/Blastworks.jsx'
 import Admin from './pages/Admin.jsx'
 import About from './pages/About.jsx'
 import NotFound from './pages/NotFound.jsx'
@@ -22,6 +23,7 @@ export default function App() {
         <Route path="play" element={<PlayIndex />} />
         <Route path="play/blockout-royale" element={<Play />} />
         <Route path="play/fracture-line" element={<Fracture />} />
+        <Route path="play/blastworks" element={<Blastworks />} />
         <Route path="about" element={<About />} />
         {/* Unlisted: reachable by typing the path, never linked from the site. */}
         <Route path="admin" element={<Admin />} />

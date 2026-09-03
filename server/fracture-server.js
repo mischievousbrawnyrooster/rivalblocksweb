@@ -12,6 +12,7 @@ import {
   addPlayer,
   removePlayer,
   setInput,
+  wantBots,
   build,
   dash,
   usePowerup,
@@ -72,6 +73,8 @@ wss.on('connection', (ws) => {
         startMatch(match, Math.random, msg.name)
       } else if (msg.t === 'restart') {
         startMatch(match)
+      } else if (msg.t === 'botsonly' && typeof msg.on === 'boolean') {
+        match.botsOnly = msg.on
       } else if (msg.t === 'bots' && Number.isInteger(msg.n)) {
         match.botFill = Math.max(0, Math.min(MAX_PLAYERS, msg.n))
       }
@@ -93,6 +96,8 @@ wss.on('connection', (ws) => {
       build(match, player.id)
     } else if (msg?.t === 'dash' && player) {
       dash(match, player.id)
+    } else if (msg?.t === 'ready' && player) {
+      wantBots(match)
     } else if (msg?.t === 'use' && player) {
       usePowerup(match, player.id)
     }

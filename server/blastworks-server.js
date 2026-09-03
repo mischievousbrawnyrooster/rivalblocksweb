@@ -1,42 +1,47 @@
-// Socket wiring for one Blockout Royale match. Contains no rules — every
-// decision is made by game.js. Binds to loopback; nginx is what faces the
-// network.
+// Socket wiring for one Blastworks match. Contains no rules — every decision is
+// made by blastworks.js. Binds to loopback; nginx is what faces the network.
+// Its own process on its own port, so neither of the other two match servers is
+// affected by anything that happens here.
 
 import { WebSocketServer } from 'ws'
 import {
   ARENAS,
-  BOT_FILL_TO,
+  MODES,
   MAX_PLAYERS,
   createMatch,
   addPlayer,
   removePlayer,
-  move,
+  setInput,
   wantBots,
-  usePowerup,
-  startRound,
+  drop,
+  handle,
+  detonateAll,
+  startMatch,
   tick,
   snapshot,
   TICK_MS,
-  SIZE,
-} from './game.js'
+  W,
+  H,
+} from './blastworks.js'
 
 const HOST = process.env.HOST || '127.0.0.1'
-const PORT = Number(process.env.PORT) || 8081
+const PORT = Number(process.env.PORT) || 8083
+// One binary, two servers: the mode is picked at boot rather than per match, so
+// a player who joins knows what they are joining without asking.
+const MODE = MODES.includes(process.env.MODE) ? process.env.MODE : MODES[0]
 
 // The operator console's shared secret. This is a lab control, not a security
 // boundary: the protocol is deliberately plain ws:// so it can be read in a
 // packet capture, which means this key can be read there too.
 const ADMIN_KEY = process.env.ADMIN_KEY || 'admin'
 
-const match = createMatch()
-match.botFill = BOT_FILL_TO
+const match = createMatch(Math.random, undefined, MODE)
+// ws defaults to a 100 MiB maxPayload; the largest legal message here is a
+// short input frame, so bound it hard.
+const wss = new WebSocketServer({ host: HOST, port: PORT, maxPayload: 4096 })
 
 // Which socket belongs to which player, so an operator can actually drop one.
 const sockets = new Map()
-// ws defaults to a 100 MiB maxPayload; the largest legal message here is a
-// short join frame, so bound it hard to keep an oversized frame from ever
-// reaching the message handler.
-const wss = new WebSocketServer({ host: HOST, port: PORT, maxPayload: 4096 })
 
 wss.on('connection', (ws) => {
   let player = null
@@ -50,7 +55,7 @@ wss.on('connection', (ws) => {
     } catch {
       return
     }
-    // --- operator console ------------------------------------------------
+
     if (msg?.t === 'admin') {
       admin = msg.key === ADMIN_KEY
       ws.send(JSON.stringify({ t: 'admin', ok: admin }))
@@ -62,10 +67,9 @@ wss.on('connection', (ws) => {
         removePlayer(match, msg.id)
         if (target) target.close()
       } else if (msg.t === 'arena' && ARENAS.includes(msg.name)) {
-        match.arena = msg.name
-        startRound(match, () => ARENAS.indexOf(msg.name) / ARENAS.length)
+        startMatch(match, Math.random, msg.name)
       } else if (msg.t === 'restart') {
-        startRound(match)
+        startMatch(match)
       } else if (msg.t === 'botsonly' && typeof msg.on === 'boolean') {
         match.botsOnly = msg.on
       } else if (msg.t === 'bots' && Number.isInteger(msg.n)) {
@@ -76,15 +80,23 @@ wss.on('connection', (ws) => {
 
     if (msg?.t === 'join' && !player) {
       player = addPlayer(match, msg.name)
+      if (!player) {
+        ws.send(JSON.stringify({ t: 'full' }))
+        ws.close()
+        return
+      }
       sockets.set(player.id, ws)
-      ws.playerId = player.id
-      ws.send(JSON.stringify({ t: 'welcome', id: player.id, size: SIZE }))
-    } else if (msg?.t === 'move' && player) {
-      move(match, player.id, msg.dir)
+      ws.send(JSON.stringify({ t: 'welcome', id: player.id, w: W, h: H, mode: MODE }))
+    } else if (msg?.t === 'input' && player) {
+      setInput(match, player.id, msg)
+    } else if (msg?.t === 'bomb' && player) {
+      drop(match, player.id)
     } else if (msg?.t === 'ready' && player) {
       wantBots(match)
-    } else if (msg?.t === 'use' && player) {
-      usePowerup(match, player.id)
+    } else if (msg?.t === 'detonate' && player) {
+      detonateAll(match, player.id)
+    } else if (msg?.t === 'action' && player) {
+      handle(match, player.id)
     }
   })
 
@@ -100,30 +112,21 @@ wss.on('connection', (ws) => {
 })
 
 // Advance by real elapsed time rather than by the nominal tick. setInterval
-// drifts under load, and a fixed step means every duration in the match — the
-// collapse rate, the countdown, powerup spawns — silently runs slow when the
-// box is busy.
-// Clamped, because a stall or a laptop sleep would otherwise hand the
-// simulation one enormous step and collapse the whole board at once. The
-// catch-up loops in tick() handle the remainder on the following ticks.
+// drifts under load, and a fixed step means every duration in the game — the
+// fuse above all — silently runs slow when the box is busy. A two second fuse
+// has to be two seconds.
+// Clamped, because a stall would otherwise hand the simulation one enormous
+// step and detonate the whole board at once.
 let last = Date.now()
 setInterval(() => {
   const now = Date.now()
   const dt = Math.min(now - last, TICK_MS * 5)
   last = now
   tick(match, dt)
-
-  // One frame for everybody, built once. Anyone holding a foresight gets their
-  // own, because it carries the next wave and nobody else may see it — that is
-  // rare enough that it is a second stringify, not N of them.
-  const shared = JSON.stringify(snapshot(match))
-  const seers = new Set(
-    match.players.filter((p) => p.seeingUntil > match.now).map((p) => p.id),
-  )
+  const frame = JSON.stringify(snapshot(match))
   for (const client of wss.clients) {
-    if (client.readyState !== client.OPEN) continue
-    client.send(seers.has(client.playerId) ? JSON.stringify(snapshot(match, client.playerId)) : shared)
+    if (client.readyState === client.OPEN) client.send(frame)
   }
 }, TICK_MS)
 
-console.log(`Blockout Royale match server on ws://${HOST}:${PORT}`)
+console.log(`Blastworks (${MODE}) match server on ws://${HOST}:${PORT}`)

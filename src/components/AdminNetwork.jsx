@@ -3,6 +3,8 @@ import { useMatchSocket, rateOf } from '../lib/useMatchSocket.js'
 
 const FEEDS = [
   { path: '/fracture-ws', label: 'Fracture Line' },
+  { path: '/blast-ws', label: 'Blastworks' },
+  { path: '/blast-dm-ws', label: 'Blastworks DM' },
   { path: '/ws', label: 'Blockout Royale' },
 ]
 

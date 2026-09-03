@@ -90,7 +90,7 @@ export default function AdminStudio() {
               <th className="rule-label px-5 py-3 font-normal">Title</th>
               <th className="rule-label px-5 py-3 font-normal">Status</th>
               <th className="rule-label px-5 py-3 text-right font-normal">Share of players</th>
-              <th className="rule-label px-5 py-3 text-right font-normal">Browser trial</th>
+              <th className="rule-label px-5 py-3 text-right font-normal">In browser</th>
             </tr>
           </thead>
           <tbody>

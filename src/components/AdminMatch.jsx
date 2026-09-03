@@ -1,6 +1,12 @@
 import { useMatchSocket, rateOf } from '../lib/useMatchSocket.js'
 
-const ARENAS = ['kiln', 'substation', 'drydock', 'scrapyard']
+// Per game: the arena names each match server will accept.
+const ARENAS = {
+  '/fracture-ws': ['kiln', 'substation', 'drydock', 'scrapyard'],
+  '/blast-ws': ['foundry', 'magazine', 'dryhouse', 'scrapline'],
+  '/blast-dm-ws': ['foundry', 'magazine', 'dryhouse', 'scrapline'],
+  '/ws': ['square', 'disc', 'diamond', 'cross', 'ring', 'scatter'],
+}
 
 function Stat({ label, value, hint }) {
   return (
@@ -102,7 +108,7 @@ function MatchPanel({ title, path, controllable, adminKey }) {
           ) : (
             <>
               <div className="mt-3 flex flex-wrap gap-2">
-                {ARENAS.map((name) => (
+                {(ARENAS[path] ?? []).map((name) => (
                   <button
                     key={name}
                     type="button"
@@ -123,6 +129,26 @@ function MatchPanel({ title, path, controllable, adminKey }) {
                 >
                   Restart match
                 </button>
+              </div>
+
+              <div className="mt-5 border-t border-line pt-5">
+                <label className="flex cursor-pointer items-start gap-3">
+                  <input
+                    type="checkbox"
+                    checked={state?.botsOnly ?? false}
+                    onChange={(e) => send({ t: 'botsonly', on: e.target.checked })}
+                    className="mt-0.5"
+                  />
+                  <span>
+                    <span className="block text-sm">Let the bots play with nobody watching</span>
+                    <span className="mt-1 block text-xs leading-relaxed text-muted">
+                      Off by default: a match only runs while at least one person
+                      is connected, and stands down when the last one leaves.
+                      Turn this on to watch the bots play, or to leave a board
+                      running for a demonstration.
+                    </span>
+                  </span>
+                </label>
               </div>
 
               <div className="mt-5 flex flex-wrap items-center gap-3">
@@ -156,16 +182,24 @@ export default function AdminMatch({ adminKey }) {
   return (
     <div className="space-y-8">
       <MatchPanel
-        title="Fracture Line — browser trial"
+        title="Fracture Line"
         path="/fracture-ws"
         controllable
         adminKey={adminKey}
       />
-      <MatchPanel title="Blockout Royale — browser trial" path="/ws" />
-      <p className="border-l-2 border-line pl-4 text-xs leading-relaxed text-muted">
-        Blockout Royale is observed only. Its match server exposes no control
-        channel, so this console reads its broadcast and nothing more.
-      </p>
+      <MatchPanel
+        title="Blastworks — last one standing"
+        path="/blast-ws"
+        controllable
+        adminKey={adminKey}
+      />
+      <MatchPanel
+        title="Blastworks — deathmatch"
+        path="/blast-dm-ws"
+        controllable
+        adminKey={adminKey}
+      />
+      <MatchPanel title="Blockout Royale" path="/ws" controllable adminKey={adminKey} />
     </div>
   )
 }

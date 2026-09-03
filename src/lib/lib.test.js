@@ -1,8 +1,10 @@
 import test from 'node:test'
+import { readFileSync } from 'node:fs'
 import assert from 'node:assert/strict'
 import { filterSortRegions } from './servers.js'
 import { isValidEmail } from './validate.js'
-import { makeWallTiles } from './wallTiles.js'
+import { makeWallTiles, MATERIALS, ARENA_STYLE, styleFor } from './wallTiles.js'
+import { makeFireTiles } from './fireTiles.js'
 
 const sample = [
   { id: 'b', label: 'Beta', status: 'operational', players: 10, tickRate: 128, uptime: 99.1 },
@@ -93,6 +95,11 @@ function recorder() {
     arc: (...a) => ops.push(['arc', ...a]),
     fill: () => ops.push(['fill']),
     stroke: () => ops.push(['stroke']),
+    translate: (...a) => ops.push(['translate', ...a]),
+    rotate: (...a) => ops.push(['rotate', ...a]),
+    quadraticCurveTo: (...a) => ops.push(['quadraticCurveTo', ...a]),
+    ellipse: (...a) => ops.push(['ellipse', ...a]),
+    setLineDash: (...a) => ops.push(['setLineDash', ...a]),
   }
 }
 
@@ -139,4 +146,122 @@ test('each damage state offers more than one cut, so a wall is not stamped', () 
   for (const cuts of tiles.states) assert.ok(cuts.length >= 2, 'a state has only one face')
   // And those cuts genuinely differ from one another.
   assert.notEqual(JSON.stringify(made[2].ops), JSON.stringify(made[3].ops))
+})
+
+
+// --- blast artwork --------------------------------------------------------
+
+test('the core, an arm and a tip are each drawn differently', () => {
+  const { result: fire, made } = withStubbedCanvas(() => makeFireTiles(PALETTE, 32))
+
+  assert.ok(fire.core && fire.armH && fire.armV, 'a piece of the blast is missing')
+  for (const dir of ['1,0', '-1,0', '0,1', '0,-1']) {
+    assert.ok(fire.tip[dir], `no tip for ${dir}`)
+  }
+
+  // Built in order: core, horizontal arm, vertical arm, then the four tips.
+  const shape = (rec) => JSON.stringify(rec.ops)
+  assert.notEqual(shape(made[0]), shape(made[1]), 'the core and an arm are drawn alike')
+  assert.notEqual(shape(made[1]), shape(made[3]), 'an arm and a tip are drawn alike')
+
+  // The two arm runs are one drawing under different transforms, so with the
+  // transforms stripped the geometry is identical — that is what keeps the
+  // banding continuous where a horizontal run meets a vertical one.
+  const geometry = (rec) => JSON.stringify(rec.ops.filter((o) => o[0] !== 'translate' && o[0] !== 'rotate'))
+  assert.equal(geometry(made[1]), geometry(made[2]), 'the two arm runs are not the same drawing')
+})
+
+test('a flame looks the same every time it is drawn', () => {
+  const a = withStubbedCanvas(() => makeFireTiles(PALETTE, 32)).made.map((r) => JSON.stringify(r.ops))
+  const b = withStubbedCanvas(() => makeFireTiles(PALETTE, 32)).made.map((r) => JSON.stringify(r.ops))
+  assert.deepEqual(a, b, 'the same flame drew differently on a redraw')
+})
+
+
+// --- arena materials ------------------------------------------------------
+
+test('every arena in all three games names a material that exists', () => {
+  // The names have to agree with the ARENAS lists on three separate servers.
+  const arenas = [
+    ...['kiln', 'substation', 'drydock', 'scrapyard'],
+    ...['foundry', 'magazine', 'dryhouse', 'scrapline'],
+    ...['square', 'disc', 'diamond', 'cross', 'ring', 'scatter'],
+  ]
+  for (const arena of arenas) {
+    const style = styleFor(arena)
+    assert.ok(MATERIALS[style], `${arena} asks for a material called ${style}`)
+    assert.ok(ARENA_STYLE[arena], `${arena} has no material of its own`)
+  }
+  // An unknown arena still renders rather than throwing.
+  assert.equal(styleFor('somewhere-else'), 'concrete')
+})
+
+test('each material draws a different wall and a different floor', () => {
+  const shape = (rec) => JSON.stringify(rec.ops)
+  const walls = new Map()
+  const floors = new Map()
+
+  for (const style of Object.keys(MATERIALS)) {
+    const { made } = withStubbedCanvas(() => makeWallTiles(PALETTE, 32, style))
+    // Build order: two intact, three chipped, three failing, border, then the
+    // floor cuts.
+    walls.set(style, shape(made[0]))
+    floors.set(style, shape(made[9]))
+  }
+
+  assert.equal(new Set(walls.values()).size, walls.size, 'two materials draw the same wall')
+  assert.equal(new Set(floors.values()).size, floors.size, 'two materials draw the same floor')
+
+  // And within one material, the wall and the floor are not the same drawing —
+  // a floor that looks like cover is the one thing this must not do.
+  for (const style of walls.keys()) {
+    assert.notEqual(walls.get(style), floors.get(style), `${style} floors look like its walls`)
+  }
+})
+
+test('damage reads the same however the arena is dressed', () => {
+  // Whatever the material, each state has to draw strictly more structure than
+  // the one before it — that is what keeps the three legible without colour.
+  const count = (rec) => rec.ops.filter((o) => o[0] === 'lineTo' || o[0] === 'arc').length
+  for (const style of Object.keys(MATERIALS)) {
+    const { made } = withStubbedCanvas(() => makeWallTiles(PALETTE, 32, style))
+    const intact = count(made[0])
+    const chipped = count(made[2])
+    const failing = count(made[5])
+    assert.ok(chipped > intact, `${style}: chipped draws no more than intact`)
+    assert.ok(failing > chipped, `${style}: failing draws no more than chipped`)
+  }
+})
+
+test('a material looks the same every time it is built', () => {
+  for (const style of Object.keys(MATERIALS)) {
+    const a = withStubbedCanvas(() => makeWallTiles(PALETTE, 32, style)).made.map((r) =>
+      JSON.stringify(r.ops),
+    )
+    const b = withStubbedCanvas(() => makeWallTiles(PALETTE, 32, style)).made.map((r) =>
+      JSON.stringify(r.ops),
+    )
+    assert.deepEqual(a, b, `${style} drew differently on a rebuild`)
+  }
+})
+
+
+test('each game builds its tiles before it draws with them', () => {
+  // The render loops are ordinary imperative code and cannot be exercised
+  // without a DOM, but the one thing that has actually broken here is ordering:
+  // a patch moved the floor above the line that builds the tiles it needs, and
+  // every frame threw before anything reached the screen. Cheap to check
+  // statically, and it fails loudly the moment the order slips again.
+  for (const page of [
+    'src/pages/Fracture.jsx',
+    'src/pages/Blastworks.jsx',
+    'src/pages/Play.jsx',
+  ]) {
+    const src = readFileSync(page, 'utf8')
+    const built = src.indexOf('makeWallTiles(colour, px, style)')
+    const used = src.indexOf('tiles.floor')
+    assert.notEqual(built, -1, `${page} never builds its tiles`)
+    assert.notEqual(used, -1, `${page} never draws a floor`)
+    assert.ok(built < used, `${page} draws with tiles before it builds them`)
+  }
 })

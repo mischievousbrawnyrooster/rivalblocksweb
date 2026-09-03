@@ -20,13 +20,37 @@ export const COUNTDOWN_MS = 3000
 export const OVER_MS = 5000
 export const MIN_PLAYERS = 2
 
+// Bots top the board up so one person still gets a round, exactly as in the
+// other two titles. They are opt-in: somebody who arrives first chooses between
+// holding the lobby for other people and starting now against the machine.
+export const BOT_FILL_TO = 5
+export const BOT_REACT_MS = 260
+export const BOT_NAMES = ['Pell', 'Grit', 'Mote', 'Talc', 'Quill', 'Bram', 'Fen']
+
 // Powerups. You carry at most one and spend it when you choose, so the
 // decision is which to keep and when to fire it.
 export const POWERUP_EVERY_MS = 4000
 // Scaled with the arena, or a bigger board just means longer walks between
 // pickups. Roughly one per 45 tiles.
 export const POWERUP_MAX = 5
-export const POWERUP_KINDS = ['shield', 'dash', 'sinkhole', 'patch']
+export const POWERUP_KINDS = [
+  'shield',
+  'dash',
+  'sinkhole',
+  'patch',
+  'blink',
+  'swap',
+  'foresight',
+]
+
+// A hop that clears holes. Nothing else in the kit can cross a gap, which is
+// what used to make a late round a question of which island you happened to be
+// standing on rather than anything you did.
+export const BLINK_TILES = 3
+
+// How long the next wave is shown to whoever spent a foresight. The wave is
+// picked early for everyone, but only they are told which tiles it is.
+export const FORESIGHT_MS = 6000
 export const DASH_MS = 2500
 // `now` only ever advances inside tick(), so every move message arriving
 // between two ticks reads the same clock. Any cooldown above zero therefore
@@ -97,14 +121,27 @@ export function createMatch() {
     players: [],
     nextId: 1,
     winner: null,
+    // The id as well as the name, because two people may be called the same
+    // thing and only the one who actually won should be told they did.
+    winnerId: null,
+    // How many participants to top up to with bots. Zero leaves the board
+    // exactly as populated as its callers made it.
+    botFill: 0,
+    // Nobody gets bots until somebody asks, and no round runs with nobody
+    // watching. An operator can lift the second one from the console.
+    botsWanted: false,
+    botsOnly: false,
+    // The tiles the next wave will take, chosen early so foresight can show it.
+    nextWave: [],
   }
 }
 
-/** Joins the match. A piece is only handed out when a round starts. */
-export function addPlayer(state, name) {
+/** Seats a player or a bot. A piece is only handed out when a round starts. */
+function seat(state, name, bot) {
   const player = {
     id: state.nextId++,
-    name: sanitizeName(name),
+    name,
+    bot,
     playing: false,
     alive: false,
     x: 0,
@@ -116,9 +153,67 @@ export function addPlayer(state, name) {
     held: null,
     shielded: false,
     dashUntil: 0,
+    // The way they last moved, so a blink knows where to go.
+    face: [1, 0],
+    seeingUntil: 0,
+    thinkAt: 0,
   }
   state.players.push(player)
   return player
+}
+
+/**
+ * Joins the match. Anyone may connect — past capacity you spectate and are
+ * handed a piece next round, which is this game's own arrangement and not
+ * something bots get to take away. A person does displace a bot, though: a
+ * seat held by the machine is not a seat.
+ */
+export function addPlayer(state, name) {
+  const bot = state.players.find((p) => p.bot)
+  if (bot && state.players.length >= MAX_PLAYERS) removePlayer(state, bot.id)
+  return seat(state, sanitizeName(name), false)
+}
+
+/**
+ * Whether the round is allowed to run at all. Bots exist to fill a board for a
+ * person, not to play by themselves: with nobody watching, a server grinding
+ * through rounds is pure waste. An operator can lift this from the console.
+ */
+export const canRun = (state) => state.botsOnly || state.players.some((p) => !p.bot)
+
+/**
+ * Bots are opt-in. Somebody who turns up first gets the choice: hold the lobby
+ * open for other people, or start now against the machine.
+ */
+export function wantBots(state) {
+  state.botsWanted = true
+  return true
+}
+
+/**
+ * Tops the board up to `botFill` participants and stands bots down again as
+ * people arrive, so a round is never short of opponents and never holding a
+ * seat a person could use.
+ */
+export function ensureBots(state) {
+  if (!canRun(state)) {
+    for (const bot of state.players.filter((p) => p.bot)) removePlayer(state, bot.id)
+    state.botsWanted = false
+    return
+  }
+  if (!state.botFill || (!state.botsWanted && !state.botsOnly)) {
+    for (const bot of state.players.filter((p) => p.bot)) removePlayer(state, bot.id)
+    return
+  }
+  const humans = state.players.filter((p) => !p.bot).length
+  const bots = state.players.filter((p) => p.bot)
+  const want = Math.max(0, Math.min(state.botFill, MAX_PLAYERS) - humans)
+
+  for (let i = bots.length; i > want; i--) removePlayer(state, bots[i - 1].id)
+  for (let i = bots.length; i < want; i++) {
+    const taken = new Set(state.players.map((q) => q.name))
+    seat(state, BOT_NAMES.find((n) => !taken.has(n)) ?? `Unit ${state.nextId}`, true)
+  }
 }
 
 export function removePlayer(state, id) {
@@ -240,12 +335,14 @@ export function startRound(state, rng = Math.random) {
   state.warnAt.fill(0)
   state.winner = null
   state.nextCollapseAt = state.now + COLLAPSE_EVERY_MS
+  state.nextWave = []
   state.powerups = {}
   state.nextPowerupAt = state.now + POWERUP_EVERY_MS
 
   state.arena = ARENAS[Math.floor(rng() * ARENAS.length)]
   carve(state, state.arena, rng)
   keepLargestRegion(state)
+  state.nextWave = pickWave(state, rng)
   const spawns = snapSpawns(state)
 
   state.players.forEach((p, i) => {
@@ -254,6 +351,8 @@ export function startRound(state, rng = Math.random) {
     p.held = null
     p.shielded = false
     p.dashUntil = 0
+    p.face = [1, 0]
+    p.seeingUntil = 0
     if (p.playing) {
       ;[p.x, p.y] = spawns[i]
       // Backdated, or the very first move of the round hits its own cooldown.
@@ -285,6 +384,7 @@ export function move(state, id, dir) {
 
   p.x = x
   p.y = y
+  p.face = step
   p.lastMoveAt = state.now
 
   // Walking onto a powerup picks it up, but only with an empty hand —
@@ -347,6 +447,56 @@ function sinkholeNearest(state, p) {
   state.warnAt[i] = state.now + WARNING_MS
 }
 
+/**
+ * Hops up to BLINK_TILES the way you last moved, over anything in between.
+ * Only the landing tile has to be somewhere you could stand, which is the whole
+ * point: it is the one thing in the game that crosses a hole.
+ */
+function blink(state, p) {
+  const [dx, dy] = p.face
+  for (let n = BLINK_TILES; n >= 1; n--) {
+    const x = p.x + dx * n
+    const y = p.y + dy * n
+    if (x < 0 || y < 0 || x >= SIZE || y >= SIZE) continue
+    if (state.tiles[y * SIZE + x] === 'gone') continue
+    if (state.players.some((o) => o !== p && o.playing && o.alive && o.x === x && o.y === y)) {
+      continue
+    }
+    p.x = x
+    p.y = y
+    return true
+  }
+  return false
+}
+
+/**
+ * Trades places with the nearest living rival. Auto-targeted so it stays one
+ * keypress, and ties break by id rather than by array order.
+ *
+ * Both of you were standing somewhere legal a moment ago, so the swap always
+ * is — the question is only what the tile you hand them is about to do.
+ */
+function swap(state, p) {
+  let target = null
+  let best = Infinity
+  for (const o of state.players) {
+    if (o === p || !o.playing || !o.alive) continue
+    const d = Math.abs(o.x - p.x) + Math.abs(o.y - p.y)
+    if (d < best || (d === best && target !== null && o.id < target.id)) {
+      best = d
+      target = o
+    }
+  }
+  if (target === null) return false
+  const x = p.x
+  const y = p.y
+  p.x = target.x
+  p.y = target.y
+  target.x = x
+  target.y = y
+  return true
+}
+
 /** Spends the held powerup. Returns false, silently, if there is nothing to spend. */
 export function usePowerup(state, id) {
   if (state.phase !== 'playing') return false
@@ -361,6 +511,15 @@ export function usePowerup(state, id) {
   else if (kind === 'dash') p.dashUntil = state.now + DASH_MS
   else if (kind === 'patch') patchAround(state, p)
   else if (kind === 'sinkhole') sinkholeNearest(state, p)
+  else if (kind === 'foresight') p.seeingUntil = state.now + FORESIGHT_MS
+  else if (kind === 'blink' && !blink(state, p)) {
+    // Nowhere to land. Keep it rather than eat it for a hop into the void.
+    p.held = kind
+    return false
+  } else if (kind === 'swap' && !swap(state, p)) {
+    p.held = kind
+    return false
+  }
   return true
 }
 
@@ -378,34 +537,156 @@ function spawnPowerup(state, rng) {
   state.powerups[i] = POWERUP_KINDS[Math.floor(rng() * POWERUP_KINDS.length)]
 }
 
+/**
+ * A step towards the nearest tile that satisfies `want`, over ground that is
+ * still standing. Warned tiles are passable — sometimes crossing one is the
+ * only way off an island — but they are never a destination.
+ */
+function stepTo(state, p, want) {
+  const start = p.y * SIZE + p.x
+  const seen = new Set([start])
+  const queue = [[start, null]]
+
+  for (let head = 0; head < queue.length; head++) {
+    const [i, first] = queue[head]
+    if (first !== null && want(i)) return first
+    const x = i % SIZE
+    const y = (i / SIZE) | 0
+    for (const [dx, dy] of Object.values(DIRS)) {
+      const nx = x + dx
+      const ny = y + dy
+      if (nx < 0 || ny < 0 || nx >= SIZE || ny >= SIZE) continue
+      const j = ny * SIZE + nx
+      if (seen.has(j) || state.tiles[j] === 'gone') continue
+      seen.add(j)
+      // Another piece is a wall as far as pathing is concerned.
+      if (state.players.some((o) => o.playing && o.alive && o !== p && o.y * SIZE + o.x === j)) {
+        continue
+      }
+      queue.push([j, first ?? [dx, dy]])
+    }
+  }
+  return null
+}
+
+/** How much standing ground a tile can reach, capped — a crude island size. */
+function roomAround(state, i, cap = 24) {
+  if (state.tiles[i] !== 'solid') return 0
+  const seen = new Set([i])
+  const queue = [i]
+  for (let head = 0; head < queue.length && seen.size < cap; head++) {
+    const x = queue[head] % SIZE
+    const y = (queue[head] / SIZE) | 0
+    for (const [dx, dy] of Object.values(DIRS)) {
+      const nx = x + dx
+      const ny = y + dy
+      if (nx < 0 || ny < 0 || nx >= SIZE || ny >= SIZE) continue
+      const j = ny * SIZE + nx
+      if (seen.has(j) || state.tiles[j] !== 'solid') continue
+      seen.add(j)
+      queue.push(j)
+    }
+  }
+  return seen.size
+}
+
+const dirName = (step) =>
+  Object.keys(DIRS).find((k) => DIRS[k][0] === step[0] && DIRS[k][1] === step[1])
+
+/**
+ * One decision per bot per BOT_REACT_MS. In a game whose whole threat is the
+ * floor, the order is: get off a tile that is about to go, then take anything
+ * lying around, then work towards the biggest piece of floor left — which is
+ * the same instinct that keeps a person alive here.
+ */
+export function driveBots(state, rng = Math.random) {
+  for (const b of state.players) {
+    if (!b.bot || !b.playing || !b.alive || state.now < b.thinkAt) continue
+    b.thinkAt = state.now + BOT_REACT_MS
+
+    if (b.held) usePowerup(state, b.id)
+
+    const here = b.y * SIZE + b.x
+    const safe = (i) => state.tiles[i] === 'solid'
+
+    // Standing on a tile that has been flagged: anywhere solid will do.
+    let step = state.tiles[here] === 'warn' ? stepTo(state, b, safe) : null
+
+    // Then something to carry, if a hand is free.
+    if (!step && !b.held) {
+      step = stepTo(state, b, (i) => safe(i) && Object.hasOwn(state.powerups, i))
+    }
+
+    // Otherwise work towards more floor than this. Nothing to gain from a
+    // shrinking island, and every reason to leave it early.
+    if (!step) {
+      const room = roomAround(state, here)
+      if (room < 12) step = stepTo(state, b, (i) => safe(i) && roomAround(state, i) > room)
+    }
+
+    // Nothing worth doing: shuffle, rather than stand on one tile waiting for
+    // it to be the one that goes.
+    if (!step) {
+      const open = Object.values(DIRS).filter(([dx, dy]) => {
+        const x = b.x + dx
+        const y = b.y + dy
+        if (x < 0 || y < 0 || x >= SIZE || y >= SIZE) return false
+        return state.tiles[y * SIZE + x] === 'solid'
+      })
+      if (open.length > 0) step = open[Math.floor(rng() * open.length)]
+    }
+
+    if (step) move(state, b.id, dirName(step))
+  }
+}
+
 function startCountdown(state) {
   state.phase = 'countdown'
   state.phaseUntil = state.now + COUNTDOWN_MS
   state.winner = null
+  state.winnerId = null
 }
 
 function endRound(state, survivor) {
   state.phase = 'over'
   state.winner = survivor ? survivor.name : null
+  state.winnerId = survivor ? survivor.id : null
   state.phaseUntil = state.now + OVER_MS
   // Safe to do here: once the phase is 'over', tick's early return means the
   // playing branch cannot run again this round, so this counts exactly once.
   if (survivor) survivor.wins += 1
 }
 
-// ponytail: rescans the whole grid once per pick. At 81 tiles and three picks
-// that is nothing; revisit only if the grid ever gets large.
+/**
+ * Chooses which tiles the NEXT wave will take.
+ *
+ * Picked ahead of time rather than at the moment it fires, because foresight
+ * has to be able to show it. Nothing else changes: the wave is still random,
+ * it is just random a little earlier.
+ *
+ * ponytail: rescans the grid once per wave. At a few hundred tiles and six
+ * picks that is nothing; revisit only if the grid ever gets large.
+ */
+function pickWave(state, rng) {
+  const solid = []
+  for (let i = 0; i < state.tiles.length; i++) {
+    if (state.tiles[i] === 'solid') solid.push(i)
+  }
+  const wave = []
+  for (let n = 0; n < COLLAPSE_COUNT && solid.length > 0; n++) {
+    wave.push(solid.splice(Math.floor(rng() * solid.length), 1)[0])
+  }
+  return wave
+}
+
 function collapse(state, rng) {
-  for (let n = 0; n < COLLAPSE_COUNT; n++) {
-    const solid = []
-    for (let i = 0; i < state.tiles.length; i++) {
-      if (state.tiles[i] === 'solid') solid.push(i)
-    }
-    if (solid.length === 0) return
-    const i = solid[Math.floor(rng() * solid.length)]
+  for (const i of state.nextWave) {
+    // A tile can be patched or already flagged between the pick and the wave.
+    if (state.tiles[i] !== 'solid') continue
     state.tiles[i] = 'warn'
     state.warnAt[i] = state.now + WARNING_MS
   }
+  state.nextWave = pickWave(state, rng)
 }
 
 /** Turns due warnings into holes and takes anyone standing on them with it. */
@@ -437,14 +718,23 @@ function resolveWarnings(state) {
  */
 export function tick(state, dt, rng = Math.random) {
   state.now += dt
+  ensureBots(state)
+
+  if (!canRun(state) && state.phase !== 'waiting') {
+    // The last person left mid-round. Stand it down rather than let the bots
+    // play it out to an empty room.
+    state.phase = 'waiting'
+    state.winner = null
+    state.winnerId = null
+  }
 
   if (state.phase === 'waiting') {
-    if (state.players.length >= MIN_PLAYERS) startCountdown(state)
+    if (canRun(state) && state.players.length >= MIN_PLAYERS) startCountdown(state)
     return
   }
 
   if (state.phase === 'countdown') {
-    if (state.players.length < MIN_PLAYERS) {
+    if (!canRun(state) || state.players.length < MIN_PLAYERS) {
       state.phase = 'waiting'
     } else if (state.now >= state.phaseUntil) {
       startRound(state, rng)
@@ -459,11 +749,14 @@ export function tick(state, dt, rng = Math.random) {
     } else {
       state.phase = 'waiting'
       state.winner = null
+      state.winnerId = null
     }
     return
   }
 
   // playing
+  driveBots(state, rng)
+
   while (state.now >= state.nextCollapseAt) {
     collapse(state, rng)
     state.nextCollapseAt += COLLAPSE_EVERY_MS
@@ -484,20 +777,38 @@ export function tick(state, dt, rng = Math.random) {
  * players is a small object, and a client never needs earlier messages to
  * render. Delta-encode only if the grid ever exceeds ~400 tiles.
  */
-export function snapshot(state) {
+/**
+ * The one message shape broadcast to clients.
+ *
+ * `viewerId` is optional and changes exactly one field: somebody holding a
+ * foresight is told which tiles the next wave will take. That is the only
+ * per-viewer information in any of these games, and it is why this takes an
+ * argument at all — the alternative was broadcasting the next wave to everyone
+ * and hiding it in the client, which would be a lie on a protocol whose whole
+ * point is being readable off the wire.
+ */
+export function snapshot(state, viewerId = null) {
   const timed = state.phase === 'countdown' || state.phase === 'over'
+  const viewer = viewerId === null ? null : state.players.find((p) => p.id === viewerId)
+  const seeing = !!viewer && state.now < viewer.seeingUntil
   return {
+    soon: seeing ? state.nextWave : [],
     t: 'state',
     phase: state.phase,
     size: SIZE,
     secs: timed ? Math.max(0, Math.ceil((state.phaseUntil - state.now) / 1000)) : 0,
     winner: state.winner,
+    winnerId: state.winnerId,
     arena: state.arena,
+    min: MIN_PLAYERS,
+    botsWanted: state.botsWanted,
+    botsOnly: state.botsOnly,
     tiles: state.tiles,
     powerups: state.powerups,
     players: state.players.map((p) => ({
       id: p.id,
       name: p.name,
+      bot: p.bot,
       x: p.x,
       y: p.y,
       playing: p.playing,
@@ -506,6 +817,7 @@ export function snapshot(state) {
       held: p.held,
       shielded: p.shielded,
       dashing: state.now < p.dashUntil,
+      seeing: state.now < p.seeingUntil,
     })),
   }
 }

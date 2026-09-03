@@ -50,6 +50,11 @@ import {
   MEDKIT_HEAL,
   OVERHEAL_MAX,
   MELEE_REACH,
+  MINE_ARM_MS,
+  MINE_RADIUS,
+  MINE_LIFE_MS,
+  GRAPPLE_RANGE,
+  CLOAK_MS,
   MELEE_COOLDOWN_MS,
   BOMB_FUSE_MS,
   BOT_FILL_TO,
@@ -57,6 +62,7 @@ import {
   BOT_PICKUP_RANGE,
   POWERUP_MAX,
   ensureBots,
+  wantBots,
 } from './fracture.js'
 
 const cell = (x, y) => y * W + x
@@ -87,6 +93,9 @@ function clearWalls(m) {
 function withBots(fill = BOT_FILL_TO, humans = 1) {
   const m = createMatch(() => 0, 'kiln')
   m.botFill = fill
+  // These tests are about how bots behave once they are in, not about the
+  // lobby choice that puts them there.
+  m.botsWanted = true
   const people = []
   for (let i = 0; i < humans; i++) people.push(addPlayer(m, `h${i}`))
   tick(m, TICK_MS, () => 0.5)
@@ -605,14 +614,67 @@ test('bots stand down one at a time as people take the slots', () => {
 })
 
 test('a bot never keeps a person out of a full arena', () => {
-  const { m } = withBots(MAX_PLAYERS, 0)
+  // One person and bots in every other chair. An arena of nothing but bots is
+  // not a state that exists any more, so the person has to be here to hold it
+  // open in the first place.
+  const { m } = withBots(MAX_PLAYERS, 1)
   assert.equal(m.players.length, MAX_PLAYERS)
-  assert.ok(m.players.every((p) => p.bot))
+  assert.equal(m.players.filter((p) => p.bot).length, MAX_PLAYERS - 1)
 
   const person = addPlayer(m, 'latecomer')
   assert.ok(person, 'a person was turned away from an arena full of bots')
   assert.equal(person.bot, false)
   assert.equal(m.players.length, MAX_PLAYERS, 'the arena overflowed')
+  assert.equal(m.players.filter((p) => !p.bot).length, 2)
+})
+
+test('nothing runs in an empty room, and an operator can lift that', () => {
+  const m = createMatch(() => 0, 'kiln')
+  m.botFill = BOT_FILL_TO
+
+  // Nobody here: no bots are seated and no match starts.
+  for (let i = 0; i < 5; i++) tick(m, TICK_MS, () => 0.5)
+  assert.equal(m.players.length, 0, 'bots took the field with nobody watching')
+  assert.equal(m.phase, 'waiting')
+
+  // Somebody arrives, and the lobby is held for them to decide.
+  const person = addPlayer(m, 'someone')
+  for (let i = 0; i < 3; i++) tick(m, TICK_MS, () => 0.5)
+  assert.equal(m.players.length, 1, 'bots arrived without being asked for')
+  assert.equal(m.phase, 'waiting')
+
+  // They ask, and it comes to life.
+  wantBots(m)
+  for (let i = 0; i < 3; i++) tick(m, TICK_MS, () => 0.5)
+  assert.ok(m.players.filter((p) => p.bot).length > 0, 'asking for bots got none')
+  assert.equal(m.phase, 'playing')
+
+  // They leave, and it stands down rather than playing on without them.
+  removePlayer(m, person.id)
+  tick(m, TICK_MS, () => 0.5)
+  assert.equal(m.phase, 'waiting', 'the bots carried on to an empty room')
+  assert.equal(m.players.length, 0)
+  assert.equal(m.botsWanted, false, 'the next person inherits the last one\'s choice')
+
+  // Unless an operator says otherwise.
+  m.botsOnly = true
+  for (let i = 0; i < 3; i++) tick(m, TICK_MS, () => 0.5)
+  assert.equal(m.players.length, BOT_FILL_TO, 'the operator override seated nobody')
+  assert.equal(m.phase, 'playing')
+  assert.equal(snapshot(m).botsOnly, true)
+})
+
+test('two people start a match between them, with no bots involved', () => {
+  const m = createMatch(() => 0, 'kiln')
+  m.botFill = BOT_FILL_TO
+  addPlayer(m, 'one')
+  for (let i = 0; i < 3; i++) tick(m, TICK_MS, () => 0.5)
+  assert.equal(m.phase, 'waiting', 'a lone player was dropped straight into a match')
+
+  addPlayer(m, 'two')
+  for (let i = 0; i < 3; i++) tick(m, TICK_MS, () => 0.5)
+  assert.equal(m.phase, 'playing')
+  assert.equal(m.players.filter((p) => p.bot).length, 0, 'bots joined an uninvited match')
 })
 
 test('a bot shoots at a target in range, cover in the way or not', () => {
@@ -1782,4 +1844,136 @@ test('OVERCHARGE_MS and SPEED stay sane against the tick rate', () => {
   // Guards against a tuning edit that makes a constant meaningless.
   assert.ok(OVERCHARGE_MS > TICK_MS)
   assert.ok(SPEED * (TICK_MS / 1000) < 1 - RADIUS, 'a single tick can now skip a whole cell')
+})
+
+
+// --- the wider kit --------------------------------------------------------
+
+test('a mine arms before it bites, and then takes the first one onto it', () => {
+  const { m, players } = playing()
+  clearWalls(m)
+  const [p, victim] = players
+  p.x = 10
+  p.y = 10
+  p.held = 'mine'
+  usePowerup(m, p.id)
+  assert.equal(m.mines.length, 1)
+  // Not on the wire until it is a real threat.
+  assert.equal(snapshot(m).mines.length, 0, 'an arming mine was announced')
+
+  // Walking over it while it is still arming is safe.
+  victim.x = 10
+  victim.y = 10
+  tick(m, TICK_MS, () => 0)
+  assert.equal(victim.alive, true, 'a mine bit before it was armed')
+
+  m.now += MINE_ARM_MS
+  victim.x = 10
+  victim.y = 10
+  tick(m, TICK_MS, () => 0)
+  assert.equal(victim.alive, false, 'an armed mine let somebody walk over it')
+  assert.equal(p.kills, 1)
+  assert.equal(m.mines.length, 0, 'the mine is still there after going off')
+})
+
+test('a mine ignores whoever laid it, and does not sit there forever', () => {
+  const { m, players } = playing()
+  clearWalls(m)
+  const [p] = players
+  players[1].alive = false
+  players[1].respawnAt = m.now + 1e6
+  p.x = 10
+  p.y = 10
+  p.held = 'mine'
+  usePowerup(m, p.id)
+  m.now += MINE_ARM_MS
+
+  for (let i = 0; i < 10; i++) tick(m, TICK_MS, () => 0)
+  assert.equal(p.alive, true, 'a mine took its own owner')
+  assert.equal(snapshot(m).mines.length, 1, 'an armed mine should be visible')
+
+  m.now += MINE_LIFE_MS
+  tick(m, TICK_MS, () => 0)
+  assert.equal(m.mines.length, 0, 'a mine outlived its life')
+})
+
+test('a shield is still one save, even against a mine', () => {
+  const { m, players } = playing()
+  clearWalls(m)
+  const [p, victim] = players
+  p.x = 10
+  p.y = 10
+  p.held = 'mine'
+  usePowerup(m, p.id)
+  m.now += MINE_ARM_MS
+
+  victim.held = 'shield'
+  usePowerup(m, victim.id)
+  victim.x = 10
+  victim.y = 10
+  tick(m, TICK_MS, () => 0)
+  assert.equal(victim.alive, true, 'the shield did not cover a mine')
+  assert.equal(victim.shielded, false, 'the shield was not spent')
+})
+
+test('a grapple pulls you to cover, and never through it', () => {
+  const { m, players } = playing()
+  clearWalls(m)
+  const p = players[0]
+  p.x = 5
+  p.y = 10
+  p.aim = 0
+  m.walls[cell(12, 10)] = WALL_HP
+
+  p.held = 'grapple'
+  assert.equal(usePowerup(m, p.id), true)
+  assert.ok(p.x > 8, `barely moved, ended at ${p.x}`)
+  assert.ok(p.x < 12 - RADIUS + 0.01, `pulled through the wall to ${p.x}`)
+  assert.equal(p.y, 10, 'drifted off the line')
+})
+
+test('a grapple that finds nothing is not spent', () => {
+  const { m, players } = playing()
+  clearWalls(m)
+  const p = players[0]
+  // Nose against a wall: there is nowhere to be pulled to.
+  p.x = 12 - RADIUS - 0.05
+  p.y = 10
+  p.aim = 0
+  m.walls[cell(12, 10)] = WALL_HP
+
+  const before = p.x
+  p.held = 'grapple'
+  assert.equal(usePowerup(m, p.id), false)
+  assert.equal(p.held, 'grapple', 'a miss ate the pickup')
+  assert.equal(p.x, before, 'a refused grapple still moved them')
+  assert.ok(GRAPPLE_RANGE > 1)
+})
+
+test('a cloak is reported, and wears off', () => {
+  const { m, players } = playing()
+  const p = players[0]
+  p.held = 'cloak'
+  usePowerup(m, p.id)
+  assert.equal(snapshot(m).players[0].cloaked, true)
+
+  m.now += CLOAK_MS
+  tick(m, TICK_MS, () => 0)
+  assert.equal(snapshot(m).players[0].cloaked, false, 'the cloak never wore off')
+})
+
+test('every kind in the kit still does something and empties your hand', () => {
+  for (const kind of POWERUP_KINDS) {
+    const { m, players } = playing()
+    clearWalls(m)
+    const p = players[0]
+    // A grapple needs something to catch, or it is deliberately refused.
+    p.x = 5
+    p.y = 10
+    p.aim = 0
+    m.walls[cell(12, 10)] = WALL_HP
+    p.held = kind
+    assert.equal(usePowerup(m, p.id), true, `${kind} was refused`)
+    assert.equal(p.held, null, `${kind} stayed in hand`)
+  }
 })
