@@ -1,10 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
+ import Leaderboard from '../components/Leaderboard.jsx'
 import BlockArt from '../components/BlockArt.jsx'
 import { games } from '../data/games.js'
 import { makeWallTiles, styleFor } from '../lib/wallTiles.js'
 import { makeBombArt } from '../lib/fireTiles.js'
 import { useTitle } from '../lib/useTitle.js'
+import { useFavicon } from '../lib/useFavicon.js'
 
 // The ad is for one of the studio's other titles, copy straight out of the
 // catalog — so it stays in fiction and there is no second place to edit it.
@@ -180,6 +182,7 @@ function statusLine(game, myId) {
 
 export default function Fracture() {
   useTitle('Fracture Line')
+  useFavicon('fracture')
 
   const [name, setName] = useState('')
   const [status, setStatus] = useState('idle') // idle | connecting | live | closed | full
@@ -1397,6 +1400,23 @@ export default function Fracture() {
             ))}
             {board.length === 0 && <li className="text-sm text-muted">Nobody yet.</li>}
           </ul>
+
+          {/* The standing board, as it stood when the last match on this
+              server finished. It arrives in the snapshot rather than being
+              fetched, so it needs no second connection and updates the moment
+              a match ends. */}
+          <div className="mt-8 flex items-baseline justify-between">
+            <p className="rule-label">Leaderboard</p>
+            <p className="rule-label">Won · K/D</p>
+          </div>
+          <div className="mt-3">
+            <Leaderboard entries={hud?.board ?? []} you={me?.name ?? null} />
+          </div>
+          <p className="mt-3 text-xs text-muted">
+            <Link to="/leaderboard" className="underline underline-offset-4 hover:text-fg">
+              Every game, every name
+            </Link>
+          </p>
 
           <p className="rule-label mt-8">Controls</p>
           <dl className="mt-2 space-y-1.5 text-sm text-muted">

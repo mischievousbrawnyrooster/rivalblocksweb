@@ -118,10 +118,28 @@ disk, and the config has not changed.
   look from another VM, but it is unoptimised, single-process and stops when
   you close the terminal. nginx serving `dist/` is the actual deployment.
 
-## The game server
+## The match servers
 
-`/play` needs a process holding the match. nginx keeps serving the site
-exactly as before and proxies `/ws` to it.
+`/play` needs a process holding the match, and there are four of them — one per
+game, plus a second Blastworks for the other mode. nginx keeps serving the site
+exactly as before and proxies each path to its own port.
+
+| Path | Port | Process | Game |
+|---|---|---|---|
+| `/ws` | 8081 | `server/server.js` | Blockout Royale |
+| `/fracture-ws` | 8082 | `server/fracture-server.js` | Fracture Line |
+| `/blast-ws` | 8083 | `server/blastworks-server.js` | Blastworks, last man standing |
+| `/blast-dm-ws` | 8084 | `server/blastworks-dm.js` | Blastworks, deathmatch |
+
+**No path but the first may begin with `/ws`.** nginx matches locations by
+prefix, so `/ws-fracture` would be swallowed by the Blockout Royale rule and
+the player connected to the wrong game, with no error anywhere. Vite's dev
+proxy matches the same way, which is why the paths are shaped like this on both
+sides.
+
+Each process holds its own match in memory and knows its own port, so one
+crashing takes nothing else with it and there is no configuration to keep in
+step between them.
 
 ### Install Node (once)
 
@@ -161,21 +179,56 @@ sudo -u www-data node /opt/rivalblocks-game/server/server.js
 
 Expect `Blockout Royale match server on ws://127.0.0.1:8081`. Ctrl-C.
 
-### Run it under systemd (once)
+### Make somewhere for the leaderboard (once)
+
+The four servers write the standing board here and nginx serves it back out at
+`/board/`. It sits outside `/var/www` deliberately: replacing the served
+directory is how a redeploy works, and that must never take the leaderboard
+with it.
 
 ```bash
-sudo cp /mnt/hgfs/<share-name>/deploy/rivalblocks-game.service \
-        /etc/systemd/system/
-sudo systemctl daemon-reload
-sudo systemctl enable --now rivalblocks-game
-systemctl status rivalblocks-game
+sudo mkdir -p /var/lib/rivalblocks/board
+sudo chown -R www-data:www-data /var/lib/rivalblocks
 ```
 
-### Reload nginx with the proxy
+Nothing needs seeding. A game nobody has finished a match on simply has no file
+yet, which the site reads as an empty board.
+
+### Run them under systemd (once)
+
+One template unit covers all four; the instance name is the file in `server/`
+to run.
+
+```bash
+sudo cp /mnt/hgfs/<share-name>/deploy/rivalblocks@.service \
+        /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now \
+    rivalblocks@server \
+    rivalblocks@fracture-server \
+    rivalblocks@blastworks-server \
+    rivalblocks@blastworks-dm
+systemctl status "rivalblocks@*"
+```
+
+If the older single-game `rivalblocks-game` unit is still installed, disable it
+first — otherwise two processes fight over port 8081 and the loser restarts
+forever:
+
+```bash
+sudo systemctl disable --now rivalblocks-game
+```
+
+### Reload nginx with the proxies
+
+Two files: the site config, and the shared WebSocket headers its four proxy
+blocks include.
 
 ```bash
 sudo cp /mnt/hgfs/<share-name>/deploy/nginx.conf \
         /etc/nginx/sites-available/rivalblocks
+sudo cp /mnt/hgfs/<share-name>/deploy/rivalblocks-ws.conf \
+        /etc/nginx/rivalblocks-ws.conf
 sudo nginx -t
 sudo systemctl reload nginx
 ```
@@ -185,34 +238,55 @@ sudo systemctl reload nginx
 From another machine, open `http://<vm-ip>/play` in two browser windows, join
 with two names, and play a round.
 
-If the board never appears, the handshake is the first suspect:
+If a board never appears, the handshake is the first suspect. Check all four —
+a mistake in the prefix rules shows as one game working and another not:
 
 ```bash
-curl -i -N \
-  -H "Connection: Upgrade" -H "Upgrade: websocket" \
-  -H "Sec-WebSocket-Version: 13" -H "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==" \
-  http://localhost/ws
+for path in /ws /fracture-ws /blast-ws /blast-dm-ws; do
+  printf "%s " "$path"
+  curl -s -o /dev/null -w "%{http_code}\n" -N \
+    -H "Connection: Upgrade" -H "Upgrade: websocket" \
+    -H "Sec-WebSocket-Version: 13" -H "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==" \
+    "http://localhost$path"
+done
 ```
 
-Expect `HTTP/1.1 101 Switching Protocols`. Anything else means the `location
-/ws` block did not take, or the service is down — check
-`journalctl -u rivalblocks-game -n 50`.
+Expect `101` from each. Anything else means that `location` block did not take,
+or the service behind it is down — check
+`journalctl -u rivalblocks@<instance> -n 50`.
+
+The leaderboard is an ordinary GET, so it needs no special handling:
+
+```bash
+curl -i http://localhost/board/board-blockout.json
+```
+
+Expect `200` and JSON once a match has finished there, `404` before that. A
+`200` returning HTML means the `location /board/` block did not take and the
+SPA fallback answered instead.
 
 ### Redeploying the game
 
 ```bash
-sudo systemctl stop rivalblocks-game
+sudo systemctl stop "rivalblocks@*"
 # re-copy server/ as above
-sudo systemctl start rivalblocks-game
+sudo systemctl start \
+    rivalblocks@server \
+    rivalblocks@fracture-server \
+    rivalblocks@blastworks-server \
+    rivalblocks@blastworks-dm
 ```
 
-nginx needs nothing unless its config changed.
+nginx needs nothing unless its config changed. The leaderboard is untouched by
+any of this — it lives on disk, not in the processes — so restarting one server
+or all four costs nothing but the match in progress.
 
 ### What is on the wire
 
 Traffic between browser and VM is plain `ws://` on port 80. Anyone running
-Wireshark on this network reads player names, every move, and the full board
-state as JSON, with no decryption step. That is fine here — the protocol
+Wireshark on this network reads player names, every move, the full board state
+and the standing leaderboard as JSON, with no decryption step. The operator key
+for `/admin` crosses the same wire in the clear. That is fine here — the protocol
 carries no credentials and no personal data, and the site is already plain
 HTTP on a trusted internal network. Put TLS in front of both before this goes
 anywhere wider.
@@ -260,26 +334,37 @@ grep -E '^\s*user' /etc/nginx/nginx.conf
 
 ### runit, not systemd
 
-Ignore `rivalblocks-game.service`; use `rivalblocks-game.run`.
+Ignore `rivalblocks@.service`; use `rivalblocks.run`. It is one script copied
+into four service directories — it reads the directory name to know which
+server it is starting.
 
 ```sh
-sudo mkdir -p /etc/sv/rivalblocks-game
-sudo cp rivalblocks-game.run /etc/sv/rivalblocks-game/run
-sudo chmod +x /etc/sv/rivalblocks-game/run
-sudo ln -s /etc/sv/rivalblocks-game /var/service/
+for s in server fracture-server blastworks-server blastworks-dm; do
+  sudo mkdir -p "/etc/sv/rivalblocks-$s"
+  sudo cp rivalblocks.run "/etc/sv/rivalblocks-$s/run"
+  sudo chmod +x "/etc/sv/rivalblocks-$s/run"
+  sudo ln -s "/etc/sv/rivalblocks-$s" /var/service/
+done
 ```
 
-The symlink into `/var/service/` is what starts it and enables it at boot —
-there is no separate enable step. runit restarts the process whenever it
+The symlink into `/var/service/` is what starts a service and enables it at
+boot — there is no separate enable step. runit restarts the process whenever it
 exits, so `Restart=always` needs no equivalent.
+
+The leaderboard directory needs the user nginx runs as, not `www-data`:
+
+```sh
+sudo mkdir -p /var/lib/rivalblocks/board
+sudo chown -R nginx:nginx /var/lib/rivalblocks
+```
 
 | systemd | runit |
 |---|---|
-| `systemctl status rivalblocks-game` | `sv status rivalblocks-game` |
-| `systemctl stop rivalblocks-game` | `sv down rivalblocks-game` |
-| `systemctl start rivalblocks-game` | `sv up rivalblocks-game` |
-| `systemctl restart rivalblocks-game` | `sv restart rivalblocks-game` |
-| `journalctl -u rivalblocks-game` | install `socklog-void`, then read `/var/log/socklog/` |
-| disable | `sudo rm /var/service/rivalblocks-game` |
+| `systemctl status rivalblocks@server` | `sv status rivalblocks-server` |
+| `systemctl stop rivalblocks@server` | `sv down rivalblocks-server` |
+| `systemctl start rivalblocks@server` | `sv up rivalblocks-server` |
+| `systemctl restart rivalblocks@server` | `sv restart rivalblocks-server` |
+| `journalctl -u rivalblocks@server` | install `socklog-void`, then read `/var/log/socklog/` |
+| disable | `sudo rm /var/service/rivalblocks-server` |
 
-Redeploying the game becomes `sv down`, re-copy `server/`, `sv up`.
+Redeploying a game becomes `sv down`, re-copy `server/`, `sv up`.

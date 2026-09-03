@@ -256,6 +256,10 @@ export function createMatch(rng = Math.random, arena = ARENAS[Math.floor(rng() *
     botsWanted: false,
     winner: null,
     winnerId: null,
+    // The standing leaderboard, best first. Set from outside by the socket
+    // wrapper and passed through untouched: no rule here reads it, and nothing
+    // about the match depends on it.
+    board: [],
     // How many participants to top up to with bots. Zero leaves the arena
     // exactly as populated as its callers made it.
     botFill: 0,
@@ -1311,6 +1315,7 @@ export function snapshot(state) {
       state.phase === 'over' ? Math.max(0, Math.ceil((state.phaseUntil - state.now) / 1000)) : 0,
     winner: state.winner,
     winnerId: state.winnerId,
+    board: state.board,
     botsOnly: state.botsOnly,
     botsWanted: state.botsWanted,
     target: KILL_TARGET,

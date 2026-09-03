@@ -23,6 +23,8 @@ import {
   W,
   H,
 } from './blastworks.js'
+import { boardFor } from './board.js'
+import { keeper } from './board-store.js'
 
 const HOST = process.env.HOST || '127.0.0.1'
 const PORT = Number(process.env.PORT) || 8083
@@ -39,6 +41,31 @@ const match = createMatch(Math.random, undefined, MODE)
 // ws defaults to a 100 MiB maxPayload; the largest legal message here is a
 // short input frame, so bound it hard.
 const wss = new WebSocketServer({ host: HOST, port: PORT, maxPayload: 4096 })
+
+// The standing leaderboard. Loaded once at boot — it is the only thing about
+// this process that outlives it — and handed to the match so the strip rides
+// along in the snapshot that already goes out to everyone.
+const keep = keeper(boardFor('blastworks', MODE))
+match.board = keep.top()
+
+/**
+ * Everyone this match should be credited to, as it ended.
+ *
+ * Every person still connected, bots excluded. Someone who arrived in the last
+ * few seconds is counted as having played a match they barely saw; the
+ * alternative is three different definitions of "took part" across three games
+ * for a distinction nobody reads.
+ */
+const played = () =>
+  match.players
+    .filter((p) => !p.bot)
+    .map((p) => ({
+      name: p.name,
+      bot: false,
+      won: p.id === match.winnerId,
+      kills: p.kills,
+      deaths: p.deaths,
+    }))
 
 // Which socket belongs to which player, so an operator can actually drop one.
 const sockets = new Map()
@@ -123,6 +150,8 @@ setInterval(() => {
   const dt = Math.min(now - last, TICK_MS * 5)
   last = now
   tick(match, dt)
+  // Banked on the frame the match ends, and not again while the result is up.
+  if (keep.bank(match.phase === 'over' && match.final, played)) match.board = keep.top()
   const frame = JSON.stringify(snapshot(match))
   for (const client of wss.clients) {
     if (client.readyState === client.OPEN) client.send(frame)

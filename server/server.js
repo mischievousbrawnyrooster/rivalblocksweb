@@ -19,6 +19,8 @@ import {
   TICK_MS,
   SIZE,
 } from './game.js'
+import { boardFor } from './board.js'
+import { keeper } from './board-store.js'
 
 const HOST = process.env.HOST || '127.0.0.1'
 const PORT = Number(process.env.PORT) || 8081
@@ -37,6 +39,31 @@ const sockets = new Map()
 // short join frame, so bound it hard to keep an oversized frame from ever
 // reaching the message handler.
 const wss = new WebSocketServer({ host: HOST, port: PORT, maxPayload: 4096 })
+
+// The standing leaderboard. Loaded once at boot — it is the only thing about
+// this process that outlives it — and handed to the match so the strip rides
+// along in the snapshot that already goes out to everyone.
+const keep = keeper(boardFor('blockout'))
+match.board = keep.top()
+
+/**
+ * Everyone this match should be credited to, as it ended.
+ *
+ * Every person still connected, bots excluded. Someone who arrived in the last
+ * few seconds is counted as having played a match they barely saw; the
+ * alternative is three different definitions of "took part" across three games
+ * for a distinction nobody reads.
+ */
+const played = () =>
+  match.players
+    .filter((p) => !p.bot)
+    .map((p) => ({
+      name: p.name,
+      bot: false,
+      won: p.id === match.winnerId,
+      kills: 0,
+      deaths: 0,
+    }))
 
 wss.on('connection', (ws) => {
   let player = null
@@ -112,6 +139,11 @@ setInterval(() => {
   const dt = Math.min(now - last, TICK_MS * 5)
   last = now
   tick(match, dt)
+  // Banked on the frame a ROUND ends, not the match. Rounds here are short and
+  // self-contained — the floor falls away, somebody is last off it — so the
+  // round is the unit worth recording. The match on top of it is what decides
+  // the victory screen, not what reaches the board.
+  if (keep.bank(match.phase === 'over', played)) match.board = keep.top()
 
   // One frame for everybody, built once. Anyone holding a foresight gets their
   // own, because it carries the next wave and nobody else may see it — that is

@@ -6,6 +6,7 @@ const links = [
   { to: '/games', label: 'Games' },
   { to: '/servers', label: 'Servers' },
   { to: '/play', label: 'Play' },
+  { to: '/leaderboard', label: 'Leaderboard' },
   { to: '/about', label: 'Studio' },
 ]
 

@@ -17,12 +17,18 @@ stored as plain files that a person can open in a text editor.
 
 **A match ending.** Not a round, not a disconnection.
 
-| Game | A match ends when |
+| Game | Banked when |
 |---|---|
 | Fracture Line | somebody reaches the kill target |
 | Blastworks (last man) | somebody takes `ROUND_TARGET` rounds |
 | Blastworks (deathmatch) | somebody reaches `KILL_TARGET` kills |
-| Blockout Royale | somebody takes `ROUND_TARGET` rounds — **new**, see below |
+| Blockout Royale | **every round** — see the amendment below |
+
+> **Amended 2026-09-03.** Blockout Royale banks per round rather than per
+> match. Its rounds last well under a minute and settle one complete question —
+> who was last off the floor — so making three of them the unit only made the
+> board move three times more slowly for no more meaning. It keeps its match
+> and its `ROUND_TARGET`; those drive the victory screen, not the board.
 
 Blockout Royale has no match today: it runs rounds forever. It gains
 `ROUND_TARGET` and a `final` flag, mirroring Blastworks exactly, so all three

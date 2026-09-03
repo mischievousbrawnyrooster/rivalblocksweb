@@ -4,8 +4,9 @@
 // --- Tuning ------------------------------------------------------------
 // The collapse rate is what decides whether a round is tense or tedious, and
 // no amount of reasoning settles it. Play the game and move the numbers.
-// SIZE and COLLAPSE_COUNT move together: a round lasts roughly
-// (SIZE^2 / COLLAPSE_COUNT) * COLLAPSE_EVERY_MS, so growing the arena without
+// SIZE and COLLAPSE_COUNT move together: a round lasts at least roughly
+// (SIZE^2 / COLLAPSE_COUNT) * COLLAPSE_EVERY_MS — longer in practice, because
+// the wave tapers with the floor (see COLLAPSE_SHARE) — so growing the arena without
 // collapsing faster just makes rounds drag. 15x15 at 6 per wave is ~34s —
 // a little longer than the old 9x9, because there is more ground to use.
 // Going further: 17 wants COLLAPSE_COUNT 8, 19 wants 10. Past about 19 the
@@ -15,10 +16,54 @@ export const TICK_MS = 100
 export const MOVE_COOLDOWN_MS = 120
 export const COLLAPSE_EVERY_MS = 900
 export const COLLAPSE_COUNT = 6
+
+// A wave never takes more than this share of what is still standing.
+//
+// Six tiles out of a full board is a wave you can read and run from. Six out
+// of the last twelve is a coin toss — most of the remaining floor going at
+// once, with nowhere to be that was not about to be a hole. The count tapers
+// with the board so the endgame is still a game, and the opening is untouched:
+// while there is plenty of floor the share is above COLLAPSE_COUNT and the cap
+// is what binds.
+// Measured over a full board: at this share a round runs 48 seconds at the
+// outside against 27 before, and the wave is down to a single tile once there
+// are sixteen left. Steeper than this and the endgame is still several tiles a
+// go; shallower and the round drags.
+export const COLLAPSE_SHARE = 0.06
+
+/** How many tiles the next wave takes, given how much floor is left to take. */
+export const waveSize = (solid) =>
+  Math.max(1, Math.min(COLLAPSE_COUNT, Math.ceil(solid * COLLAPSE_SHARE)))
+
+// How fast waves come once there is barely any floor left.
+//
+// The wave shrinks towards a single tile, so on a fixed clock the endgame
+// slowed to a crawl — one tile every nine hundred milliseconds, with two
+// players circling what was left. Fewer tiles has to mean more often, or the
+// taper buys readability at the cost of the round going anywhere.
+export const COLLAPSE_FASTEST_MS = 260
+
+/**
+ * How long until the next wave, given how much floor is left.
+ *
+ * Full board is COLLAPSE_EVERY_MS and an empty one is COLLAPSE_FASTEST_MS,
+ * straight between. Paired with `waveSize`, the round takes less and less at a
+ * time and takes it faster and faster.
+ */
+export const collapseDelay = (solid) => {
+  const share = Math.max(0, Math.min(1, solid / (SIZE * SIZE)))
+  return Math.round(COLLAPSE_FASTEST_MS + (COLLAPSE_EVERY_MS - COLLAPSE_FASTEST_MS) * share)
+}
 export const WARNING_MS = 1500
 export const COUNTDOWN_MS = 3000
 export const OVER_MS = 5000
 export const MIN_PLAYERS = 2
+
+// Rounds are short, so a single one settles very little. Three of them is a
+// match, and a match is the only thing the standing leaderboard records — the
+// other two games are scored the same way, which is what makes one board across
+// all three mean anything.
+export const ROUND_TARGET = 3
 
 // Bots top the board up so one person still gets a round, exactly as in the
 // other two titles. They are opt-in: somebody who arrives first chooses between
@@ -29,7 +74,13 @@ export const BOT_NAMES = ['Pell', 'Grit', 'Mote', 'Talc', 'Quill', 'Bram', 'Fen'
 
 // Powerups. You carry at most one and spend it when you choose, so the
 // decision is which to keep and when to fire it.
-export const POWERUP_EVERY_MS = 4000
+//
+// Paced against the round, not the clock. A round here is over in ten or
+// fifteen seconds, so a four second interval put an average of 1.6 pickups on
+// the board and left four rounds in ten with none at all — a kit nobody ever
+// touched. At this interval a typical round carries several, and the first one
+// is on the floor before anybody has had to commit to a direction.
+export const POWERUP_EVERY_MS = 1600
 // Scaled with the arena, or a bigger board just means longer walks between
 // pickups. Roughly one per 45 tiles.
 export const POWERUP_MAX = 5
@@ -42,6 +93,21 @@ export const POWERUP_KINDS = [
   'swap',
   'foresight',
 ]
+
+// How often a kind comes up, against one for everything not listed.
+//
+// Patch is the only thing in the kit that gives floor back, on a board whose
+// whole premise is losing it — so it is the one worth crossing the arena for.
+// At even odds it came up once in seven, which made it a novelty rather than a
+// plan. At three it is a third of what drops, or roughly twice a round.
+export const POWERUP_WEIGHTS = { patch: 3 }
+
+// The bag drawn from: every kind at least once, the weighted ones more. Built
+// from POWERUP_KINDS rather than written out, so a kind added above cannot be
+// left out of the draw by accident.
+const POWERUP_BAG = POWERUP_KINDS.flatMap((kind) =>
+  Array(Object.hasOwn(POWERUP_WEIGHTS, kind) ? POWERUP_WEIGHTS[kind] : 1).fill(kind),
+)
 
 // A hop that clears holes. Nothing else in the kit can cross a gap, which is
 // what used to make a late round a question of which island you happened to be
@@ -124,6 +190,12 @@ export function createMatch() {
     // The id as well as the name, because two people may be called the same
     // thing and only the one who actually won should be told they did.
     winnerId: null,
+    // Whether that winner took the round or the whole match.
+    final: false,
+    // The standing leaderboard, best first. Set from outside by server.js and
+    // passed through untouched: no rule here reads it, and nothing about the
+    // match depends on it.
+    board: [],
     // How many participants to top up to with bots. Zero leaves the board
     // exactly as populated as its callers made it.
     botFill: 0,
@@ -331,6 +403,23 @@ function snapSpawns(state) {
 
 /** Clears the board and hands pieces to the first MAX_PLAYERS in join order. */
 export function startRound(state, rng = Math.random) {
+  // Bots are seated by the tick, not here, so an operator restarting the round
+  // for one person is starting it with one participant. Laying the board out
+  // anyway hands them the round on the very next tick — the bots arrive, sit
+  // it out as anyone arriving mid-round does, and the survivor check finds a
+  // single player standing. A round nobody contested, and now that three of
+  // them take a match, a match nobody contested either.
+  //
+  // Hand it to the waiting branch instead, which lays the board out once there
+  // is somebody to play against.
+  if (state.players.length < MIN_PLAYERS) {
+    state.phase = 'waiting'
+    state.winner = null
+    state.winnerId = null
+    state.final = false
+    return
+  }
+
   state.tiles.fill('solid')
   state.warnAt.fill(0)
   state.winner = null
@@ -359,6 +448,12 @@ export function startRound(state, rng = Math.random) {
       p.lastMoveAt = state.now - MOVE_COOLDOWN_MS
     }
   })
+
+  // One on the floor before the first tick. The shortest rounds were over
+  // inside the first interval, so four rounds in ten ran start to finish with
+  // nothing on the board to pick up. Placed last, once the arena is carved and
+  // everyone is standing on it, or it would land in the void or under a player.
+  spawnPowerup(state, rng)
   state.phase = 'playing'
 }
 
@@ -412,16 +507,24 @@ function adjacentSolid(state, p) {
   return null
 }
 
-/** Rebuilds every hole orthogonally adjacent to the player. */
+/**
+ * Rebuilds every hole in the three by three the player is standing in.
+ *
+ * Corners included, which is most of what makes it worth carrying: the four
+ * orthogonal neighbours alone rebuilt a plus, and a plus is not an island you
+ * can stand on once the floor around it goes. Only holes are rebuilt — a tile
+ * already flagged for the next wave stays flagged, so a patch buys you ground,
+ * never a reprieve from a wave you can see coming.
+ */
 function patchAround(state, p) {
-  for (const [dx, dy] of Object.values(DIRS)) {
-    const x = p.x + dx
-    const y = p.y + dy
-    if (x < 0 || y < 0 || x >= SIZE || y >= SIZE) continue
-    const i = y * SIZE + x
-    if (state.tiles[i] !== 'gone') continue
-    state.tiles[i] = 'solid'
-    state.warnAt[i] = 0
+  for (let y = p.y - 1; y <= p.y + 1; y++) {
+    for (let x = p.x - 1; x <= p.x + 1; x++) {
+      if (x < 0 || y < 0 || x >= SIZE || y >= SIZE) continue
+      const i = y * SIZE + x
+      if (state.tiles[i] !== 'gone') continue
+      state.tiles[i] = 'solid'
+      state.warnAt[i] = 0
+    }
   }
 }
 
@@ -534,7 +637,7 @@ function spawnPowerup(state, rng) {
   }
   if (free.length === 0) return
   const i = free[Math.floor(rng() * free.length)]
-  state.powerups[i] = POWERUP_KINDS[Math.floor(rng() * POWERUP_KINDS.length)]
+  state.powerups[i] = POWERUP_BAG[Math.floor(rng() * POWERUP_BAG.length)]
 }
 
 /**
@@ -645,6 +748,7 @@ function startCountdown(state) {
   state.phaseUntil = state.now + COUNTDOWN_MS
   state.winner = null
   state.winnerId = null
+  state.final = false
 }
 
 function endRound(state, survivor) {
@@ -655,6 +759,9 @@ function endRound(state, survivor) {
   // Safe to do here: once the phase is 'over', tick's early return means the
   // playing branch cannot run again this round, so this counts exactly once.
   if (survivor) survivor.wins += 1
+  // Three rounds is a match. Read after the increment, so the round that
+  // reaches the target is the round that ends it.
+  state.final = !!survivor && survivor.wins >= ROUND_TARGET
 }
 
 /**
@@ -672,8 +779,11 @@ function pickWave(state, rng) {
   for (let i = 0; i < state.tiles.length; i++) {
     if (state.tiles[i] === 'solid') solid.push(i)
   }
+  // Decided here and nowhere else, so the wave a foresight shows is exactly
+  // the wave that lands.
+  const take = waveSize(solid.length)
   const wave = []
-  for (let n = 0; n < COLLAPSE_COUNT && solid.length > 0; n++) {
+  for (let n = 0; n < take && solid.length > 0; n++) {
     wave.push(solid.splice(Math.floor(rng() * solid.length), 1)[0])
   }
   return wave
@@ -744,12 +854,15 @@ export function tick(state, dt, rng = Math.random) {
 
   if (state.phase === 'over') {
     if (state.now < state.phaseUntil) return
+    // A finished match resets the running total; a finished round does not.
+    if (state.final) for (const p of state.players) p.wins = 0
     if (state.players.length >= MIN_PLAYERS) {
       startCountdown(state)
     } else {
       state.phase = 'waiting'
       state.winner = null
       state.winnerId = null
+      state.final = false
     }
     return
   }
@@ -758,8 +871,12 @@ export function tick(state, dt, rng = Math.random) {
   driveBots(state, rng)
 
   while (state.now >= state.nextCollapseAt) {
+    // Read before the wave lands, so the gap that follows is paced by the
+    // floor the players are actually standing on.
     collapse(state, rng)
-    state.nextCollapseAt += COLLAPSE_EVERY_MS
+    state.nextCollapseAt += collapseDelay(
+      state.tiles.reduce((n, t) => (t === 'solid' ? n + 1 : n), 0),
+    )
   }
   while (state.now >= state.nextPowerupAt) {
     spawnPowerup(state, rng)
@@ -799,6 +916,10 @@ export function snapshot(state, viewerId = null) {
     secs: timed ? Math.max(0, Math.ceil((state.phaseUntil - state.now) / 1000)) : 0,
     winner: state.winner,
     winnerId: state.winnerId,
+    // Whether they took the round or the match, and how many rounds a match is.
+    final: state.final,
+    target: ROUND_TARGET,
+    board: state.board,
     arena: state.arena,
     min: MIN_PLAYERS,
     botsWanted: state.botsWanted,

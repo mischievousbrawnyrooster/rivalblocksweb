@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
+import Leaderboard from '../components/Leaderboard.jsx'
 import { useTitle } from '../lib/useTitle.js'
+import { useFavicon } from '../lib/useFavicon.js'
 import { makeWallTiles, styleFor } from '../lib/wallTiles.js'
 
 // One icon per slot, and eight silhouettes that are nothing like each other —
@@ -42,7 +44,7 @@ const POWERUP = {
   shield: { glyph: '◈', label: 'Shield', blurb: 'Survive one collapse — you get shoved clear.' },
   dash: { glyph: '»', label: 'Dash', blurb: 'Move twice as fast for a few seconds.' },
   sinkhole: { glyph: '✖', label: 'Sinkhole', blurb: 'Flag the tile under the nearest rival.' },
-  patch: { glyph: '✚', label: 'Patch', blurb: 'Rebuild every hole next to you.' },
+  patch: { glyph: '✚', label: 'Patch', blurb: 'Rebuild the three by three around you.' },
   blink: {
     glyph: '↷',
     label: 'Blink',
@@ -65,9 +67,10 @@ function statusLine(game, myId) {
     case 'countdown':
       return `Round starts in ${game.secs}.`
     case 'over':
-      return game.winner
-        ? `${game.winner} takes the round. Next drop in ${game.secs}.`
-        : `No survivors. Next drop in ${game.secs}.`
+      if (!game.winner) return `No survivors. Next drop in ${game.secs}.`
+      return game.final
+        ? `${game.winner} takes the match. A new one in ${game.secs}.`
+        : `${game.winner} takes the round. Next drop in ${game.secs}.`
     default:
       if (mine && !mine.playing) return 'Spectating. You are in on the next round.'
       if (mine && !mine.alive) return 'You went down with the floor. Round still live.'
@@ -90,6 +93,7 @@ function Arrow({ dir, glyph, label, onMove }) {
 
 export default function Play() {
   useTitle('Blockout Royale')
+  useFavicon('blockout')
 
   const [name, setName] = useState('')
   const [status, setStatus] = useState('idle') // idle | connecting | live | closed
@@ -364,6 +368,41 @@ export default function Play() {
           ctx.fill()
         }
       })
+
+      // Who took it, across the board, for everybody — not just the winner.
+      // The status line alone left the result ambiguous: a player watching
+      // their own piece disappear had no idea who was still standing. Worded
+      // and placed like the other two games.
+      if (g.phase !== 'playing') {
+        const headline =
+          g.phase === 'countdown'
+            ? `Round starts in ${g.secs}`
+            : g.phase === 'over'
+              ? g.winner
+                ? `${g.winner} ${g.final ? 'takes the match' : 'takes the round'}`
+                : 'Nobody made it off that one'
+              : 'Waiting for another player'
+        const under =
+          g.phase === 'over'
+            ? g.final
+              ? `A new match in ${g.secs}`
+              : `Next drop in ${g.secs}`
+            : g.phase === 'countdown'
+              ? `First to ${g.target} rounds`
+              : 'The round starts the moment someone else drops in'
+
+        ctx.textAlign = 'center'
+        ctx.fillStyle = colour.edge
+        ctx.globalAlpha = 0.85
+        ctx.fillRect(0, canvas.height / 2 - u * 1.5, canvas.width, u * 3)
+        ctx.globalAlpha = 1
+        ctx.fillStyle = colour.fg
+        ctx.font = `bold ${Math.round(u * 0.85)}px ui-sans-serif, system-ui, sans-serif`
+        ctx.fillText(headline, canvas.width / 2, canvas.height / 2 - u * 0.3)
+        ctx.fillStyle = colour.muted
+        ctx.font = `${Math.round(u * 0.55)}px ui-sans-serif, system-ui, sans-serif`
+        ctx.fillText(under, canvas.width / 2, canvas.height / 2 + u * 0.85)
+      }
     }
 
     raf = requestAnimationFrame(frame)
@@ -540,6 +579,23 @@ export default function Play() {
             {board.length === 0 && <li className="text-sm text-muted">Nobody yet.</li>}
           </ul>
 
+          {/* The standing board, as it stood when the last match on this
+              server finished. It arrives in the snapshot rather than being
+              fetched, so it needs no second connection and updates the moment
+              a match ends. */}
+          <div className="mt-8 flex items-baseline justify-between">
+            <p className="rule-label">Leaderboard</p>
+            <p className="rule-label">Won · K/D</p>
+          </div>
+          <div className="mt-3">
+            <Leaderboard entries={game?.board ?? []} you={me?.name ?? null} />
+          </div>
+          <p className="mt-3 text-xs text-muted">
+            <Link to="/leaderboard" className="underline underline-offset-4 hover:text-fg">
+              Every game, every name
+            </Link>
+          </p>
+
           <p className="rule-label mt-8">Carrying</p>
           <div aria-live="polite" className="mt-3">
             {held ? (
@@ -615,10 +671,12 @@ export default function Play() {
           </div>
           <div className="pointer-events-none fixed inset-0 z-50 flex items-center justify-center px-5">
             <div role="status" className="border border-flare bg-bg px-10 py-9 text-center">
-              <p className="rule-label">Last one standing</p>
+              <p className="rule-label">{game?.final ? 'Match taken' : 'Last one standing'}</p>
               <h2 className="display mt-2 text-5xl sm:text-6xl">You win</h2>
               <p className="mt-4 text-muted">
-                {me?.wins} {me?.wins === 1 ? 'round' : 'rounds'} taken · next drop in {game?.secs}
+                {game?.final
+                  ? `${me?.wins} rounds taken · a new match in ${game?.secs}`
+                  : `${me?.wins} of ${game?.target} rounds · next drop in ${game?.secs}`}
               </p>
             </div>
           </div>

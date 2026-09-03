@@ -1,9 +1,42 @@
+import { createReadStream, existsSync } from 'node:fs'
+import { join } from 'node:path'
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
+import { BOARDS } from './server/board.js'
+import { boardDir } from './server/board-store.js'
+
+/**
+ * Serves the leaderboard files in dev, the way nginx serves them in
+ * production. They are written at runtime by the match servers, so they cannot
+ * live in `public/` — that gets copied into the build, and a stale board would
+ * ship with the site.
+ *
+ * Only the four known filenames are served, and only from BOARD_DIR: the path
+ * never comes from the request, so there is nothing here to traverse out of.
+ */
+const leaderboardFiles = () => ({
+  name: 'rivalblocks-leaderboard',
+  configureServer(server) {
+    server.middlewares.use('/board', (req, res, next) => {
+      const wanted = BOARDS.find((b) => req.url === `/${b.file}`)
+      if (!wanted) return next()
+      const path = join(boardDir(), wanted.file)
+      // A server that has never finished a match has no file yet. That is an
+      // empty board, not an error.
+      if (!existsSync(path)) {
+        res.statusCode = 404
+        return res.end('{}')
+      }
+      res.setHeader('Content-Type', 'application/json')
+      res.setHeader('Cache-Control', 'no-cache')
+      return createReadStream(path).pipe(res)
+    })
+  },
+})
 
 export default defineConfig({
-  plugins: [react(), tailwindcss()],
+  plugins: [react(), tailwindcss(), leaderboardFiles()],
   server: {
     // Listen on every interface, not just loopback. Without this the dev
     // server is unreachable from anywhere but the box it runs on, and plain

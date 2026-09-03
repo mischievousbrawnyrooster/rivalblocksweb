@@ -1,0 +1,33 @@
+#!/bin/sh
+# runit service for one match server (Void Linux). One script, four services:
+# the service directory name says which server to run, so this file is copied
+# unchanged into each of them.
+#
+#   for s in server fracture-server blastworks-server blastworks-dm; do
+#     sudo mkdir -p "/etc/sv/rivalblocks-$s"
+#     sudo cp rivalblocks.run "/etc/sv/rivalblocks-$s/run"
+#     sudo chmod +x "/etc/sv/rivalblocks-$s/run"
+#     sudo ln -s "/etc/sv/rivalblocks-$s" /var/service/
+#   done
+#
+# runit restarts the process whenever it exits, so there is no equivalent of
+# systemd's Restart=always to set.
+
+# Send stderr to stdout so the supervisor captures everything. Without a
+# log/run service this goes to the runsvdir output — install socklog-void if
+# you want it on disk.
+exec 2>&1
+
+# runit starts this with the service directory as the working directory, so
+# the name is right here: /etc/sv/rivalblocks-fracture-server -> fracture-server.
+NAME=${PWD##*/rivalblocks-}
+
+cd /opt/rivalblocks-game || exit 1
+
+# Where the standing leaderboard lives. Outside the served directory, so a
+# redeploy of the site cannot wipe it.
+export BOARD_DIR=/var/lib/rivalblocks/board
+
+# Must match the user nginx runs as, which is NOT www-data on Void. Check with:
+#   grep -E '^\s*user' /etc/nginx/nginx.conf
+exec chpst -u nginx node "server/$NAME.js"

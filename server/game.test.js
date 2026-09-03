@@ -17,9 +17,16 @@ import {
   WARNING_MS,
   COUNTDOWN_MS,
   OVER_MS,
+  ROUND_TARGET,
   usePowerup,
   POWERUP_MAX,
   POWERUP_KINDS,
+  POWERUP_WEIGHTS,
+  COLLAPSE_SHARE,
+  COLLAPSE_EVERY_MS,
+  COLLAPSE_FASTEST_MS,
+  collapseDelay,
+  waveSize,
   DASH_MS,
   DASH_COOLDOWN_MS,
   ARENAS,
@@ -447,17 +454,51 @@ test('dash expires', () => {
   assert.equal(move(m, p.id, 'right'), false, 'back to the normal cooldown')
 })
 
-test('patch rebuilds every adjacent hole and nothing further away', () => {
+test('patch rebuilds the whole three by three it is used in, corners included', () => {
   const m = playing(2)
   const p = m.players[0]
+  // Spawn is a corner, so stand somewhere with room on every side.
+  p.x = 5
+  p.y = 5
+
+  for (let y = 4; y <= 6; y++) {
+    for (let x = 4; x <= 6; x++) {
+      if (x === 5 && y === 5) continue // the tile they are stood on
+      m.tiles[y * SIZE + x] = 'gone'
+    }
+  }
+  // And a ring of holes one step further out, to prove where it stops.
+  m.tiles[5 * SIZE + 7] = 'gone'
+  m.tiles[3 * SIZE + 5] = 'gone'
+  m.tiles[3 * SIZE + 3] = 'gone'
+
+  p.held = 'patch'
+  assert.equal(usePowerup(m, p.id), true)
+
+  for (let y = 4; y <= 6; y++) {
+    for (let x = 4; x <= 6; x++) {
+      assert.equal(m.tiles[y * SIZE + x], 'solid', `${x},${y} was left as a hole`)
+    }
+  }
+  assert.equal(m.tiles[5 * SIZE + 7], 'gone', 'two tiles across is untouched')
+  assert.equal(m.tiles[3 * SIZE + 5], 'gone', 'two tiles up is untouched')
+  assert.equal(m.tiles[3 * SIZE + 3], 'gone', 'a diagonal two away is untouched')
+})
+
+test('patch at the edge of the board rebuilds what it can and does not reach off it', () => {
+  const m = playing(2)
+  const p = m.players[0]
+  p.x = 0
+  p.y = 0
   m.tiles[0 * SIZE + 1] = 'gone'
   m.tiles[1 * SIZE + 0] = 'gone'
-  m.tiles[0 * SIZE + 3] = 'gone'
+  m.tiles[1 * SIZE + 1] = 'gone'
+
   p.held = 'patch'
   assert.equal(usePowerup(m, p.id), true)
   assert.equal(m.tiles[0 * SIZE + 1], 'solid')
   assert.equal(m.tiles[1 * SIZE + 0], 'solid')
-  assert.equal(m.tiles[0 * SIZE + 3], 'gone', 'two tiles away is untouched')
+  assert.equal(m.tiles[1 * SIZE + 1], 'solid', 'the corner was missed')
 })
 
 test('sinkhole flags the nearest living opponent, not the furthest', () => {
@@ -509,7 +550,12 @@ test('a new round clears the board of powerups and everything held', () => {
   m.powerups[7] = 'patch'
 
   startRound(m)
-  assert.deepEqual(m.powerups, {})
+  assert.equal(Object.hasOwn(m.powerups, 7), false, 'last round’s powerup survived')
+  assert.equal(
+    Object.keys(m.powerups).length,
+    1,
+    'a round starts with exactly one on the floor, and it is not the old one',
+  )
   assert.equal(p.held, null)
   assert.equal(p.shielded, false)
   assert.equal(p.dashUntil, 0)
@@ -519,7 +565,7 @@ test('the snapshot carries powerups and per-player powerup state', () => {
   const m = playing(2)
   const p = m.players[0]
   p.held = 'shield'
-  m.powerups[9] = 'dash'
+  m.powerups = { 9: 'dash' } // in place of whatever the round laid out
   const s = snapshot(m)
   assert.deepEqual(s.powerups, { 9: 'dash' })
   assert.deepEqual(
@@ -877,6 +923,55 @@ test('a round names its winner and identifies them', () => {
   assert.equal(snapshot(m).winnerId, null, 'last round’s winner carried over')
 })
 
+test('taking the round target takes the match, and says so', () => {
+  const m = playing(3)
+  const [a, b, c] = m.players
+
+  // Every round but the last: a win, and the match is still running.
+  for (let n = 1; n < ROUND_TARGET; n++) {
+    b.alive = false
+    c.alive = false
+    tick(m, TICK_MS, () => 0.5)
+    assert.equal(m.phase, 'over')
+    assert.equal(a.wins, n)
+    assert.equal(m.final, false, `the match ended after ${n} of ${ROUND_TARGET} rounds`)
+    assert.equal(snapshot(m).final, false)
+    m.now += OVER_MS
+    tick(m, TICK_MS, () => 0.5)
+    m.now += COUNTDOWN_MS
+    tick(m, TICK_MS, () => 0.5)
+    assert.equal(m.phase, 'playing')
+    for (const p of m.players) p.alive = true
+  }
+
+  b.alive = false
+  c.alive = false
+  tick(m, TICK_MS, () => 0.5)
+  assert.equal(a.wins, ROUND_TARGET)
+  assert.equal(m.final, true, 'the round target came and went without ending the match')
+  assert.equal(m.winnerId, a.id)
+  assert.equal(snapshot(m).target, ROUND_TARGET)
+})
+
+test('a finished match starts the next one from nothing', () => {
+  const m = playing(2)
+  const [a, b] = m.players
+  a.wins = ROUND_TARGET - 1
+  b.wins = 1
+  b.alive = false
+  tick(m, TICK_MS, () => 0.5)
+  assert.equal(m.final, true)
+
+  m.now += OVER_MS
+  tick(m, TICK_MS, () => 0.5)
+  assert.equal(m.phase, 'countdown')
+  assert.equal(m.final, false, 'the new match started already finished')
+  assert.ok(
+    m.players.every((p) => p.wins === 0),
+    'the last match’s rounds were carried into the new one',
+  )
+})
+
 test('a round nobody survives is credited to nobody', () => {
   const m = playing(2)
   for (const p of m.players) p.alive = false
@@ -885,4 +980,184 @@ test('a round nobody survives is credited to nobody', () => {
   assert.equal(m.winner, null)
   assert.equal(m.winnerId, null)
   assert.ok(m.players.every((p) => p.wins === 0), 'a mutual loss was scored as a win')
+})
+
+test('a round started with nobody to play against is not a round anybody won', () => {
+  const m = createMatch()
+  m.botFill = BOT_FILL_TO
+  const solo = addPlayer(m, 'solo')
+  wantBots(m)
+
+  // What the operator console's restart and arena buttons do. Bots are seated
+  // by the tick, not by this call, so right now there is one participant.
+  startRound(m)
+  assert.notEqual(m.phase, 'playing', 'a round started with one player in it')
+
+  tick(m, TICK_MS, () => 0.5)
+  assert.equal(solo.wins, 0, 'a round was awarded before anybody had played')
+  assert.equal(m.winner, null)
+  assert.equal(m.final, false)
+
+  // The bots arrive and it gets going on its own.
+  assert.ok(m.players.length >= MIN_PLAYERS, 'the bots never arrived')
+  assert.equal(m.phase, 'countdown')
+})
+
+test('every round has something to pick up from the first tick', () => {
+  // Rounds here are over in ten or fifteen seconds. Waiting a full interval
+  // for the first pickup left four rounds in ten with nothing on the board at
+  // any point, which is a kit nobody ever touched.
+  for (let seed = 1; seed <= 12; seed++) {
+    const m = createMatch()
+    addPlayer(m, 'a')
+    addPlayer(m, 'b')
+    let n = seed
+    startRound(m, () => {
+      n = (n * 1103515245 + 12345) % 2147483648
+      return n / 2147483648
+    })
+    const on = Object.keys(m.powerups)
+    assert.equal(on.length, 1, `round ${seed} started with ${on.length} powerups`)
+    assert.equal(m.tiles[Number(on[0])], 'solid', 'a powerup was laid over the void')
+    assert.ok(
+      POWERUP_KINDS.includes(m.powerups[on[0]]),
+      `unknown powerup ${m.powerups[on[0]]}`,
+    )
+  }
+})
+
+test('a wave takes less of the board as less of it is left', () => {
+  // A full board still gets a full wave: the opening is unchanged.
+  assert.equal(waveSize(SIZE * SIZE), COLLAPSE_COUNT)
+  assert.equal(waveSize(Math.ceil(COLLAPSE_COUNT / COLLAPSE_SHARE)), COLLAPSE_COUNT)
+
+  // And it tapers rather than clearing the last of it in one go.
+  assert.ok(waveSize(20) < COLLAPSE_COUNT, 'twenty tiles left still took a full wave')
+  assert.equal(waveSize(1), 1)
+  assert.equal(waveSize(0), 1, 'a wave has to take at least one, or a round never ends')
+
+  // Never sudden: fewer tiles left never means a bigger wave.
+  let last = 0
+  for (let n = 0; n <= SIZE * SIZE; n++) {
+    const w = waveSize(n)
+    assert.ok(w >= 1 && w <= COLLAPSE_COUNT, `wave of ${w} at ${n} tiles`)
+    assert.ok(w >= last, `the wave grew as the board shrank, at ${n} tiles`)
+    last = w
+  }
+})
+
+test('a round opens with a full wave and ends one tile at a time', () => {
+  const m = playing(2)
+  // The helper freezes the collapse so other tests can place tiles by hand.
+  // This one is about the collapse, so it runs.
+  m.nextCollapseAt = m.now + COLLAPSE_EVERY_MS
+  const seen = []
+  for (let i = 0; i < 400; i++) {
+    const solid = m.tiles.filter((t) => t === 'solid').length
+    if (solid === 0) break
+    seen.push({ solid, wave: [...m.nextWave] })
+    // The round ends the moment one player is last standing, and the floor
+    // stops moving with it. This test is about the floor, so put everyone back
+    // on their feet and keep it running.
+    for (const p of m.players) p.alive = true
+    m.phase = 'playing'
+    m.now += COLLAPSE_EVERY_MS
+    tick(m, TICK_MS, () => 0.5)
+  }
+
+  const opening = seen[0]
+  const ending = seen[seen.length - 1]
+  assert.equal(opening.wave.length, COLLAPSE_COUNT, 'the round did not open at full pace')
+  assert.ok(ending.solid < opening.solid, 'the board never shrank')
+  assert.equal(ending.wave.length, 1, `the last wave still took ${ending.wave.length} at once`)
+})
+
+test('a wave is drawn from the whole floor, never clustered together', () => {
+  // Tiles that fall as one connected lump are something you step around; the
+  // point of this game is that they are not. Guards against grouping being
+  // reintroduced as a "readability" improvement.
+  const m = playing(2)
+  m.nextCollapseAt = m.now + COLLAPSE_EVERY_MS
+  let scattered = 0
+  let multi = 0
+
+  for (let i = 0; i < 60; i++) {
+    const wave = m.nextWave
+    if (wave.length > 1) {
+      multi += 1
+      const apart = wave.some((a) =>
+        wave.every((b) => a === b || Math.abs((a % SIZE) - (b % SIZE)) + Math.abs(Math.floor(a / SIZE) - Math.floor(b / SIZE)) > 1),
+      )
+      if (apart) scattered += 1
+    }
+    for (const p of m.players) p.alive = true
+    m.phase = 'playing'
+    m.now += COLLAPSE_EVERY_MS
+    tick(m, TICK_MS, () => 0.5)
+  }
+
+  assert.ok(multi > 5, 'not enough multi-tile waves to judge')
+  assert.ok(scattered > multi / 2, `only ${scattered} of ${multi} waves were spread across the board`)
+})
+
+test('waves come faster as the floor runs out', () => {
+  const full = collapseDelay(SIZE * SIZE)
+  assert.equal(full, COLLAPSE_EVERY_MS, 'a full board should keep the opening pace')
+  assert.equal(collapseDelay(0), COLLAPSE_FASTEST_MS)
+
+  // Never slower as the board shrinks, and never outside the two ends.
+  let last = COLLAPSE_EVERY_MS + 1
+  for (let n = SIZE * SIZE; n >= 0; n--) {
+    const d = collapseDelay(n)
+    assert.ok(d >= COLLAPSE_FASTEST_MS && d <= COLLAPSE_EVERY_MS, `gap of ${d} at ${n} tiles`)
+    assert.ok(d <= last, `the gap grew as the board shrank, at ${n} tiles`)
+    last = d
+  }
+
+  // A single tile arriving on the opening clock is what made the endgame drag.
+  assert.ok(
+    collapseDelay(10) < COLLAPSE_EVERY_MS / 2,
+    'the last tiles still come at half the opening pace or slower',
+  )
+})
+
+test('a patch comes up more often than the rest of the kit, and nothing is missing', () => {
+  // The square arena is a full board, so every tile is somewhere a powerup
+  // can land.
+  const m = playing(2)
+  const seen = Object.fromEntries(POWERUP_KINDS.map((k) => [k, 0]))
+
+  // Straight through the bag many times over, so the shares settle.
+  let n = 7
+  const rng = () => {
+    n = (n * 1103515245 + 12345) % 2147483648
+    return n / 2147483648
+  }
+  for (let i = 0; i < 4000; i++) {
+    m.powerups = {}
+    m.nextPowerupAt = m.now
+    tick(m, TICK_MS, rng)
+    for (const kind of Object.values(m.powerups)) seen[kind] += 1
+  }
+
+  const total = Object.values(seen).reduce((a, b) => a + b, 0)
+  assert.ok(total > 1000, `only ${total} powerups drawn, too few to judge`)
+  for (const kind of POWERUP_KINDS) {
+    assert.ok(seen[kind] > 0, `${kind} never came up at all`)
+  }
+
+  const share = seen.patch / total
+  const others = POWERUP_KINDS.filter((k) => k !== 'patch').map((k) => seen[k] / total)
+  assert.ok(
+    others.every((s) => share > s * 1.5),
+    `a patch came up ${(share * 100).toFixed(0)}% of the time, no oftener than the rest`,
+  )
+
+  // Roughly its weight out of the whole bag, give or take the draw.
+  const weight = POWERUP_WEIGHTS.patch
+  const bag = POWERUP_KINDS.length - 1 + weight
+  assert.ok(
+    Math.abs(share - weight / bag) < 0.06,
+    `a patch came up ${(share * 100).toFixed(0)}%, not the ${((weight / bag) * 100).toFixed(0)}% its weight asks for`,
+  )
 })

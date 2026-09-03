@@ -43,6 +43,9 @@ import {
   SOFT_DENSITY,
   REGROW_EVERY_MS,
   BOT_REACT_MS,
+  SUDDEN_DEATH_MS,
+  SQUEEZE_EVERY_MS,
+  SQUEEZE_ORDER,
 } from './blastworks.js'
 
 const cell = (x, y) => y * W + x
@@ -1458,13 +1461,153 @@ test('a bot pulls the trigger on the remote charges it lays', () => {
     }
   }
 
-  assert.ok(laid > 0, 'no bot ever laid a remote charge, so this proves nothing')
   assert.ok(
     worst <= BOMB_FUSE_MS + BOT_REACT_MS * 4,
     `a charge sat armed for ${(worst / 1000).toFixed(1)}s with nobody willing to trigger it`,
   )
+  // Charges laid, not kills scored. A bot that forgets its charge is out of
+  // bombs for the rest of its life, so a healthy run cycles them constantly:
+  // measured over sixty runs, the worst was twelve and the median twenty-five,
+  // against a hard ceiling of one per bot if the trigger were never pulled.
+  // Kills were the obvious thing to count and the wrong one — ten per cent of
+  // runs have nobody die inside thirty seconds, which is a flaky test, not a
+  // broken game.
+  assert.ok(laid >= 8, `only ${laid} charges laid: the bots were not cycling bombs`)
+})
+
+test('a match with nobody to play against does not hand out a round', () => {
+  const m = createMatch(() => 0, 'foundry', 'lastman')
+  const solo = addPlayer(m, 'solo')
+  wantBots(m)
+
+  // What the operator console does. Bots are seated by the tick, not by this
+  // call, so at this instant there is exactly one participant.
+  startMatch(m, () => 0, 'foundry')
+  assert.notEqual(m.phase, 'playing', 'a round started with one player in it')
+
+  tick(m, TICK_MS, () => 0)
+  assert.equal(solo.wins, 0, 'a round was awarded before anybody had played')
+  assert.equal(m.winner, null)
+
+  // And once the bots are in, it gets going by itself.
+  assert.ok(m.players.length >= MIN_PLAYERS, 'the bots never arrived')
+  assert.equal(m.phase, 'countdown')
+  m.now += COUNTDOWN_MS
+  tick(m, TICK_MS, () => 0)
+  assert.equal(m.phase, 'playing')
+  assert.equal(solo.wins, 0)
+})
+
+test('a match restarted with a full arena still starts at once', () => {
+  const { m, players } = playing(3)
+  for (const p of players) p.wins = 2
+  startMatch(m, () => 0, 'foundry')
+  assert.equal(m.phase, 'playing', 'a restart with enough players had to wait')
   assert.ok(
-    m.players.some((p) => p.kills + p.deaths > 0),
-    'bots holding a remote charge stopped fighting altogether',
+    players.every((p) => p.wins === 0),
+    'the running total survived a restart',
   )
+})
+
+// --- the closing wall ----------------------------------------------------
+
+/** Runs the clock to the moment the wall starts, then n tiles further. */
+function squeezeBy(m, n) {
+  m.now += SUDDEN_DEATH_MS
+  tick(m, TICK_MS, () => 1)
+  for (let i = 0; i < n; i++) {
+    m.now += SQUEEZE_EVERY_MS
+    tick(m, TICK_MS, () => 1)
+  }
+}
+
+test('the spiral covers every inner tile exactly once, outside first', () => {
+  const inner = (W - 2) * (H - 2)
+  assert.equal(SQUEEZE_ORDER.length, inner)
+  assert.equal(new Set(SQUEEZE_ORDER).size, inner, 'the wall would take a tile twice')
+
+  // It starts on the outer ring and finishes somewhere in the middle.
+  const [fx, fy] = [SQUEEZE_ORDER[0] % W, Math.floor(SQUEEZE_ORDER[0] / W)]
+  const last = SQUEEZE_ORDER[SQUEEZE_ORDER.length - 1]
+  const [lx, ly] = [last % W, Math.floor(last / W)]
+  assert.ok(fx === 1 || fy === 1, `the wall started at ${fx},${fy} rather than the edge`)
+  assert.ok(lx > 2 && lx < W - 3 && ly > 1 && ly < H - 2, `the wall finished at ${lx},${ly}`)
+})
+
+test('a deathmatch is never squeezed, because it refills instead', () => {
+  const m = createMatch(() => 0, 'foundry', 'deathmatch')
+  addPlayer(m, 'a')
+  addPlayer(m, 'b')
+  m.botFill = 0
+  startRound(m, () => 0, 'foundry')
+  assert.equal(m.squeezeAt, Infinity)
+
+  const before = m.tiles.filter((t) => t === HARD).length
+  squeezeBy(m, 20)
+  assert.equal(m.tiles.filter((t) => t === HARD).length, before, 'a deathmatch closed in')
+})
+
+test('the wall waits, then closes from the outside in', () => {
+  const { m, players } = playing(2)
+  park(m, players[1])
+  assert.equal(m.squeezeAt, m.now + SUDDEN_DEATH_MS)
+
+  const before = m.tiles.filter((t) => t === HARD).length
+  // A tick short of the deadline: the tick itself advances the clock, so
+  // landing exactly on it is the wall arriving on time, not early.
+  m.now += SUDDEN_DEATH_MS - TICK_MS * 2
+  tick(m, TICK_MS, () => 1)
+  assert.equal(m.tiles.filter((t) => t === HARD).length, before, 'the wall started early')
+
+  squeezeBy(m, 30)
+  const after = m.tiles.filter((t) => t === HARD).length
+  assert.ok(after > before, 'the wall never closed at all')
+
+  // Everything it has taken is at the head of the spiral, so what it eats is
+  // the outside edge rather than somewhere in the middle.
+  assert.ok(m.squeezeStep > 0, 'the wall never advanced along the spiral')
+  for (const i of SQUEEZE_ORDER.slice(0, m.squeezeStep)) {
+    assert.equal(m.tiles[i], HARD, 'the wall skipped a tile it had passed')
+  }
+
+  // And nothing beyond where it has reached has turned solid on its own: the
+  // only HARD tiles further along are the lattice posts, which never move.
+  const posts = SQUEEZE_ORDER.slice(m.squeezeStep).filter((i) => {
+    const x = i % W
+    const y = Math.floor(i / W)
+    return x % 2 === 0 && y % 2 === 0
+  }).length
+  const solidAhead = SQUEEZE_ORDER.slice(m.squeezeStep).filter((i) => m.tiles[i] === HARD).length
+  assert.equal(solidAhead, posts, 'something ahead of the wall turned solid')
+})
+
+test('the wall crushes whoever is under it, and nobody is credited', () => {
+  const { m, players } = playing(2)
+  const [victim, other] = players
+  park(m, other)
+
+  // Stand them exactly where the wall starts.
+  const first = SQUEEZE_ORDER[0]
+  victim.x = (first % W) + 0.5
+  victim.y = Math.floor(first / W) + 0.5
+  m.tiles[first] = EMPTY
+
+  squeezeBy(m, 0)
+  assert.equal(victim.alive, false, 'the wall closed over them and left them standing')
+  assert.equal(victim.deaths, 1)
+  assert.equal(other.kills, 0, 'somebody was credited with a kill the wall made')
+  const credited = m.events.filter((e) => e.k === 'kill').map((e) => e.by)
+  assert.deepEqual(credited, [null], 'a crush was credited to a player')
+})
+
+test('a round always ends once the wall has closed', () => {
+  const { m, players } = playing(2)
+  // Nobody moves and nobody bombs: the stalemate this exists to break.
+  for (const p of players) setInput(m, p.id, { dx: 0, dy: 0 })
+  m.nextPickupAt = Infinity
+
+  const ceiling = SUDDEN_DEATH_MS + SQUEEZE_ORDER.length * SQUEEZE_EVERY_MS + 5000
+  let t = 0
+  for (; t < ceiling && m.phase === 'playing'; t += TICK_MS) tick(m, TICK_MS, () => 1)
+  assert.notEqual(m.phase, 'playing', `the round was still running after ${(t / 1000).toFixed(0)}s`)
 })

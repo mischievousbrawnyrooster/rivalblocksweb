@@ -1,0 +1,35 @@
+# One unit for all four match servers. The instance name is the file in
+# server/ to run, and each of those already knows its own port and mode — so
+# there is nothing to configure per instance and no way for a unit file to
+# disagree with the code it starts.
+#
+#   sudo cp rivalblocks@.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now \
+#       rivalblocks@server \
+#       rivalblocks@fracture-server \
+#       rivalblocks@blastworks-server \
+#       rivalblocks@blastworks-dm
+#
+# Replaces the old single-game rivalblocks-game.service. If that one is still
+# installed, disable it first or two processes will fight over port 8081:
+#   sudo systemctl disable --now rivalblocks-game
+
+[Unit]
+Description=RivalBlocks match server (%i)
+After=network.target
+
+[Service]
+Type=simple
+User=www-data
+WorkingDirectory=/opt/rivalblocks-game
+# Where the standing leaderboard lives. Outside the served directory on
+# purpose: nginx reads it through an alias, and a redeploy wipes /var/www but
+# must never wipe the board.
+Environment=BOARD_DIR=/var/lib/rivalblocks/board
+ExecStart=/usr/bin/node server/%i.js
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target

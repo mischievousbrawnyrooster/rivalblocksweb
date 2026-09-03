@@ -55,6 +55,24 @@ export const KILL_TARGET = 12
 // The map starts nearly solid and grows back towards it. Without regrowth a
 // deathmatch erodes into an empty field inside a minute and stops being about
 // tunnelling at all.
+// A last man standing round that will not resolve itself.
+//
+// With no regrowth the board opens up, and on open ground somebody who plays
+// well simply walks away from every blast. Measured with a person in the arena
+// actually playing: one round in six finished, and the rest were still going
+// after half an hour. Nothing in the rules forced a decision.
+//
+// So the arena takes the decision away. Past SUDDEN_DEATH_MS a wall closes in
+// along an inward spiral, one tile at a time, and whatever it lands on is
+// crushed. It reuses HARD, so there is nothing new to draw, nothing new on the
+// wire, and no new way to die the client cannot already show.
+//
+// Only last man standing squeezes. Deathmatch regrows instead, and it ends on
+// a score it reliably reaches — measured at seven to sixteen minutes, every
+// run, without help.
+export const SUDDEN_DEATH_MS = 120000
+export const SQUEEZE_EVERY_MS = 160
+
 export const SOFT_DENSITY = 0.72
 export const REGROW_EVERY_MS = 2600
 export const PICKUP_FROM_SOFT = 0.26
@@ -120,6 +138,31 @@ const DIRS = [
   [0, -1],
 ]
 
+/**
+ * Every inner tile, outermost ring first, going round and then in. The order
+ * the closing wall takes.
+ */
+function spiralInwards() {
+  const order = []
+  let x0 = 1
+  let y0 = 1
+  let x1 = W - 2
+  let y1 = H - 2
+  while (x0 <= x1 && y0 <= y1) {
+    for (let x = x0; x <= x1; x++) order.push(idx(x, y0))
+    for (let y = y0 + 1; y <= y1; y++) order.push(idx(x1, y))
+    if (y1 > y0) for (let x = x1 - 1; x >= x0; x--) order.push(idx(x, y1))
+    if (x1 > x0) for (let y = y1 - 1; y > y0; y--) order.push(idx(x0, y))
+    x0++
+    y0++
+    x1--
+    y1--
+  }
+  return order
+}
+
+export const SQUEEZE_ORDER = spiralInwards()
+
 export function createMatch(
   rng = Math.random,
   arena = ARENAS[Math.floor(rng() * ARENAS.length)],
@@ -153,6 +196,14 @@ export function createMatch(
     botsWanted: false,
     winner: null,
     winnerId: null,
+    // When the closing wall takes its next tile, and how far along the spiral
+    // it has got. Infinity in deathmatch, which never squeezes.
+    squeezeAt: Infinity,
+    squeezeStep: 0,
+    // The standing leaderboard, best first. Set from outside by the socket
+    // wrapper and passed through untouched: no rule here reads it, and nothing
+    // about the match depends on it.
+    board: [],
     // True when `winner` took the whole match, not just the round.
     final: false,
   }
@@ -468,6 +519,10 @@ export function startRound(state, rng = Math.random, arena = ARENAS[Math.floor(r
   // and a board that keeps refilling never lets it — the stock you clear stays
   // cleared, so every round runs down to open ground and a decision.
   state.nextRegrowAt = isLastMan(state) ? Infinity : state.now + REGROW_EVERY_MS
+  // The other half of that trade: the mode that does not refill the board is
+  // the mode that needs a wall to close it.
+  state.squeezeAt = isLastMan(state) ? state.now + SUDDEN_DEATH_MS : Infinity
+  state.squeezeStep = 0
   state.winner = null
   state.winnerId = null
   state.final = false
@@ -481,6 +536,22 @@ export function startMatch(state, rng = Math.random, arena = undefined) {
     p.wins = 0
     p.kills = 0
     p.deaths = 0
+  }
+  // Bots are seated by the tick, not here, so an operator restarting a match
+  // for one person is starting it with one participant. Beginning the round
+  // anyway hands them the round on the very next tick — the bots arrive, sit
+  // it out as anyone arriving mid-round does, and the last-man check sees a
+  // single player left standing. A round nobody contested, written into a
+  // leaderboard that keeps it forever.
+  //
+  // Hand it to the waiting branch instead. It starts the round once there is
+  // somebody to play against, by which time the bots are seated and in it.
+  if (state.players.length < MIN_PLAYERS) {
+    state.phase = 'waiting'
+    state.winner = null
+    state.winnerId = null
+    state.final = false
+    return
   }
   startRound(state, rng, arena)
 }
@@ -915,6 +986,36 @@ function burnPlayers(state) {
   }
 }
 
+/**
+ * Takes the next tile on the spiral, and whatever is standing on it.
+ *
+ * One tile per call. Tiles already solid are skipped without spending the
+ * call, so the wall keeps its pace instead of stalling on the lattice.
+ */
+function squeeze(state) {
+  while (state.squeezeStep < SQUEEZE_ORDER.length) {
+    const i = SQUEEZE_ORDER[state.squeezeStep++]
+    if (state.tiles[i] === HARD) continue
+
+    state.tiles[i] = HARD
+    delete state.pickups[i]
+    delete state.fires[i]
+    const x = i % W
+    const y = Math.floor(i / W)
+
+    // A charge under it is buried rather than set off: a wall closing on a
+    // bomb should not read as somebody's kill.
+    state.bombs = state.bombs.filter((b) => b.air || b.carriedBy || tileOf(b) !== i)
+
+    // Crushed. Credited to nobody, which is what makes it read as the arena
+    // rather than as a player nobody can see.
+    for (const p of state.players) {
+      if (p.alive && overlapsTile(p, x, y)) kill(state, p, null)
+    }
+    return
+  }
+}
+
 function spawnPickup(state, rng) {
   if (Object.keys(state.pickups).length >= PICKUP_MAX) return
   const free = []
@@ -1280,6 +1381,10 @@ export function tick(state, dt, rng = Math.random) {
     regrow(state, rng)
     state.nextRegrowAt += REGROW_EVERY_MS
   }
+  while (state.now >= state.squeezeAt) {
+    squeeze(state)
+    state.squeezeAt += SQUEEZE_EVERY_MS
+  }
   while (state.now >= state.nextPickupAt) {
     spawnPickup(state, rng)
     state.nextPickupAt += PICKUP_EVERY_MS
@@ -1323,6 +1428,7 @@ export function snapshot(state) {
         : 0,
     winner: state.winner,
     winnerId: state.winnerId,
+    board: state.board,
     // Whether that winner took the round or the whole match.
     final: state.final,
     target: isLastMan(state) ? ROUND_TARGET : KILL_TARGET,
@@ -1331,6 +1437,10 @@ export function snapshot(state) {
     mode: state.mode,
     botsOnly: state.botsOnly,
     botsWanted: state.botsWanted,
+    // Whether the wall has started closing, so the client can say so. The
+    // tiles themselves already show it; this is what makes it readable rather
+    // than just visible.
+    squeezing: state.squeezeStep > 0,
     fuse: BOMB_FUSE_MS,
     blast: BLAST_MS,
     events: state.events,

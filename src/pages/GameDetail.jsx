@@ -3,9 +3,20 @@ import { Link, useParams } from 'react-router-dom'
 import BlockArt from '../components/BlockArt.jsx'
 import Lightbox from '../components/Lightbox.jsx'
 import NewsletterForm from '../components/NewsletterForm.jsx'
+import Leaderboard from '../components/Leaderboard.jsx'
 import NotFound from './NotFound.jsx'
 import { getGame } from '../data/games.js'
 import { useTitle } from '../lib/useTitle.js'
+import { useFavicon } from '../lib/useFavicon.js'
+import { useBoard, boardsOf } from '../lib/useBoard.js'
+import { rank } from '../../server/board.js'
+
+/** Which mark belongs to which title. */
+const MARK_FOR = {
+  'blockout-royale': 'blockout',
+  'fracture-line': 'fracture',
+  blastworks: 'blastworks',
+}
 
 export default function GameDetail() {
   const { slug } = useParams()
@@ -17,11 +28,17 @@ export default function GameDetail() {
 
   // Called before the early return — hooks cannot run conditionally.
   useTitle(game ? game.title : 'Page not found')
+  // The tab wears the title you are reading about. A slug that is not a game
+  // falls through to the studio mark.
+  useFavicon(game ? MARK_FOR[game.slug] : 'rivalblocks')
+  const { byGame, ready } = useBoard()
 
   // An unknown slug is a missing page, not a crash.
   if (!game) return <NotFound />
 
   const tone = game.statusTone === 'live' ? 'text-live' : 'text-warn'
+  // Blastworks runs two servers, so it has two boards; the others have one.
+  const mine = boardsOf(byGame, game.playPath)
 
   function open(e, i) {
     openerRef.current = e.currentTarget
@@ -122,6 +139,41 @@ export default function GameDetail() {
           ))}
         </div>
       </section>
+
+      {/* ---------- Leaderboard ---------- */}
+      {mine.length > 0 && (
+        <section className="border-t border-line">
+          <div className="mx-auto max-w-6xl px-5 py-20">
+            <div className="flex flex-wrap items-baseline justify-between gap-4">
+              <div>
+                <p className="rule-label">Leaderboard</p>
+                <h2 className="display mt-2 text-3xl sm:text-4xl">Who is winning</h2>
+              </div>
+              <Link
+                to="/leaderboard"
+                className="text-xs uppercase tracking-[0.16em] text-muted hover:text-flare"
+              >
+                Every title →
+              </Link>
+            </div>
+
+            <div className="mt-10 grid gap-9 md:grid-cols-2">
+              {mine.map((spec) => (
+                <div key={spec.file}>
+                  <p className="border-b border-line pb-3 text-sm">{spec.title}</p>
+                  <div className="mt-4">
+                    {ready ? (
+                      <Leaderboard entries={rank(spec.board?.players ?? [])} />
+                    ) : (
+                      <p className="text-sm text-muted">Reading the standings…</p>
+                    )}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        </section>
+      )}
 
       {/* ---------- Gallery ---------- */}
       <section className="border-y border-line bg-surface">

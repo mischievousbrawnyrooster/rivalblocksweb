@@ -1,10 +1,13 @@
 import { Link } from 'react-router-dom'
 import BlockArt from '../components/BlockArt.jsx'
+import Leaderboard from '../components/Leaderboard.jsx'
 import { games } from '../data/games.js'
 import { useTitle } from '../lib/useTitle.js'
+import { useBoard } from '../lib/useBoard.js'
 
 export default function PlayIndex() {
   useTitle('Play in browser')
+  const { all, ready } = useBoard()
 
   // Driven off the catalog, so a title becomes playable by gaining a
   // `playPath` in games.js and nothing here has to change.
@@ -57,6 +60,25 @@ export default function PlayIndex() {
           Every match needs at least two in the arena before it starts. Short of
           that, the roster fills itself.
         </p>
+
+        <section className="mt-16 border-t border-line pt-10">
+          <div className="flex flex-wrap items-baseline justify-between gap-4">
+            <h2 className="display text-2xl">Leaderboard across all three</h2>
+            <Link
+              to="/leaderboard"
+              className="text-xs uppercase tracking-[0.16em] text-muted hover:text-flare"
+            >
+              Full table →
+            </Link>
+          </div>
+          <div className="mt-6 max-w-md">
+            {ready ? (
+              <Leaderboard entries={all} />
+            ) : (
+              <p className="text-sm text-muted">Reading the standings…</p>
+            )}
+          </div>
+        </section>
       </div>
     </>
   )

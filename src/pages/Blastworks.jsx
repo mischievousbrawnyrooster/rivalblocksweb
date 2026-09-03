@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
+import Leaderboard from '../components/Leaderboard.jsx'
 import { useTitle } from '../lib/useTitle.js'
+import { useFavicon } from '../lib/useFavicon.js'
 import { makeWallTiles, styleFor } from '../lib/wallTiles.js'
 import { makeFireTiles, makeBombArt } from '../lib/fireTiles.js'
 
@@ -101,11 +103,15 @@ function statusLine(game, myId) {
   if (mine && !mine.inRound) return 'Watching this one out. You are in the next round.'
   if (mine && !mine.alive) return 'Caught in a blast. Waiting on the round.'
   const up = game.players.filter((p) => p.inRound && p.alive).length
+  if (game.squeezing) {
+    return `The walls are closing in. ${up} still standing, first to ${game.target} rounds.`
+  }
   return `Round live. ${up} still standing, first to ${game.target} rounds.`
 }
 
 export default function Blastworks() {
   useTitle('Blastworks')
+  useFavicon('blastworks')
 
   const [name, setName] = useState('')
   const [mode, setMode] = useState(MODES[0])
@@ -139,7 +145,16 @@ export default function Blastworks() {
       if (e.k !== 'kill') continue
       setFeed((f) => [
         ...f.slice(-5),
-        { id: feedIdRef.current++, by: nameOf(e.by), of: nameOf(e.of), self: e.by === e.of, at },
+        {
+          id: feedIdRef.current++,
+          // No killer means the closing wall took them. Left as a name it
+          // read as "someone", which is a player who does not exist.
+          by: e.by === null ? 'The wall' : nameOf(e.by),
+          of: nameOf(e.of),
+          self: e.by !== null && e.by === e.of,
+          crushed: e.by === null,
+          at,
+        },
       ])
     }
   }, [])
@@ -792,9 +807,11 @@ export default function Blastworks() {
               <li key={f.id} className="truncate">
                 <span>{f.by}</span>
                 <span aria-hidden="true" className="mx-1.5 text-flare">
-                  {f.self ? '✖' : '▸'}
+                  {f.crushed ? '▪' : f.self ? '✖' : '▸'}
                 </span>
-                <span className="sr-only">{f.self ? 'blew themselves up' : 'eliminated'}</span>
+                <span className="sr-only">
+                  {f.crushed ? 'crushed' : f.self ? 'blew themselves up' : 'eliminated'}
+                </span>
                 <span className="text-muted">{f.self ? 'self' : f.of}</span>
               </li>
             ))}
@@ -831,6 +848,23 @@ export default function Blastworks() {
             ))}
             {board.length === 0 && <li className="text-sm text-muted">Nobody yet.</li>}
           </ul>
+
+          {/* The standing board, as it stood when the last match on this
+              server finished. It arrives in the snapshot rather than being
+              fetched, so it needs no second connection and updates the moment
+              a match ends. */}
+          <div className="mt-8 flex items-baseline justify-between">
+            <p className="rule-label">Leaderboard</p>
+            <p className="rule-label">Won · K/D</p>
+          </div>
+          <div className="mt-3">
+            <Leaderboard entries={hud?.board ?? []} you={me?.name ?? null} />
+          </div>
+          <p className="mt-3 text-xs text-muted">
+            <Link to="/leaderboard" className="underline underline-offset-4 hover:text-fg">
+              Every game, every name
+            </Link>
+          </p>
 
           <p className="rule-label mt-8">Controls</p>
           <dl className="mt-2 space-y-1.5 text-sm text-muted">

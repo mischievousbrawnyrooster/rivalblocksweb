@@ -5,6 +5,8 @@ import { filterSortRegions } from './servers.js'
 import { isValidEmail } from './validate.js'
 import { makeWallTiles, MATERIALS, ARENA_STYLE, styleFor } from './wallTiles.js'
 import { makeFireTiles } from './fireTiles.js'
+import { MARKS, markHref } from './favicons.js'
+import { games } from '../data/games.js'
 
 const sample = [
   { id: 'b', label: 'Beta', status: 'operational', players: 10, tickRate: 128, uptime: 99.1 },
@@ -263,5 +265,58 @@ test('each game builds its tiles before it draws with them', () => {
     assert.notEqual(built, -1, `${page} never builds its tiles`)
     assert.notEqual(used, -1, `${page} never draws a floor`)
     assert.ok(built < used, `${page} draws with tiles before it builds them`)
+  }
+})
+
+// --- tab icons -----------------------------------------------------------
+
+test('every mark is a self-contained svg that will survive a tab bar', () => {
+  for (const [name, svg] of Object.entries(MARKS)) {
+    assert.ok(svg.startsWith('<svg') && svg.endsWith('</svg>'), `${name} is not an svg`)
+    assert.equal(
+      (svg.match(/</g) ?? []).length,
+      (svg.match(/>/g) ?? []).length,
+      `${name} has an unclosed tag`,
+    )
+    // Its own ground, because a transparent mark vanishes against whichever
+    // colour the browser draws its tabs and no media query reaches in here.
+    assert.match(svg, /<rect width="32" height="32"/, `${name} has no ground of its own`)
+    assert.match(svg, /viewBox="0 0 32 32"/, `${name} is not on the shared grid`)
+  }
+})
+
+test('a mark survives being turned into something a link tag will take', () => {
+  for (const name of Object.keys(MARKS)) {
+    const href = markHref(name)
+    assert.ok(href.startsWith('data:image/svg+xml,'))
+    // A raw # would cut the URI short at the first colour and leave a blank
+    // tab: everything after it is read as a fragment.
+    assert.ok(!href.slice('data:image/svg+xml,'.length).includes('#'), `${name} kept a bare #`)
+    assert.equal(decodeURIComponent(href.slice('data:image/svg+xml,'.length)), MARKS[name])
+  }
+})
+
+test('an unknown name falls back to the studio mark rather than nothing', () => {
+  assert.equal(markHref('nonesuch'), markHref('rivalblocks'))
+  assert.equal(markHref(undefined), markHref('rivalblocks'))
+})
+
+test('the page ships the studio mark before any of this runs', () => {
+  // React swaps it per route, but the first paint and every non-React reader
+  // gets whatever index.html carries.
+  const html = readFileSync(new URL('../../index.html', import.meta.url), 'utf8')
+  assert.match(html, /<link rel="icon" href="data:image\/svg\+xml,/)
+  assert.ok(html.includes(encodeURIComponent(MARKS.rivalblocks)), 'the page ships a different mark')
+})
+
+test('every playable title has a mark of its own', () => {
+  // Guards the case where a fourth game is added and quietly inherits the
+  // studio icon because nobody remembered this file.
+  const playable = games.filter((g) => g.playPath)
+  assert.ok(playable.length >= 3)
+  for (const game of playable) {
+    const mark = Object.keys(MARKS).find((name) => game.playPath.includes(name))
+    assert.ok(mark, `${game.slug} has no mark matching its play route`)
+    assert.notEqual(MARKS[mark], MARKS.rivalblocks, `${game.slug} is wearing the studio mark`)
   }
 })
