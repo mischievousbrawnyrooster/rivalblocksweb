@@ -114,6 +114,8 @@ test('each floor is carved on its own, so the stack is not one shape repeated', 
   addPlayer(m, 'a')
   addPlayer(m, 'b')
   // A rising sequence walks through the arena list rather than picking one.
+  // Dependency: FLOORS must be < ARENAS.length, or the rising counter hits
+  // 'scatter' and causes uneven rng consumption inside carve (one per tile).
   let n = 0
   startRound(m, () => (n++ % ARENAS.length) / ARENAS.length)
   assert.equal(m.arenas.length, FLOORS)
@@ -124,15 +126,38 @@ test('carving never strands a solid tile in a region of its own', () => {
   const m = createMatch()
   addPlayer(m, 'a')
   addPlayer(m, 'b')
-  // 'scatter' is the shape that produces islands, so drive every floor to it.
-  const scatter = ARENAS.indexOf('scatter') / ARENAS.length
-  startRound(m, () => scatter + 0.001)
+  // Forces 'scatter' on every arena pick, then uses a pattern that creates
+  // clustered holes and isolated islands. A constant rng would make every tile
+  // take the same branch, creating no carving and no work for keepLargestRegion.
+  let n = 0
+  const fragmenting = () => {
+    const call = n++
+    if (call % (1 + SIZE * SIZE) === 0) {
+      return (ARENAS.indexOf('scatter') + 0.5) / ARENAS.length
+    }
+    // Cluster pattern: every third row is entirely gone, others are solid.
+    // This creates multiple isolated regions per floor, forcing keepLargestRegion
+    // to eliminate islands.
+    const offset = (call - 1) % (SIZE * SIZE)
+    const row = Math.floor(offset / SIZE)
+    return row % 3 === 1 ? 0.05 : 0.95
+  }
+  startRound(m, fragmenting)
+  // The stack must have at least one gone tile; if it is all solid,
+  // keepLargestRegion had nothing to clean and we are testing a vacuity.
+  let anyGone = false
+  for (let i = 0; i < m.tiles.length; i++) {
+    if (m.tiles[i] === 'gone') anyGone = true
+  }
+  assert.ok(anyGone, 'at least one tile is gone')
   for (let z = 0; z < FLOORS; z++) {
     const solid = []
     for (let i = z * SIZE * SIZE; i < (z + 1) * SIZE * SIZE; i++) {
       if (m.tiles[i] === 'solid') solid.push(i)
     }
-    if (solid.length === 0) continue
+    // Each floor must be actually fragmented: some solid, some gone. A floor
+    // that is entirely solid or entirely gone would skip the connectivity check.
+    assert.ok(solid.length > 0 && solid.length < SIZE * SIZE, `floor ${z} is fragmented`)
     // Flood from the first solid tile; everything solid on this floor must be
     // reachable from it.
     const seen = new Set([solid[0]])
