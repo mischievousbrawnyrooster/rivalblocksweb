@@ -119,6 +119,8 @@ export function createMatch() {
     // Who flagged a tile, so an elimination it causes can be credited. 0 means
     // the floor did it and nobody gets a kill.
     warnBy: new Array(TOTAL).fill(0),
+    // Tiles plated by an anchor (Task 8). Each absorbs exactly one hit.
+    reinforced: new Set(),
     nextCollapseAt: Infinity,
     // Sparse: stack index -> kind. Only occupied tiles appear.
     powerups: {},
@@ -355,6 +357,7 @@ export function startRound(state, rng = Math.random) {
   state.tiles.fill('solid')
   state.warnAt.fill(0)
   state.warnBy.fill(0)
+  state.reinforced = new Set()
   state.winner = null
   state.bottom = FLOORS - 1
   state.nextCollapseAt = state.now + COLLAPSE_EVERY_MS
@@ -550,9 +553,90 @@ export function usePowerup(state, id) {
   return true
 }
 
-// Replaced in Task 5.
-function pickWave() {
-  return []
+/** How many tiles the next wave takes, given how much stack is left to take. */
+export const waveSize = (solid) =>
+  Math.max(1, Math.min(COLLAPSE_COUNT, Math.ceil(solid * COLLAPSE_SHARE)))
+
+/**
+ * How long until the next wave, given how much stack is left.
+ *
+ * Full stack is COLLAPSE_EVERY_MS and an empty one is COLLAPSE_FASTEST_MS,
+ * straight between. Paired with `waveSize`, the round takes less and less at a
+ * time and takes it faster and faster — they are two halves of one trade and
+ * neither works alone.
+ */
+export const collapseDelay = (solid) => {
+  const share = Math.max(0, Math.min(1, solid / TOTAL))
+  return Math.round(COLLAPSE_FASTEST_MS + (COLLAPSE_EVERY_MS - COLLAPSE_FASTEST_MS) * share)
 }
+
+/**
+ * Chooses which tiles the NEXT wave will take, uniformly over every surviving
+ * tile in the whole stack.
+ *
+ * Picked ahead of time rather than at the moment it fires, because foresight
+ * has to be able to show it. Uniform and never clustered: this is the only
+ * place any of it is decided, so what a foresight shows is exactly what lands.
+ */
+function pickWave(state, rng) {
+  const solid = []
+  for (let i = 0; i < TOTAL; i++) {
+    if (state.tiles[i] === 'solid') solid.push(i)
+  }
+  const take = waveSize(solid.length)
+  const wave = []
+  for (let n = 0; n < take && solid.length > 0; n++) {
+    wave.push(solid.splice(Math.floor(rng() * solid.length), 1)[0])
+  }
+  return wave
+}
+
+export function collapse(state, rng) {
+  for (const i of state.nextWave) {
+    // A tile can be patched or already flagged between the pick and the wave.
+    if (state.tiles[i] !== 'solid') continue
+    // Reinforcement absorbs exactly one hit and is spent doing it, so an anchor
+    // buys a wave rather than a permanent floor.
+    if (state.reinforced.has(i)) {
+      state.reinforced.delete(i)
+      continue
+    }
+    state.tiles[i] = 'warn'
+    state.warnAt[i] = state.now + WARNING_MS
+    state.warnBy[i] = 0
+  }
+  state.nextWave = pickWave(state, rng)
+}
+
+/**
+ * Turns due warnings into holes, and starts the fall of whoever was on them.
+ *
+ * The fall begins HERE rather than in `resolveFalls`, because this is the last
+ * place that still knows who caused it. By the time `resolveFalls` runs, a tile
+ * that just collapsed under somebody is indistinguishable from a hole they
+ * walked into, and a sinkhole kill would go uncredited.
+ */
+export function resolveWarnings(state) {
+  for (let i = 0; i < TOTAL; i++) {
+    if (state.tiles[i] !== 'warn' || state.now < state.warnAt[i]) continue
+    // A tile can be anchored after it was already flagged. Spend the plating
+    // and put the tile back rather than taking it.
+    if (state.reinforced.has(i)) {
+      state.reinforced.delete(i)
+      state.tiles[i] = 'solid'
+      state.warnAt[i] = 0
+      state.warnBy[i] = 0
+      continue
+    }
+    state.tiles[i] = 'gone'
+    // A pickup sitting on a collapsing tile goes down with it.
+    delete state.powerups[i]
+    for (const p of state.players) {
+      if (!p.playing || !p.alive || p.fallUntil) continue
+      if (tileUnder(state, p) === i) startFall(state, p, state.warnBy[i])
+    }
+  }
+}
+
 // Replaced in Task 8.
 function spawnPowerup() {}

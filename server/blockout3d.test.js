@@ -26,7 +26,32 @@ import {
   tileUnder,
   resolveFalls,
   FALL_MS,
+  waveSize,
+  collapseDelay,
+  COLLAPSE_COUNT,
+  COLLAPSE_SHARE,
+  COLLAPSE_EVERY_MS,
+  COLLAPSE_FASTEST_MS,
+  WARNING_MS,
+  collapse,
+  resolveWarnings,
+  startFall,
 } from './blockout3d.js'
+
+/** The next wave, recomputed. `collapse` is what a test would otherwise have
+ *  to drive, and that also mutates the board. */
+function pickWaveForTest(m, rng) {
+  collapse(m, rng)
+  const wave = m.nextWave
+  // Undo the flags collapse just laid down, so a loop of these stays clean.
+  for (let i = 0; i < TOTAL; i++) {
+    if (m.tiles[i] === 'warn') {
+      m.tiles[i] = 'solid'
+      m.warnAt[i] = 0
+    }
+  }
+  return wave
+}
 
 test('a new match is a full stack with nobody on it', () => {
   const m = createMatch()
@@ -400,4 +425,110 @@ test('a fall of your own making credits nobody, even after somebody shoved you',
   resolveFalls(m)
   assert.equal(b.alive, false)
   assert.equal(a.kills, 0, 'a shove a minute ago is not a kill now')
+})
+
+test('a wave is capped on a full stack and tapers to one tile on an empty one', () => {
+  assert.equal(waveSize(TOTAL), COLLAPSE_COUNT)
+  assert.equal(waveSize(1), 1)
+  assert.equal(waveSize(0), 1)
+  assert.ok(waveSize(40) < COLLAPSE_COUNT, 'the share binds once the stack thins')
+  assert.equal(waveSize(40), Math.ceil(40 * COLLAPSE_SHARE))
+})
+
+test('waves come faster as the stack runs out', () => {
+  assert.equal(collapseDelay(TOTAL), COLLAPSE_EVERY_MS)
+  assert.equal(collapseDelay(0), COLLAPSE_FASTEST_MS)
+  assert.ok(collapseDelay(TOTAL / 2) < collapseDelay(TOTAL))
+})
+
+test('a wave is spread over the whole stack, never one floor', () => {
+  const m = playing(2)
+  let n = 0
+  // A rising rng walks the solid list rather than sitting on one index.
+  const rng = () => ((n++ * 0.37) % 1)
+  const floors = new Set()
+  for (let w = 0; w < 40; w++) {
+    for (const i of pickWaveForTest(m, rng)) floors.add(xyz(i)[2])
+  }
+  assert.ok(floors.size > 1, `waves touched floors ${[...floors]}`)
+})
+
+test('a wave never picks a tile that is already gone', () => {
+  const m = playing(2)
+  for (let i = 0; i < TOTAL; i += 2) m.tiles[i] = 'gone'
+  let n = 0
+  const wave = pickWaveForTest(m, () => ((n++ * 0.37) % 1))
+  for (const i of wave) assert.equal(m.tiles[i], 'solid', `picked ${i}`)
+})
+
+test('a wave flags rather than removes, and the warning has to expire', () => {
+  const m = playing(2)
+  m.nextWave = [idx(5, 5, 2)]
+  collapse(m, () => 0)
+  assert.equal(m.tiles[idx(5, 5, 2)], 'warn')
+  resolveWarnings(m)
+  assert.equal(m.tiles[idx(5, 5, 2)], 'warn', 'still standing before the warning is up')
+  m.now += WARNING_MS
+  resolveWarnings(m)
+  assert.equal(m.tiles[idx(5, 5, 2)], 'gone')
+})
+
+test('a pickup on a collapsing tile goes down with it', () => {
+  const m = playing(2)
+  const i = idx(5, 5, 2)
+  m.powerups[i] = 'dash'
+  m.tiles[i] = 'warn'
+  m.warnAt[i] = m.now
+  resolveWarnings(m)
+  assert.equal(Object.hasOwn(m.powerups, i), false)
+})
+
+test('reinforcement absorbs one wave and is spent doing it', () => {
+  const m = playing(2)
+  const i = idx(5, 5, 2)
+  m.reinforced.add(i)
+  m.nextWave = [i]
+  collapse(m, () => 0)
+  assert.equal(m.tiles[i], 'solid', 'the wave broke on the plating')
+  assert.equal(m.reinforced.has(i), false, 'and the plating went with it')
+  // The very next wave takes it, because an anchor buys a wave, not a floor.
+  m.nextWave = [i]
+  collapse(m, () => 0)
+  assert.equal(m.tiles[i], 'warn')
+})
+
+test('a tile anchored after it was flagged is put back', () => {
+  const m = playing(2)
+  const i = idx(5, 5, 2)
+  m.tiles[i] = 'warn'
+  m.warnAt[i] = m.now
+  m.reinforced.add(i)
+  resolveWarnings(m)
+  assert.equal(m.tiles[i], 'solid')
+  assert.equal(m.warnAt[i], 0)
+  assert.equal(m.reinforced.has(i), false)
+})
+
+test('a collapse under a player starts their fall, credited to whoever flagged it', () => {
+  const m = playing(2)
+  const [a, b] = m.players
+  const i = tileUnder(m, b)
+  m.tiles[i] = 'warn'
+  m.warnAt[i] = m.now
+  m.warnBy[i] = a.id
+  resolveWarnings(m)
+  assert.ok(b.fallUntil > m.now, 'the fall began here, not a tick later')
+  assert.equal(b.fallBy, a.id)
+})
+
+test('an ordinary wave credits nobody for what it drops', () => {
+  const m = playing(2)
+  const b = m.players[1]
+  const i = tileUnder(m, b)
+  m.tiles[i] = 'warn'
+  m.warnAt[i] = m.now
+  m.warnBy[i] = 0
+  resolveWarnings(m)
+  assert.ok(b.fallUntil > m.now)
+  assert.equal(b.fallBy, 0, 'the floor is not a player')
 })
