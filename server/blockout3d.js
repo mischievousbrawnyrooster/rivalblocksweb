@@ -543,6 +543,42 @@ export function resolveFalls(state) {
   }
 }
 
+/**
+ * Winds up a stomp. Returns false, silently, if there is nothing to break or
+ * the boots are not ready.
+ *
+ * The windup is the telegraph. Resolving on the keypress made a stomp
+ * unreactable, which would waste the whole reason bodies move continuously.
+ */
+export function stomp(state, id) {
+  if (state.phase !== 'playing') return false
+  const p = state.players.find((q) => q.id === id)
+  if (!p || !p.playing || !p.alive || p.fallUntil) return false
+  if (p.stompAt || state.now < p.stompReadyAt) return false
+  if (state.tiles[tileUnder(state, p)] === 'gone') return false
+  p.stompAt = state.now + STOMP_WINDUP_MS
+  p.stompReadyAt = state.now + STOMP_WINDUP_MS + STOMP_COOLDOWN_MS
+  return true
+}
+
+/** Lands the stomps that are due. */
+export function resolveStomps(state) {
+  for (const p of state.players) {
+    if (!p.stompAt || state.now < p.stompAt) continue
+    p.stompAt = 0
+    if (!p.playing || !p.alive || p.fallUntil) continue
+    const i = tileUnder(state, p)
+    if (state.tiles[i] === 'gone') continue
+    state.tiles[i] = 'gone'
+    delete state.powerups[i]
+    // Anyone else over it goes down too, and it is the stomper's doing.
+    for (const o of state.players) {
+      if (o === p || !o.playing || !o.alive || o.fallUntil) continue
+      if (o.z === p.z && tileUnder(state, o) === i) startFall(state, o, p.id)
+    }
+  }
+}
+
 // Replaced in Task 8.
 export function usePowerup(state, id) {
   const p = state.players.find((q) => q.id === id)

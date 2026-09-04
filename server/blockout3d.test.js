@@ -40,6 +40,10 @@ import {
   voidWarning,
   VOID_WARN_MS,
   VOID_EVERY_MS,
+  stomp,
+  resolveStomps,
+  STOMP_WINDUP_MS,
+  STOMP_COOLDOWN_MS,
 } from './blockout3d.js'
 
 /** The next wave, recomputed. `collapse` is what a test would otherwise have
@@ -597,4 +601,55 @@ test('with one floor left the void stands down entirely', () => {
   while (m.bottom > 0) consumeFloor(m)
   assert.equal(m.voidAt, Infinity, 'nothing left to eat')
   assert.equal(voidWarning(m), false)
+})
+
+test('a stomp winds up before it breaks anything', () => {
+  const m = playing(2)
+  const p = m.players[0]
+  const i = tileUnder(m, p)
+  assert.equal(stomp(m, p.id), true)
+  resolveStomps(m)
+  assert.equal(m.tiles[i], 'solid', 'nothing has happened yet')
+  m.now += STOMP_WINDUP_MS
+  resolveStomps(m)
+  assert.equal(m.tiles[i], 'gone')
+})
+
+test('a stomp cannot be spammed', () => {
+  const m = playing(2)
+  const p = m.players[0]
+  stomp(m, p.id)
+  m.now += STOMP_WINDUP_MS
+  resolveStomps(m)
+  assert.equal(stomp(m, p.id), false, 'still cooling down')
+  m.now += STOMP_COOLDOWN_MS
+  assert.equal(stomp(m, p.id), true)
+})
+
+test('a stomp takes anyone else over that tile down as well, and credits it', () => {
+  const m = playing(2)
+  const [a, b] = m.players
+  b.x = a.x
+  b.y = a.y
+  b.z = a.z
+  stomp(m, a.id)
+  m.now += STOMP_WINDUP_MS
+  resolveStomps(m)
+  resolveFalls(m)
+  assert.ok(b.fallUntil > m.now)
+  assert.equal(b.fallBy, a.id)
+})
+
+test('a stomp mid-drop is refused', () => {
+  const m = playing(2)
+  const p = m.players[0]
+  p.fallUntil = m.now + 1000
+  assert.equal(stomp(m, p.id), false)
+})
+
+test('stomping over a hole is refused rather than wasted', () => {
+  const m = playing(2)
+  const p = m.players[0]
+  m.tiles[tileUnder(m, p)] = 'gone'
+  assert.equal(stomp(m, p.id), false)
 })
