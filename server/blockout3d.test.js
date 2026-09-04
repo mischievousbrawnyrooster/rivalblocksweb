@@ -1025,16 +1025,29 @@ test('bots fill a stack only once somebody asks for them', () => {
   assert.equal(m.players.length, BOT_FILL_TO)
 })
 
-test('a bot standing on a flagged tile heads for solid ground', () => {
+test('a bot on flagged ground routes off it rather than shuffling', () => {
   const m = playing(2)
   const b = m.players[1]
   b.bot = true
   b.thinkAt = 0
-  const i = tileUnder(m, b)
-  m.tiles[i] = 'warn'
-  m.warnAt[i] = m.now + WARNING_MS
+  b.x = 6.5
+  b.y = 6.5
+  // Flag the whole three by three the bot stands in. Every immediate neighbour
+  // is now passable but none is a destination, so the random-shuffle fallback
+  // has nothing to pick and leaves the bot standing still. Only a deliberate
+  // route off the flagged ground moves it at all.
+  for (let y = 5; y <= 7; y++) {
+    for (let x = 5; x <= 7; x++) {
+      const i = idx(x, y, b.z)
+      m.tiles[i] = 'warn'
+      m.warnAt[i] = m.now + WARNING_MS
+    }
+  }
   driveBots(m, () => 0)
-  assert.notDeepEqual(b.dir, [0, 0], 'it is going somewhere')
+  assert.notDeepEqual(b.dir, [0, 0], 'it found a way off')
+  // And the way it picked actually leads to standing floor.
+  const [dx, dy] = b.dir
+  assert.equal(m.tiles[idx(6 + Math.round(dx) * 2, 6 + Math.round(dy) * 2, b.z)], 'solid')
 })
 
 test('a bot with something in hand spends it', () => {
@@ -1055,8 +1068,15 @@ test('a bot thinks once per reaction time, not once per tick', () => {
   driveBots(m, () => 0)
   const first = b.thinkAt
   assert.equal(first, m.now + BOT_REACT_MS)
+  // Advance to just inside the window. Without moving the clock at all, thinkAt
+  // recomputes to the same number whether the gate is consulted or not, and the
+  // assertion below proves nothing.
+  m.now += BOT_REACT_MS - 1
   driveBots(m, () => 0)
   assert.equal(b.thinkAt, first, 'no second decision inside the window')
+  m.now += 1
+  driveBots(m, () => 0)
+  assert.equal(b.thinkAt, m.now + BOT_REACT_MS, 'and a fresh one once it elapses')
 })
 
 test('bots never drive a body to NaN', () => {
