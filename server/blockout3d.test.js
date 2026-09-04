@@ -13,6 +13,7 @@ import {
   TOTAL,
   MAX_PLAYERS,
   SPAWNS,
+  TICK_MS,
   startRound,
   ARENAS,
   MIN_PLAYERS,
@@ -59,6 +60,11 @@ import {
   wantBots,
   BOT_FILL_TO,
   BOT_REACT_MS,
+  tick,
+  snapshot,
+  COUNTDOWN_MS,
+  OVER_MS,
+  ROUND_TARGET,
 } from './blockout3d.js'
 
 /** The next wave, recomputed. `collapse` is what a test would otherwise have
@@ -1093,5 +1099,106 @@ test('bots never drive a body to NaN', () => {
     for (const p of m.players) {
       assert.ok(Number.isFinite(p.x) && Number.isFinite(p.y), `${p.name} at ${p.x},${p.y}`)
     }
+  }
+})
+
+test('a match waits, counts down, then plays', () => {
+  const m = createMatch()
+  addPlayer(m, 'a')
+  addPlayer(m, 'b')
+  tick(m, TICK_MS)
+  assert.equal(m.phase, 'countdown')
+  tick(m, COUNTDOWN_MS)
+  assert.equal(m.phase, 'playing')
+})
+
+test('the last one still in the stack takes the round', () => {
+  const m = playing(2)
+  m.players[1].alive = false
+  tick(m, TICK_MS)
+  assert.equal(m.phase, 'over')
+  assert.equal(m.winner, m.players[0].name)
+  assert.equal(m.winnerId, m.players[0].id)
+  assert.equal(m.players[0].wins, 1)
+})
+
+test('a match is over when somebody reaches the round target', () => {
+  const m = playing(2)
+  m.players[0].wins = ROUND_TARGET - 1
+  m.players[1].alive = false
+  tick(m, TICK_MS)
+  assert.equal(m.final, true)
+})
+
+test('a finished match resets the running total, a finished round does not', () => {
+  const m = playing(2)
+  m.players[1].alive = false
+  tick(m, TICK_MS)
+  assert.equal(m.final, false)
+  tick(m, OVER_MS)
+  assert.equal(m.players[0].wins, 1, 'a round win carries')
+
+  // One win short of the target: the next round taken pushes the match itself
+  // to a close, and that is the case the running total does not survive.
+  m.players[0].wins = ROUND_TARGET - 1
+  tick(m, COUNTDOWN_MS)
+  m.players[1].alive = false
+  tick(m, TICK_MS)
+  assert.equal(m.final, true)
+  tick(m, OVER_MS)
+  assert.equal(m.players[0].wins, 0, 'a finished match resets the running total')
+})
+
+test('the snapshot carries tiles as a string of the right length', () => {
+  const m = playing(2)
+  const s = snapshot(m)
+  assert.equal(typeof s.tiles, 'string')
+  assert.equal(s.tiles.length, TOTAL)
+  assert.equal(s.tiles, tileString(m.tiles))
+  assert.equal(s.size, SIZE)
+  assert.equal(s.floors, FLOORS)
+  assert.equal(s.bottom, m.bottom)
+})
+
+test('the next wave is shown to a foresight holder and to nobody else', () => {
+  const m = playing(2)
+  const p = m.players[0]
+  m.nextWave = [idx(1, 1, 1)]
+  assert.deepEqual(snapshot(m).soon, [])
+  assert.deepEqual(snapshot(m, p.id).soon, [])
+  p.seeingUntil = m.now + FORESIGHT_MS
+  assert.deepEqual(snapshot(m, p.id).soon, [idx(1, 1, 1)])
+  assert.deepEqual(snapshot(m, m.players[1].id).soon, [], 'not to the other one')
+})
+
+test('a body mid-drop reports its progress so the client can draw it between floors', () => {
+  const m = playing(2)
+  const p = m.players[0]
+  m.tiles[tileUnder(m, p)] = 'gone'
+  resolveFalls(m)
+  m.now += FALL_MS / 2
+  const row = snapshot(m).players.find((q) => q.id === p.id)
+  assert.ok(row.fall > 0.4 && row.fall < 0.6, `fall was ${row.fall}`)
+})
+
+test('a tick with nobody human standing hands the round back to waiting', () => {
+  const m = playing(2)
+  for (const p of m.players) p.bot = true
+  tick(m, TICK_MS)
+  assert.equal(m.phase, 'waiting')
+})
+
+test('a whole round runs to a winner without anything going NaN', () => {
+  const m = createMatch()
+  m.botFill = BOT_FILL_TO
+  m.botsOnly = true
+  addPlayer(m, 'a')
+  addPlayer(m, 'b')
+  let n = 0
+  const rng = () => ((n++ * 0.37) % 1)
+  for (let k = 0; k < 20000 && m.phase !== 'over'; k++) tick(m, TICK_MS, rng)
+  assert.equal(m.phase, 'over', 'the round ended')
+  for (const p of m.players) {
+    assert.ok(Number.isFinite(p.x) && Number.isFinite(p.y) && Number.isInteger(p.z))
   }
 })

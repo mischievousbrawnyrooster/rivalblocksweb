@@ -1095,3 +1095,159 @@ export function consumeFloor(state) {
   state.bottom = z - 1
   state.voidAt = state.bottom > 0 ? state.now + VOID_EVERY_MS : Infinity
 }
+
+function startCountdown(state) {
+  state.phase = 'countdown'
+  state.phaseUntil = state.now + COUNTDOWN_MS
+  state.winner = null
+  state.winnerId = null
+  state.final = false
+}
+
+function endRound(state, survivor) {
+  state.phase = 'over'
+  state.winner = survivor ? survivor.name : null
+  state.winnerId = survivor ? survivor.id : null
+  state.phaseUntil = state.now + OVER_MS
+  // Safe here: once the phase is 'over', tick's early return means the playing
+  // branch cannot run again this round, so this counts exactly once.
+  if (survivor) survivor.wins += 1
+  // Read after the increment, so the round that reaches the target ends it.
+  state.final = !!survivor && survivor.wins >= ROUND_TARGET
+}
+
+/**
+ * Advances the match by dt milliseconds. `rng` is injectable so the collapse
+ * order is deterministic under test; nothing else uses it.
+ */
+export function tick(state, dt, rng = Math.random) {
+  state.now += dt
+  ensureBots(state)
+
+  if (!canRun(state) && state.phase !== 'waiting') {
+    // The last person left mid-round. Stand it down rather than let the bots
+    // play it out to an empty room.
+    state.phase = 'waiting'
+    state.winner = null
+    state.winnerId = null
+  }
+
+  if (state.phase === 'waiting') {
+    if (canRun(state) && state.players.length >= MIN_PLAYERS) startCountdown(state)
+    return
+  }
+
+  if (state.phase === 'countdown') {
+    if (!canRun(state) || state.players.length < MIN_PLAYERS) {
+      state.phase = 'waiting'
+    } else if (state.now >= state.phaseUntil) {
+      startRound(state, rng)
+    }
+    return
+  }
+
+  if (state.phase === 'over') {
+    if (state.now < state.phaseUntil) return
+    if (state.final) for (const p of state.players) p.wins = 0
+    if (state.players.length >= MIN_PLAYERS) {
+      startCountdown(state)
+    } else {
+      state.phase = 'waiting'
+      state.winner = null
+      state.winnerId = null
+      state.final = false
+    }
+    return
+  }
+
+  // playing
+  driveBots(state, rng)
+  stepPlayers(state, dt)
+
+  while (state.now >= state.nextCollapseAt) {
+    // Read before the wave lands, so the gap that follows is paced by the floor
+    // the players are actually standing on.
+    collapse(state, rng)
+    state.nextCollapseAt += collapseDelay(
+      state.tiles.reduce((n, t) => (t === 'solid' ? n + 1 : n), 0),
+    )
+  }
+  while (state.now >= state.nextPowerupAt) {
+    spawnPowerup(state, rng)
+    state.nextPowerupAt += POWERUP_EVERY_MS
+  }
+  while (state.now >= state.voidAt) consumeFloor(state)
+
+  resolveStomps(state)
+  resolveWarnings(state)
+  resolveFalls(state)
+  pickUp(state)
+
+  const standing = state.players.filter((p) => p.playing && p.alive)
+  if (standing.length <= 1) endRound(state, standing[0] ?? null)
+}
+
+/**
+ * The one message shape broadcast to clients.
+ *
+ * `viewerId` is optional and changes exactly one field: somebody holding a
+ * foresight is told which tiles the next wave will take. That is the only
+ * per-viewer information in any of these games, and it is why this takes an
+ * argument at all — the alternative was broadcasting the next wave to everyone
+ * and hiding it in the client, which would be a lie on a protocol whose whole
+ * point is being readable off the wire.
+ */
+export function snapshot(state, viewerId = null) {
+  const timed = state.phase === 'countdown' || state.phase === 'over'
+  const viewer = viewerId === null ? null : state.players.find((p) => p.id === viewerId)
+  const seeing = !!viewer && state.now < viewer.seeingUntil
+  return {
+    soon: seeing ? state.nextWave : [],
+    t: 'state',
+    phase: state.phase,
+    size: SIZE,
+    floors: FLOORS,
+    bottom: state.bottom,
+    voidIn: Number.isFinite(state.voidAt)
+      ? Math.max(0, Math.ceil((state.voidAt - state.now) / 1000))
+      : 0,
+    voidWarning: voidWarning(state),
+    secs: timed ? Math.max(0, Math.ceil((state.phaseUntil - state.now) / 1000)) : 0,
+    winner: state.winner,
+    winnerId: state.winnerId,
+    final: state.final,
+    target: ROUND_TARGET,
+    board: state.board,
+    arenas: state.arenas,
+    min: MIN_PLAYERS,
+    botsWanted: state.botsWanted,
+    botsOnly: state.botsOnly,
+    tiles: tileString(state.tiles),
+    // Plated tiles look like ordinary floor in the tile string, so they ship
+    // separately or a player cannot see what their anchor bought.
+    reinforced: Array.from(state.reinforced),
+    powerups: state.powerups,
+    players: state.players.map((p) => ({
+      id: p.id,
+      name: p.name,
+      bot: p.bot,
+      x: Math.round(p.x * 100) / 100,
+      y: Math.round(p.y * 100) / 100,
+      z: p.z,
+      // 0 grounded, 1 landed. The client draws the body at z + fall and needs
+      // to know nothing else about how a drop works.
+      fall: p.fallUntil ? Math.max(0, Math.min(1, 1 - (p.fallUntil - state.now) / FALL_MS)) : 0,
+      playing: p.playing,
+      alive: p.alive,
+      wins: p.wins,
+      kills: p.kills,
+      deaths: p.deaths,
+      held: p.held,
+      shielded: p.shielded,
+      dashing: state.now < p.dashUntil,
+      hovering: state.now < p.hoverUntil,
+      seeing: state.now < p.seeingUntil,
+      stomping: p.stompAt > 0,
+    })),
+  }
+}
