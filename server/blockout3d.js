@@ -646,7 +646,7 @@ export const voidWarning = (state) =>
   Number.isFinite(state.voidAt) && state.now >= state.voidAt - VOID_WARN_MS
 
 /**
- * Takes the bottom floor, and everyone still standing on it.
+ * Takes the bottom floor, and everyone still standing on it or falling into it.
  *
  * This exists for the reason Blastworks' closing wall exists. Without it the
  * correct play is to stay on the top floor and never descend, and the match is
@@ -668,6 +668,7 @@ export function consumeFloor(state) {
     state.warnAt[i] = 0
     state.warnBy[i] = 0
     delete state.powerups[i]
+    state.reinforced.delete(i)
   }
   for (const p of state.players) {
     if (!p.playing || !p.alive) continue

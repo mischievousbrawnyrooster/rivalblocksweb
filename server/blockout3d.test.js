@@ -557,6 +557,18 @@ test('anyone standing on a consumed floor is out, and nobody gets the kill', () 
   assert.equal(b.kills, 0, 'the void is not a player')
 })
 
+test('anyone falling into a consumed floor is out, and credit does not transfer to the shover', () => {
+  const m = playing(2)
+  const [a, b] = m.players
+  a.fallUntil = m.now + FALL_MS
+  a.z = m.bottom - 1
+  a.fallBy = b.id
+  consumeFloor(m)
+  assert.equal(a.alive, false)
+  assert.equal(a.deaths, 1)
+  assert.equal(b.kills, 0, 'the void takes the kill, not the shover')
+})
+
 test('the void never eats the top floor', () => {
   const m = playing(2)
   for (let n = 0; n < FLOORS + 2; n++) consumeFloor(m)
@@ -567,9 +579,10 @@ test('the void never eats the top floor', () => {
 test('the void announces itself before it arrives', () => {
   const m = playing(2)
   m.voidAt = m.now + VOID_WARN_MS + 1
-  assert.equal(voidWarning(m), false)
-  m.now += 2
-  assert.equal(voidWarning(m), true)
+  m.now = m.voidAt - VOID_WARN_MS
+  assert.equal(voidWarning(m), true, 'the warning is on at the threshold')
+  m.now -= 1
+  assert.equal(voidWarning(m), false, 'and not one millisecond before it')
 })
 
 test('a consumed floor reschedules the next one', () => {
