@@ -172,6 +172,7 @@ function seat(state, name, bot) {
     held: null,
     shielded: false,
     dashUntil: 0,
+    hoverUntil: 0,
     seeingUntil: 0,
     stompAt: 0,
     stompReadyAt: 0,
@@ -381,6 +382,7 @@ export function startRound(state, rng = Math.random) {
     p.held = null
     p.shielded = false
     p.dashUntil = 0
+    p.hoverUntil = 0
     p.seeingUntil = 0
     p.dir = [0, 0]
     p.face = [1, 0]
@@ -480,6 +482,11 @@ export function eliminate(state, p, by) {
  */
 export function startFall(state, p, by = 0) {
   if (!p.playing || !p.alive || p.fallUntil) return
+  // Hover is the one thing in the game that pauses its central cost. Guarding
+  // here rather than at each call site covers a hole, a stomp underfoot, a
+  // collapsing tile and a shove in one line, because all four drop you through
+  // this function.
+  if (state.now < p.hoverUntil) return
   if (p.shielded) {
     p.shielded = false
     const safe = adjacentSolid(state, p)
@@ -579,13 +586,278 @@ export function resolveStomps(state) {
   }
 }
 
-// Replaced in Task 8.
+export const POWERUP_KINDS = [
+  'shield',
+  'dash',
+  'sinkhole',
+  'patch',
+  'blink',
+  'swap',
+  'foresight',
+  'shove',
+  'hover',
+  'bridge',
+  'anchor',
+  'lift',
+]
+
+// Inherited from the flat game unchanged, so the two kits behave alike and a
+// player moving between them is not relearning numbers.
+export const SHOVE_RADIUS = 2
+export const SHOVE_DIST = 2
+export const HOVER_MS = 2500
+export const BRIDGE_TILES = 4
+
+// How often a kind comes up, against one for everything not listed.
+//
+// Patch is the only thing in the kit that gives floor back, on a board whose
+// whole premise is losing it, so it is the one worth crossing a floor for.
+//
+// `lift` is deliberately NOT weighted. It is the only item that creates height
+// rather than moving it, so every one collected adds a life the void then has
+// to spend time eating. One draw in ten is the rarest this bag can express;
+// anything rarer needs the bag to change, not the number.
+export const POWERUP_WEIGHTS = { patch: 3 }
+
+// Built from POWERUP_KINDS rather than written out, so a kind added above
+// cannot be left out of the draw by accident.
+const POWERUP_BAG = POWERUP_KINDS.flatMap((kind) =>
+  Array(Object.hasOwn(POWERUP_WEIGHTS, kind) ? POWERUP_WEIGHTS[kind] : 1).fill(kind),
+)
+
+// A floor apart is worth a whole board's width, so `nearest` means nearest on
+// your own floor unless there is genuinely nobody there.
+const FLOOR_COST = SIZE
+
+const reach = (p, o) =>
+  Math.abs(o.x - p.x) + Math.abs(o.y - p.y) + FLOOR_COST * Math.abs(o.z - p.z)
+
+/** The nearest living rival in the stack, ties broken by id, never by order. */
+function nearestRival(state, p) {
+  let target = null
+  let best = Infinity
+  for (const o of state.players) {
+    if (o === p || !o.playing || !o.alive) continue
+    const d = reach(p, o)
+    if (d < best || (d === best && target !== null && o.id < target.id)) {
+      best = d
+      target = o
+    }
+  }
+  return target
+}
+
+/** Walking onto a pickup takes it, but only with an empty hand. */
+export function pickUp(state) {
+  for (const p of state.players) {
+    if (!p.playing || !p.alive || p.fallUntil || p.held) continue
+    const i = tileUnder(state, p)
+    if (!Object.hasOwn(state.powerups, i)) continue
+    p.held = state.powerups[i]
+    delete state.powerups[i]
+  }
+}
+
+/**
+ * Rebuilds every hole in the three by three the player is standing in, on their
+ * own floor. Corners included: the four orthogonal neighbours alone rebuild a
+ * plus, and a plus is not an island you can stand on. Only holes are rebuilt —
+ * a tile already flagged stays flagged, so a patch buys ground, never a
+ * reprieve from a wave you can see coming.
+ */
+function patchAround(state, p) {
+  const x0 = Math.floor(p.x)
+  const y0 = Math.floor(p.y)
+  for (let y = y0 - 1; y <= y0 + 1; y++) {
+    for (let x = x0 - 1; x <= x0 + 1; x++) {
+      if (x < 0 || y < 0 || x >= SIZE || y >= SIZE) continue
+      const i = idx(x, y, p.z)
+      if (state.tiles[i] !== 'gone') continue
+      state.tiles[i] = 'solid'
+      state.warnAt[i] = 0
+      state.warnBy[i] = 0
+    }
+  }
+}
+
+/** Flags the tile under the nearest living rival, and signs it. */
+function sinkholeNearest(state, p) {
+  const target = nearestRival(state, p)
+  if (!target) return
+  const i = tileUnder(state, target)
+  if (state.tiles[i] !== 'solid') return
+  state.tiles[i] = 'warn'
+  state.warnAt[i] = state.now + WARNING_MS
+  // Signed, so the elimination it causes is credited rather than blamed on the
+  // floor.
+  state.warnBy[i] = p.id
+}
+
+/**
+ * Hops up to BLINK_TILES the way you last moved, over anything in between. Only
+ * the landing tile has to be somewhere you could stand, which is the point: it
+ * is the one thing in the kit that crosses a hole.
+ */
+function blink(state, p) {
+  const [dx, dy] = p.face
+  for (let n = BLINK_TILES; n >= 1; n--) {
+    const x = Math.floor(p.x) + Math.round(dx) * n
+    const y = Math.floor(p.y) + Math.round(dy) * n
+    if (x < 0 || y < 0 || x >= SIZE || y >= SIZE) continue
+    if (state.tiles[idx(x, y, p.z)] === 'gone') continue
+    p.x = x + 0.5
+    p.y = y + 0.5
+    return true
+  }
+  return false
+}
+
+/**
+ * Trades places with the nearest living rival, height included.
+ *
+ * Zero-sum, and that is what makes it worth carrying next to `lift`: the stack
+ * has exactly as much height after a swap as before, so taking a floor means
+ * somebody else loses one.
+ */
+function swap(state, p) {
+  const target = nearestRival(state, p)
+  // Mid-drop there is no place to trade — a body between two floors is not
+  // standing anywhere.
+  if (!target || p.fallUntil || target.fallUntil) return false
+  const x = p.x
+  const y = p.y
+  const z = p.z
+  p.x = target.x
+  p.y = target.y
+  p.z = target.z
+  target.x = x
+  target.y = y
+  target.z = z
+  return true
+}
+
+/**
+ * Climbs one floor. The only thing in the game that creates height.
+ *
+ * Refused on the top floor rather than eaten, and refused mid-drop: a lift out
+ * of a fall would undo the cost of the fall, which is the one thing the whole
+ * design is built to charge for.
+ */
+function lift(state, p) {
+  if (p.z <= 0 || p.fallUntil) return false
+  p.z -= 1
+  return true
+}
+
+/**
+ * Drives every rival within SHOVE_RADIUS on YOUR OWN FLOOR back SHOVE_DIST.
+ *
+ * Same floor only. A kinetic wave does not travel through a slab, and a shove
+ * that reached other floors would be unreadable from any camera angle.
+ *
+ * On a flat board this was an outright kill when it landed somebody in a hole,
+ * which made it the swingiest thing in the kit. Here it obeys the same grammar
+ * as everything else: it drives them down a floor with your name on it, and the
+ * void collects. Hovering rivals ride it out.
+ */
+function shoveRivals(state, p) {
+  let any = false
+  for (const o of state.players) {
+    if (o === p || !o.playing || !o.alive || o.z !== p.z) continue
+    const dx = o.x - p.x
+    const dy = o.y - p.y
+    if (Math.max(Math.abs(dx), Math.abs(dy)) > SHOVE_RADIUS) continue
+
+    any = true
+    const sx = Math.sign(dx) || (dy === 0 ? Math.sign(p.face[0]) : 0)
+    const sy = Math.sign(dy) || (dx === 0 ? Math.sign(p.face[1]) : 0)
+    o.x = Math.max(0, Math.min(SIZE, o.x + sx * SHOVE_DIST))
+    o.y = Math.max(0, Math.min(SIZE, o.y + sy * SHOVE_DIST))
+    // Whether that put them over nothing is resolveFalls' business. Credit it
+    // here, so the drop it causes is yours.
+    if (state.tiles[tileUnder(state, o)] === 'gone') startFall(state, o, p.id)
+  }
+  return any
+}
+
+/** Lays BRIDGE_TILES of floor forward from your facing, on your own floor. */
+function buildBridge(state, p) {
+  const [dx, dy] = p.face
+  let laid = 0
+  for (let n = 1; n <= BRIDGE_TILES; n++) {
+    const x = Math.floor(p.x) + Math.round(dx) * n
+    const y = Math.floor(p.y) + Math.round(dy) * n
+    if (x < 0 || y < 0 || x >= SIZE || y >= SIZE) break
+    const i = idx(x, y, p.z)
+    if (state.tiles[i] !== 'gone') continue
+    state.tiles[i] = 'solid'
+    state.warnAt[i] = 0
+    state.warnBy[i] = 0
+    laid++
+  }
+  return laid > 0
+}
+
+/**
+ * Hardens the 3x3 around you against the next wave to touch it.
+ *
+ * The only item in the kit that resists a collapse instead of repairing after
+ * one. Each plated tile absorbs exactly one hit, spending the plating, so an
+ * anchor buys a wave and not a permanent floor. Task 5's `collapse` and
+ * `resolveWarnings` are where it is spent.
+ */
+function anchorAround(state, p) {
+  const x0 = Math.floor(p.x)
+  const y0 = Math.floor(p.y)
+  for (let y = y0 - 1; y <= y0 + 1; y++) {
+    for (let x = x0 - 1; x <= x0 + 1; x++) {
+      if (x < 0 || y < 0 || x >= SIZE || y >= SIZE) continue
+      const i = idx(x, y, p.z)
+      // Plating goes on standing floor. It is armour, not a repair.
+      if (state.tiles[i] === 'gone') continue
+      state.tiles[i] = 'solid'
+      state.warnAt[i] = 0
+      state.warnBy[i] = 0
+      state.reinforced.add(i)
+    }
+  }
+}
+
+/** Spends the held powerup. Returns false, silently, if there is nothing to spend. */
 export function usePowerup(state, id) {
+  if (state.phase !== 'playing') return false
+
   const p = state.players.find((q) => q.id === id)
-  if (!p || !p.held) return false
+  if (!p || !p.playing || !p.alive || !p.held) return false
+
   const kind = p.held
   p.held = null
-  if (kind === 'dash') p.dashUntil = state.now + DASH_MS
+
+  if (kind === 'shield') p.shielded = true
+  else if (kind === 'dash') p.dashUntil = state.now + DASH_MS
+  else if (kind === 'patch') patchAround(state, p)
+  else if (kind === 'sinkhole') sinkholeNearest(state, p)
+  else if (kind === 'foresight') p.seeingUntil = state.now + FORESIGHT_MS
+  else if (kind === 'hover') p.hoverUntil = state.now + HOVER_MS
+  else if (kind === 'anchor') anchorAround(state, p)
+  else if (kind === 'blink' && !blink(state, p)) {
+    // Nowhere to land. Keep it rather than eat it for a hop into the void.
+    p.held = kind
+    return false
+  } else if (kind === 'swap' && !swap(state, p)) {
+    p.held = kind
+    return false
+  } else if (kind === 'shove' && !shoveRivals(state, p)) {
+    // Nobody in range. Keep it rather than spend it on empty air.
+    p.held = kind
+    return false
+  } else if (kind === 'bridge' && !buildBridge(state, p)) {
+    p.held = kind
+    return false
+  } else if (kind === 'lift' && !lift(state, p)) {
+    p.held = kind
+    return false
+  }
   return true
 }
 
@@ -674,8 +946,21 @@ export function resolveWarnings(state) {
   }
 }
 
-// Replaced in Task 8.
-function spawnPowerup() {}
+function spawnPowerup(state, rng) {
+  if (Object.keys(state.powerups).length >= POWERUP_MAX) return
+  const free = []
+  for (let i = 0; i < TOTAL; i++) {
+    if (state.tiles[i] !== 'solid') continue
+    if (Object.hasOwn(state.powerups, i)) continue
+    if (state.players.some((p) => p.playing && p.alive && tileUnder(state, p) === i)) continue
+    free.push(i)
+  }
+  if (free.length === 0) return
+  const i = free[Math.floor(rng() * free.length)]
+  state.powerups[i] = POWERUP_BAG[Math.floor(rng() * POWERUP_BAG.length)]
+}
+
+export { spawnPowerup }
 
 /** Whether the void is close enough to be shown as a warning. */
 export const voidWarning = (state) =>

@@ -44,6 +44,16 @@ import {
   resolveStomps,
   STOMP_WINDUP_MS,
   STOMP_COOLDOWN_MS,
+  POWERUP_KINDS,
+  POWERUP_WEIGHTS,
+  POWERUP_MAX,
+  spawnPowerup,
+  pickUp,
+  BLINK_TILES,
+  FORESIGHT_MS,
+  SHOVE_DIST,
+  HOVER_MS,
+  BRIDGE_TILES,
 } from './blockout3d.js'
 
 /** The next wave, recomputed. `collapse` is what a test would otherwise have
@@ -126,6 +136,9 @@ function playing(n) {
   m.nextCollapseAt = Infinity
   m.nextPowerupAt = Infinity
   m.voidAt = Infinity
+  // startRound seeds one pickup itself; cleared so a test's own placements are
+  // the only ones on the board.
+  m.powerups = {}
   return m
 }
 
@@ -658,4 +671,311 @@ test('stomping over a hole is refused rather than wasted', () => {
   const p = m.players[0]
   m.tiles[tileUnder(m, p)] = 'gone'
   assert.equal(stomp(m, p.id), false)
+})
+
+test('the kit is the flat game plus lift, and every kind is in the bag', () => {
+  const flat = ['shield', 'dash', 'sinkhole', 'patch', 'blink', 'swap', 'foresight',
+                'shove', 'hover', 'bridge', 'anchor']
+  for (const kind of [...flat, 'lift']) {
+    assert.ok(POWERUP_KINDS.includes(kind), kind)
+  }
+  assert.equal(POWERUP_KINDS.length, flat.length + 1)
+})
+
+test('a pickup is taken by walking over it with an empty hand', () => {
+  const m = playing(2)
+  const p = m.players[0]
+  m.powerups[tileUnder(m, p)] = 'shield'
+  pickUp(m)
+  assert.equal(p.held, 'shield')
+  assert.equal(Object.keys(m.powerups).length, 0)
+})
+
+test('a full hand leaves a pickup on the floor', () => {
+  const m = playing(2)
+  const p = m.players[0]
+  p.held = 'dash'
+  m.powerups[tileUnder(m, p)] = 'shield'
+  pickUp(m)
+  assert.equal(p.held, 'dash')
+  assert.equal(Object.keys(m.powerups).length, 1)
+})
+
+test('lift climbs a floor', () => {
+  const m = playing(2)
+  const p = m.players[0]
+  p.z = 2
+  p.held = 'lift'
+  assert.equal(usePowerup(m, p.id), true)
+  assert.equal(p.z, 1)
+})
+
+test('lift on the top floor is a no-op that keeps the item', () => {
+  const m = playing(2)
+  const p = m.players[0]
+  p.z = 0
+  p.held = 'lift'
+  assert.equal(usePowerup(m, p.id), false)
+  assert.equal(p.held, 'lift', 'not eaten for nothing')
+})
+
+test('lift onto a hole drops you straight back down', () => {
+  const m = playing(2)
+  const p = m.players[0]
+  p.z = 1
+  p.held = 'lift'
+  m.tiles[idx(Math.floor(p.x), Math.floor(p.y), 0)] = 'gone'
+  usePowerup(m, p.id)
+  assert.equal(p.z, 0)
+  resolveFalls(m)
+  assert.ok(p.fallUntil > m.now, 'and immediately falls again')
+})
+
+test('swap trades height as well as position', () => {
+  const m = playing(2)
+  const [a, b] = m.players
+  a.z = 3
+  b.z = 1
+  b.x = 9.5
+  a.held = 'swap'
+  assert.equal(usePowerup(m, a.id), true)
+  assert.equal(a.z, 1)
+  assert.equal(b.z, 3)
+  assert.equal(a.x, 9.5)
+})
+
+test('swap with nobody to swap with keeps the item', () => {
+  const m = playing(2)
+  const a = m.players[0]
+  m.players[1].alive = false
+  a.held = 'swap'
+  assert.equal(usePowerup(m, a.id), false)
+  assert.equal(a.held, 'swap')
+})
+
+test('sinkhole prefers a rival on your own floor over a nearer one below', () => {
+  const m = playing(3)
+  const [a, near, same] = m.players
+  a.x = 1.5
+  a.y = 1.5
+  a.z = 0
+  // Nearer in x/y, but a floor down.
+  near.x = 2.5
+  near.y = 1.5
+  near.z = 1
+  // Further away, but standing on the same floor.
+  same.x = 6.5
+  same.y = 1.5
+  same.z = 0
+  a.held = 'sinkhole'
+  usePowerup(m, a.id)
+  assert.equal(m.tiles[tileUnder(m, same)], 'warn')
+  assert.equal(m.tiles[tileUnder(m, near)], 'solid')
+})
+
+test('a sinkhole that ends somebody is credited to whoever cast it', () => {
+  const m = playing(2)
+  const [a, b] = m.players
+  a.z = m.bottom
+  b.z = m.bottom
+  b.x = 9.5
+  a.held = 'sinkhole'
+  usePowerup(m, a.id)
+  m.now += WARNING_MS
+  resolveWarnings(m)
+  resolveFalls(m)
+  m.now += FALL_MS
+  resolveFalls(m)
+  assert.equal(b.alive, false)
+  assert.equal(a.kills, 1)
+})
+
+test('patch rebuilds the three by three you are standing in, on your own floor', () => {
+  const m = playing(2)
+  const p = m.players[0]
+  p.x = 6.5
+  p.y = 6.5
+  p.z = 2
+  for (let y = 5; y <= 7; y++) for (let x = 5; x <= 7; x++) m.tiles[idx(x, y, 2)] = 'gone'
+  m.tiles[idx(6, 6, 1)] = 'gone'
+  p.held = 'patch'
+  usePowerup(m, p.id)
+  for (let y = 5; y <= 7; y++) {
+    for (let x = 5; x <= 7; x++) assert.equal(m.tiles[idx(x, y, 2)], 'solid', `${x},${y}`)
+  }
+  assert.equal(m.tiles[idx(6, 6, 1)], 'gone', 'the floor above is not yours to fix')
+})
+
+test('patch does not clear a tile already flagged for the next wave', () => {
+  const m = playing(2)
+  const p = m.players[0]
+  p.x = 6.5
+  p.y = 6.5
+  const i = idx(6, 6, 0)
+  m.tiles[i] = 'warn'
+  m.warnAt[i] = m.now + WARNING_MS
+  p.held = 'patch'
+  usePowerup(m, p.id)
+  assert.equal(m.tiles[i], 'warn', 'a patch buys ground, never a reprieve')
+})
+
+test('blink hops the way you face, over a hole, on your own floor', () => {
+  const m = playing(2)
+  const p = m.players[0]
+  p.x = 2.5
+  p.y = 6.5
+  p.z = 1
+  p.face = [1, 0]
+  m.tiles[idx(3, 6, 1)] = 'gone'
+  m.tiles[idx(4, 6, 1)] = 'gone'
+  p.held = 'blink'
+  assert.equal(usePowerup(m, p.id), true)
+  assert.equal(Math.floor(p.x), 2 + BLINK_TILES)
+  assert.equal(p.z, 1, 'blink is horizontal')
+})
+
+test('blink with nowhere to land keeps the item', () => {
+  const m = playing(2)
+  const p = m.players[0]
+  p.x = 6.5
+  p.y = 6.5
+  p.face = [1, 0]
+  for (let n = 1; n <= BLINK_TILES; n++) m.tiles[idx(6 + n, 6, 0)] = 'gone'
+  p.held = 'blink'
+  assert.equal(usePowerup(m, p.id), false)
+  assert.equal(p.held, 'blink')
+})
+
+test('foresight is a clock, not a board change', () => {
+  const m = playing(2)
+  const p = m.players[0]
+  p.held = 'foresight'
+  usePowerup(m, p.id)
+  assert.equal(p.seeingUntil, m.now + FORESIGHT_MS)
+})
+
+test('a pickup never lands in a hole, on a player, or past the cap', () => {
+  const m = playing(2)
+  let n = 0
+  const rng = () => ((n++ * 0.37) % 1)
+  for (let k = 0; k < POWERUP_MAX * 3; k++) spawnPowerup(m, rng)
+  assert.ok(Object.keys(m.powerups).length <= POWERUP_MAX)
+  for (const key of Object.keys(m.powerups)) {
+    assert.equal(m.tiles[Number(key)], 'solid')
+    for (const p of m.players) assert.notEqual(tileUnder(m, p), Number(key))
+  }
+})
+
+test('patch is the only weighted kind, and lift sits at one', () => {
+  assert.equal(POWERUP_WEIGHTS.patch, 3)
+  assert.equal(Object.hasOwn(POWERUP_WEIGHTS, 'lift'), false)
+})
+
+test('shove drives a rival back and leaves the ones on other floors alone', () => {
+  const m = playing(3)
+  const [p, near, above] = m.players
+  p.x = 6.5
+  p.y = 6.5
+  p.z = 1
+  near.x = 7.5
+  near.y = 6.5
+  near.z = 1
+  above.x = 7.5
+  above.y = 6.5
+  above.z = 0
+  p.held = 'shove'
+  assert.equal(usePowerup(m, p.id), true)
+  assert.equal(near.x, 7.5 + SHOVE_DIST, 'driven back along the axis')
+  assert.equal(above.x, 7.5, 'a slab is not something a shove travels through')
+})
+
+test('shove with nobody in range keeps the item', () => {
+  const m = playing(2)
+  const [p, far] = m.players
+  p.x = 1.5
+  p.y = 1.5
+  far.x = 11.5
+  far.y = 11.5
+  p.held = 'shove'
+  assert.equal(usePowerup(m, p.id), false)
+  assert.equal(p.held, 'shove')
+})
+
+test('shove over a hole is credited to whoever threw it', () => {
+  const m = playing(2)
+  const [p, o] = m.players
+  p.x = 6.5
+  p.y = 6.5
+  o.x = 7.5
+  o.y = 6.5
+  o.z = p.z
+  m.tiles[idx(7 + SHOVE_DIST, 6, p.z)] = 'gone'
+  p.held = 'shove'
+  usePowerup(m, p.id)
+  assert.ok(o.fallUntil > m.now, 'they went over the edge')
+  assert.equal(o.fallBy, p.id)
+})
+
+test('hover carries you over a hole until it runs out', () => {
+  const m = playing(2)
+  const p = m.players[0]
+  p.held = 'hover'
+  usePowerup(m, p.id)
+  m.tiles[tileUnder(m, p)] = 'gone'
+  resolveFalls(m)
+  assert.equal(p.fallUntil, 0, 'floating, not falling')
+  m.now += HOVER_MS
+  resolveFalls(m)
+  assert.ok(p.fallUntil > m.now, 'and down when it lapses')
+})
+
+test('hover does not climb', () => {
+  const m = playing(2)
+  const p = m.players[0]
+  p.z = 2
+  p.held = 'hover'
+  usePowerup(m, p.id)
+  assert.equal(p.z, 2, 'it buys time, never height')
+})
+
+test('bridge lays floor forward and only fills holes', () => {
+  const m = playing(2)
+  const p = m.players[0]
+  p.x = 2.5
+  p.y = 6.5
+  p.z = 1
+  p.face = [1, 0]
+  for (let n = 1; n <= BRIDGE_TILES; n++) m.tiles[idx(2 + n, 6, 1)] = 'gone'
+  p.held = 'bridge'
+  assert.equal(usePowerup(m, p.id), true)
+  for (let n = 1; n <= BRIDGE_TILES; n++) {
+    assert.equal(m.tiles[idx(2 + n, 6, 1)], 'solid', `tile ${n}`)
+  }
+  assert.equal(m.tiles[idx(2 + BRIDGE_TILES + 1, 6, 1)], 'solid', 'and no further')
+})
+
+test('bridge over standing ground keeps the item', () => {
+  const m = playing(2)
+  const p = m.players[0]
+  p.x = 2.5
+  p.y = 6.5
+  p.face = [1, 0]
+  p.held = 'bridge'
+  assert.equal(usePowerup(m, p.id), false)
+  assert.equal(p.held, 'bridge')
+})
+
+test('anchor plates the floor you are on and never fills a hole', () => {
+  const m = playing(2)
+  const p = m.players[0]
+  p.x = 6.5
+  p.y = 6.5
+  p.z = 1
+  m.tiles[idx(5, 5, 1)] = 'gone'
+  p.held = 'anchor'
+  usePowerup(m, p.id)
+  assert.equal(m.tiles[idx(5, 5, 1)], 'gone', 'plating is armour, not a repair')
+  assert.equal(m.reinforced.has(idx(5, 5, 1)), false)
+  assert.equal(m.reinforced.has(idx(6, 6, 1)), true)
+  assert.equal(m.reinforced.has(idx(6, 6, 0)), false, 'your floor only')
 })
