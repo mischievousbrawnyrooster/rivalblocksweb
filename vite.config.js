@@ -56,6 +56,9 @@ export default defineConfig({
       // Same binary, second mode. Its own process, so one crashing takes
       // nothing else with it.
       '/blast-dm-ws': { target: 'ws://127.0.0.1:8084', ws: true },
+      // Not '/ws…': proxy keys match by prefix, here and in nginx, so anything
+      // starting '/ws' is swallowed by the Blockout rule above.
+      '/blockout3d-ws': { target: 'ws://127.0.0.1:8085', ws: true },
     },
   },
 })

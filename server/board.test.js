@@ -31,7 +31,7 @@ const at = 1_000_000
 test('every match server has exactly one file of its own', () => {
   const files = BOARDS.map((b) => b.file)
   assert.equal(new Set(files).size, files.length, 'two servers would write the same path')
-  for (const b of BOARDS) assert.match(b.file, /^board-[a-z-]+\.json$/)
+  for (const b of BOARDS) assert.match(b.file, /^board-[a-z0-9-]+\.json$/)
 })
 
 test('a board a server has never written is empty, not broken', () => {
@@ -46,6 +46,16 @@ test('a server finds its own file from its game and mode', () => {
   assert.equal(boardFor('blastworks', 'deathmatch').file, 'board-blastworks-deathmatch.json')
   assert.equal(boardFor('blockout').file, 'board-blockout.json')
   assert.equal(boardFor('nonesuch'), undefined)
+})
+
+test('blockout3d has a board file of its own, with exactly one writer', () => {
+  const spec = boardFor('blockout3d')
+  assert.ok(spec, 'the game is registered')
+  assert.equal(spec.file, 'board-blockout3d.json')
+  assert.equal(spec.title, 'Blockout Royale 3D')
+  // One writer per file is the whole concurrency design.
+  const files = BOARDS.map((b) => b.file)
+  assert.equal(new Set(files).size, files.length, 'no two servers share a file')
 })
 
 // --- merging -------------------------------------------------------------

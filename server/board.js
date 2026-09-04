@@ -11,6 +11,12 @@
 // nothing to lock and nothing to lose.
 export const BOARDS = [
   { file: 'board-blockout.json', game: 'blockout', mode: null, title: 'Blockout Royale' },
+  {
+    file: 'board-blockout3d.json',
+    game: 'blockout3d',
+    mode: null,
+    title: 'Blockout Royale 3D',
+  },
   { file: 'board-fracture.json', game: 'fracture', mode: null, title: 'Fracture Line' },
   {
     file: 'board-blastworks-lastman.json',

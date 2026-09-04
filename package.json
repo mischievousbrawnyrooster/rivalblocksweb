@@ -11,7 +11,8 @@
     "game": "node server/server.js",
     "fracture": "node server/fracture-server.js",
     "blast": "node server/blastworks-server.js",
-    "blast:dm": "node server/blastworks-dm.js"
+    "blast:dm": "node server/blastworks-dm.js",
+    "blockout3d": "node server/blockout3d-server.js"
   },
   "dependencies": {
     "react": "^19.2.8",
