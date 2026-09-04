@@ -962,6 +962,102 @@ function spawnPowerup(state, rng) {
 
 export { spawnPowerup }
 
+/**
+ * A step towards the nearest tile on this floor that satisfies `want`, over
+ * ground that is still standing. Warned tiles are passable — sometimes crossing
+ * one is the only way off an island — but they are never a destination.
+ */
+function stepTo(state, p, want) {
+  const z = p.z
+  const start = tileUnder(state, p)
+  const seen = new Set([start])
+  const queue = [[start, null]]
+
+  for (let head = 0; head < queue.length; head++) {
+    const [i, first] = queue[head]
+    if (first !== null && want(i)) return first
+    const [x, y] = xyz(i)
+    for (const [dx, dy] of DIRS) {
+      const nx = x + dx
+      const ny = y + dy
+      if (nx < 0 || ny < 0 || nx >= SIZE || ny >= SIZE) continue
+      const j = idx(nx, ny, z)
+      if (seen.has(j) || state.tiles[j] === 'gone') continue
+      seen.add(j)
+      queue.push([j, first ?? [dx, dy]])
+    }
+  }
+  return null
+}
+
+/** How much standing ground a tile can reach, capped — a crude island size. */
+function roomAround(state, i, cap = 24) {
+  if (state.tiles[i] !== 'solid') return 0
+  const z = xyz(i)[2]
+  const seen = new Set([i])
+  const queue = [i]
+  for (let head = 0; head < queue.length && seen.size < cap; head++) {
+    const [x, y] = xyz(queue[head])
+    for (const [dx, dy] of DIRS) {
+      const nx = x + dx
+      const ny = y + dy
+      if (nx < 0 || ny < 0 || nx >= SIZE || ny >= SIZE) continue
+      const j = idx(nx, ny, z)
+      if (seen.has(j) || state.tiles[j] !== 'solid') continue
+      seen.add(j)
+      queue.push(j)
+    }
+  }
+  return seen.size
+}
+
+/**
+ * One decision per bot per BOT_REACT_MS, expressed as an input direction and
+ * nothing else — a bot has exactly the vocabulary a client has.
+ *
+ * The order is: get off a tile that is about to go, then take anything lying
+ * around, then work towards the biggest piece of floor left. Depth is not part
+ * of it: a bot that understood the void would be a different project, and one
+ * that walks its own floor competently is already an opponent.
+ */
+export function driveBots(state, rng = Math.random) {
+  for (const b of state.players) {
+    if (!b.bot || !b.playing || !b.alive || state.now < b.thinkAt) continue
+    b.thinkAt = state.now + BOT_REACT_MS
+
+    if (b.held) usePowerup(state, b.id)
+    if (b.fallUntil) continue
+
+    const here = tileUnder(state, b)
+    const safe = (i) => state.tiles[i] === 'solid'
+
+    let step = state.tiles[here] === 'warn' ? stepTo(state, b, safe) : null
+
+    if (!step && !b.held) {
+      step = stepTo(state, b, (i) => safe(i) && Object.hasOwn(state.powerups, i))
+    }
+
+    if (!step) {
+      const room = roomAround(state, here)
+      if (room < 12) step = stepTo(state, b, (i) => safe(i) && roomAround(state, i) > room)
+    }
+
+    if (!step) {
+      // Nothing worth doing: shuffle, rather than stand on one tile waiting for
+      // it to be the one that goes.
+      const open = DIRS.filter(([dx, dy]) => {
+        const x = Math.floor(b.x) + dx
+        const y = Math.floor(b.y) + dy
+        if (x < 0 || y < 0 || x >= SIZE || y >= SIZE) return false
+        return state.tiles[idx(x, y, b.z)] === 'solid'
+      })
+      if (open.length > 0) step = open[Math.floor(rng() * open.length)]
+    }
+
+    input(state, b.id, step ?? [0, 0])
+  }
+}
+
 /** Whether the void is close enough to be shown as a warning. */
 export const voidWarning = (state) =>
   Number.isFinite(state.voidAt) && state.now >= state.voidAt - VOID_WARN_MS

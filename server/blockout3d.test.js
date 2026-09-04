@@ -54,6 +54,11 @@ import {
   SHOVE_DIST,
   HOVER_MS,
   BRIDGE_TILES,
+  driveBots,
+  ensureBots,
+  wantBots,
+  BOT_FILL_TO,
+  BOT_REACT_MS,
 } from './blockout3d.js'
 
 /** The next wave, recomputed. `collapse` is what a test would otherwise have
@@ -1007,4 +1012,66 @@ test('a round puts one pickup on the floor before the first tick', () => {
   const i = Number(keys[0])
   assert.equal(m.tiles[i], 'solid')
   for (const p of m.players) assert.notEqual(tileUnder(m, p), i, 'never under a body')
+})
+
+test('bots fill a stack only once somebody asks for them', () => {
+  const m = createMatch()
+  m.botFill = BOT_FILL_TO
+  addPlayer(m, 'ada')
+  ensureBots(m)
+  assert.equal(m.players.length, 1, 'nobody gets bots unprompted')
+  wantBots(m)
+  ensureBots(m)
+  assert.equal(m.players.length, BOT_FILL_TO)
+})
+
+test('a bot standing on a flagged tile heads for solid ground', () => {
+  const m = playing(2)
+  const b = m.players[1]
+  b.bot = true
+  b.thinkAt = 0
+  const i = tileUnder(m, b)
+  m.tiles[i] = 'warn'
+  m.warnAt[i] = m.now + WARNING_MS
+  driveBots(m, () => 0)
+  assert.notDeepEqual(b.dir, [0, 0], 'it is going somewhere')
+})
+
+test('a bot with something in hand spends it', () => {
+  const m = playing(2)
+  const b = m.players[1]
+  b.bot = true
+  b.thinkAt = 0
+  b.held = 'shield'
+  driveBots(m, () => 0)
+  assert.equal(b.held, null)
+})
+
+test('a bot thinks once per reaction time, not once per tick', () => {
+  const m = playing(2)
+  const b = m.players[1]
+  b.bot = true
+  b.thinkAt = 0
+  driveBots(m, () => 0)
+  const first = b.thinkAt
+  assert.equal(first, m.now + BOT_REACT_MS)
+  driveBots(m, () => 0)
+  assert.equal(b.thinkAt, first, 'no second decision inside the window')
+})
+
+test('bots never drive a body to NaN', () => {
+  const m = playing(2)
+  for (const b of m.players) {
+    b.bot = true
+    b.thinkAt = 0
+  }
+  let n = 0
+  for (let k = 0; k < 200; k++) {
+    m.now += BOT_REACT_MS
+    driveBots(m, () => ((n++ * 0.37) % 1))
+    stepPlayers(m, BOT_REACT_MS)
+    for (const p of m.players) {
+      assert.ok(Number.isFinite(p.x) && Number.isFinite(p.y), `${p.name} at ${p.x},${p.y}`)
+    }
+  }
 })
