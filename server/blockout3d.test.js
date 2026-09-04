@@ -1141,7 +1141,7 @@ test('a finished match resets the running total, a finished round does not', () 
   // One win short of the target: the next round taken pushes the match itself
   // to a close, and that is the case the running total does not survive.
   m.players[0].wins = ROUND_TARGET - 1
-  tick(m, COUNTDOWN_MS)
+  tick(m, COUNTDOWN_MS, () => 0)
   m.players[1].alive = false
   tick(m, TICK_MS)
   assert.equal(m.final, true)
@@ -1198,6 +1198,8 @@ test('a whole round runs to a winner without anything going NaN', () => {
   const rng = () => ((n++ * 0.37) % 1)
   for (let k = 0; k < 20000 && m.phase !== 'over'; k++) tick(m, TICK_MS, rng)
   assert.equal(m.phase, 'over', 'the round ended')
+  assert.ok(m.winner, 'and somebody won it, rather than everybody dying together')
+  assert.equal(m.players.filter((p) => p.alive).length, 1, 'exactly one left standing')
   for (const p of m.players) {
     assert.ok(Number.isFinite(p.x) && Number.isFinite(p.y) && Number.isInteger(p.z))
   }
