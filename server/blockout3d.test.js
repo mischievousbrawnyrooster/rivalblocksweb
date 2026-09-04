@@ -618,9 +618,15 @@ test('a stomp winds up before it breaks anything', () => {
 test('a stomp cannot be spammed', () => {
   const m = playing(2)
   const p = m.players[0]
-  stomp(m, p.id)
+  assert.equal(stomp(m, p.id), true)
   m.now += STOMP_WINDUP_MS
   resolveStomps(m)
+  // Step off the hole this stomp just made and onto standing ground, so the
+  // cooldown is the only thing left that could refuse the next one. Without
+  // this the test passes on the over-a-hole guard and never exercises the
+  // cooldown at all.
+  p.x += 1
+  assert.equal(m.tiles[tileUnder(m, p)], 'solid', 'back on floor')
   assert.equal(stomp(m, p.id), false, 'still cooling down')
   m.now += STOMP_COOLDOWN_MS
   assert.equal(stomp(m, p.id), true)
