@@ -94,9 +94,9 @@ game a skill.
 
 ### Powerups
 
-The original's full kit of seven carries over unchanged in meaning, plus one new
-kind the stack calls for. Two of the inherited seven get considerably better in
-three dimensions and neither needed a rewrite to do it.
+The original's full kit of eleven carries over unchanged in meaning, plus one new
+kind the stack calls for. Several of the inherited eleven get considerably better
+in three dimensions and none needed a rewrite to do it.
 
 | Powerup | In 3D |
 |---|---|
@@ -107,7 +107,39 @@ three dimensions and neither needed a rewrite to do it.
 | `blink` | A three-tile hop that clears holes, horizontal only |
 | `swap` | Trade places with the nearest rival — climbs by costing them the climb |
 | `foresight` | Shows the next wave for `FORESIGHT_MS`, across every floor |
+| `shove` | Drives every rival within `SHOVE_RADIUS` on your floor back `SHOVE_DIST`. Shoved over a hole they drop a floor, credited to you |
+| `hover` | Float for `HOVER_MS`. Nothing drops you while it lasts |
+| `bridge` | Lays `BRIDGE_TILES` of floor forward from your facing, on your own floor |
+| `anchor` | Hardens the 3×3 around you. Each tile absorbs one collapse hit, then the reinforcement is spent |
 | `lift` | **New.** Climbs you one floor outright |
+
+The four that arrived after this document was first written earn their place in a
+stack more than they did on a flat board.
+
+**`shove` becomes a fourth way to cost someone a life,** and it obeys the same
+grammar as the other three: it drives them down rather than killing them, and the
+void collects. On a flat board a shove into a hole was an outright kill, which
+made it the single most swingy item in the kit. Here it is a setback with an
+author, which is exactly what this game charges for. It reaches only your own
+floor — a kinetic wave does not travel through a slab, and a cross-floor shove
+would be unreadable from any camera angle.
+
+**`hover` is the only thing in the game that pauses its central cost.** While it
+lasts, a hole, a stomp under your feet and a collapsing tile all pass harmlessly.
+That is a large effect in a game whose whole premise is losing the floor, and the
+reason it stays large rather than becoming oppressive is that `HOVER_MS` is
+short. It does not let you climb, so it buys time, never height.
+
+**`anchor` is the only item that resists the collapse rather than repairing after
+it.** `patch` and `bridge` both put floor back once it is gone; anchor stops it
+going. It needs `state.reinforced`, a set of stack indices, reset each round,
+consumed at both the point a wave flags a tile and the point a warning resolves.
+Each reinforced tile absorbs exactly one hit, so an anchor buys a wave, not a
+permanent floor.
+
+**`bridge` is `patch` pointed somewhere.** Patch rebuilds where you stand; bridge
+reaches. In a stack that difference matters more, because the tile you want back
+is often the one between you and a route down that you chose.
 
 The two upward moves are not interchangeable and both earn their place. `swap` is
 zero-sum: the stack has exactly as much height after it as before, and taking a
@@ -117,10 +149,16 @@ the void now has to spend time eating.
 
 That makes `lift` the one item whose frequency can quietly unmake the round
 timer, so it is the first knob to check when a match runs long. The powerup bag
-repeats a kind once per weight point, so at weight 1 against `patch`'s 3 it is
-one draw in ten — and one in ten is the *rarest* the bag can express without
-raising every other weight to make room. If measurement wants it rarer than that,
-the bag structure has to change, not the number.
+repeats a kind once per weight point, so with twelve kinds and `patch` alone
+weighted at 3 the bag is fourteen slots and `lift` is one draw in fourteen. That
+is the rarest the bag can express without raising every other weight to make
+room. If measurement wants it rarer, the bag structure has to change, not the
+number.
+
+A twelve-item kit also thins every individual item: any given pickup is now a
+one-in-fourteen shot at the thing you wanted, where on an eight-item kit it was
+one in ten. `POWERUP_MAX` and `POWERUP_EVERY_MS` may both want raising to
+compensate, and that is a measurement, not an argument.
 
 **`DASH_COOLDOWN_MS` does not survive the port.** It is a grid-step concept —
 it works by permitting one move per tick. Under continuous movement dash becomes
@@ -169,9 +207,16 @@ export const STOMP_WINDUP_MS = 350
 export const POWERUP_EVERY_MS = 1600
 export const POWERUP_MAX = 12
 export const POWERUP_KINDS = [
-  'shield', 'dash', 'sinkhole', 'patch', 'blink', 'swap', 'foresight', 'lift',
+  'shield', 'dash', 'sinkhole', 'patch', 'blink', 'swap', 'foresight',
+  'shove', 'hover', 'bridge', 'anchor', 'lift',
 ]
 export const POWERUP_WEIGHTS = { patch: 3 }   // lift sits at 1 — see above
+
+// Inherited from the flat game, unchanged, so the two kits behave alike.
+export const SHOVE_RADIUS = 2
+export const SHOVE_DIST = 2
+export const HOVER_MS = 2500
+export const BRIDGE_TILES = 4
 export const MIN_PLAYERS = 2
 export const ROUND_TARGET = 3
 export const BOT_FILL_TO = 5
@@ -340,7 +385,10 @@ has no imports.
   whoever is standing on a consumed floor; `swap` across floors exchanges height
   both ways; `lift` on the top floor is a no-op rather than an error; `lift`
   onto a gone tile drops you straight back down; the wave never picks a tile
-  that is already gone.
+  that is already gone; `shove` reaches only your own floor and credits the drop
+  it causes; `hover` survives a hole, a stomp and a collapse, and expires;
+  `bridge` reaches forward and only fills holes; an `anchor`ed tile absorbs one
+  wave and is ordinary floor for the next.
 
 Tuning gets a headless harness, as the other three did. No constant in this
 document is defended by argument alone.
