@@ -640,3 +640,40 @@ export function resolveWarnings(state) {
 
 // Replaced in Task 8.
 function spawnPowerup() {}
+
+/** Whether the void is close enough to be shown as a warning. */
+export const voidWarning = (state) =>
+  Number.isFinite(state.voidAt) && state.now >= state.voidAt - VOID_WARN_MS
+
+/**
+ * Takes the bottom floor, and everyone still standing on it.
+ *
+ * This exists for the reason Blastworks' closing wall exists. Without it the
+ * correct play is to stay on the top floor and never descend, and the match is
+ * one flat Blockout round with four unused floors decorating it. Height has to
+ * cost something to hold.
+ *
+ * Floor 0 is never eaten. Once it is all that is left the game IS a flat
+ * Blockout round, which is the ending this is built to reach.
+ */
+export function consumeFloor(state) {
+  if (state.bottom <= 0) {
+    state.voidAt = Infinity
+    return
+  }
+  const z = state.bottom
+  for (let n = 0; n < SIZE * SIZE; n++) {
+    const i = z * SIZE * SIZE + n
+    state.tiles[i] = 'gone'
+    state.warnAt[i] = 0
+    state.warnBy[i] = 0
+    delete state.powerups[i]
+  }
+  for (const p of state.players) {
+    if (!p.playing || !p.alive) continue
+    // Mid-drop onto a floor that is no longer there counts as being on it.
+    if (p.z === z || (p.fallUntil && p.z === z - 1)) eliminate(state, p, 0)
+  }
+  state.bottom = z - 1
+  state.voidAt = state.bottom > 0 ? state.now + VOID_EVERY_MS : Infinity
+}

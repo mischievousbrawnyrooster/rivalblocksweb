@@ -36,6 +36,10 @@ import {
   collapse,
   resolveWarnings,
   startFall,
+  consumeFloor,
+  voidWarning,
+  VOID_WARN_MS,
+  VOID_EVERY_MS,
 } from './blockout3d.js'
 
 /** The next wave, recomputed. `collapse` is what a test would otherwise have
@@ -531,4 +535,53 @@ test('an ordinary wave credits nobody for what it drops', () => {
   resolveWarnings(m)
   assert.ok(b.fallUntil > m.now)
   assert.equal(b.fallBy, 0, 'the floor is not a player')
+})
+
+test('the void eats the bottom floor and raises the floor beneath everyone', () => {
+  const m = playing(2)
+  const was = m.bottom
+  consumeFloor(m)
+  assert.equal(m.bottom, was - 1)
+  for (let n = 0; n < SIZE * SIZE; n++) {
+    assert.equal(m.tiles[idx(n % SIZE, (n / SIZE) | 0, was)], 'gone')
+  }
+})
+
+test('anyone standing on a consumed floor is out, and nobody gets the kill', () => {
+  const m = playing(2)
+  const [a, b] = m.players
+  a.z = m.bottom
+  consumeFloor(m)
+  assert.equal(a.alive, false)
+  assert.equal(a.deaths, 1)
+  assert.equal(b.kills, 0, 'the void is not a player')
+})
+
+test('the void never eats the top floor', () => {
+  const m = playing(2)
+  for (let n = 0; n < FLOORS + 2; n++) consumeFloor(m)
+  assert.equal(m.bottom, 0)
+  assert.equal(m.tiles[idx(1, 1, 0)] !== 'gone', true, 'floor 0 survives')
+})
+
+test('the void announces itself before it arrives', () => {
+  const m = playing(2)
+  m.voidAt = m.now + VOID_WARN_MS + 1
+  assert.equal(voidWarning(m), false)
+  m.now += 2
+  assert.equal(voidWarning(m), true)
+})
+
+test('a consumed floor reschedules the next one', () => {
+  const m = playing(2)
+  m.voidAt = m.now
+  consumeFloor(m)
+  assert.equal(m.voidAt, m.now + VOID_EVERY_MS)
+})
+
+test('with one floor left the void stands down entirely', () => {
+  const m = playing(2)
+  while (m.bottom > 0) consumeFloor(m)
+  assert.equal(m.voidAt, Infinity, 'nothing left to eat')
+  assert.equal(voidWarning(m), false)
 })
