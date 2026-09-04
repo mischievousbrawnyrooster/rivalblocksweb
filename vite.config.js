@@ -12,7 +12,7 @@ import { boardDir } from './server/board-store.js'
  * live in `public/` — that gets copied into the build, and a stale board would
  * ship with the site.
  *
- * Only the four known filenames are served, and only from BOARD_DIR: the path
+ * Only the five known filenames are served, and only from BOARD_DIR: the path
  * never comes from the request, so there is nothing here to traverse out of.
  */
 const leaderboardFiles = () => ({

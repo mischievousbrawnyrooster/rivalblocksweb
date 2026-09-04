@@ -176,6 +176,16 @@ test('a round below the minimum lays nothing out and waits', () => {
   assert.equal(m.winner, null)
 })
 
+test('a new round starts kill and death counts at zero', () => {
+  const m = playing(2)
+  const [a, b] = m.players
+  a.kills = 4
+  b.deaths = 7
+  startRound(m, () => 0)
+  assert.equal(a.kills, 0)
+  assert.equal(b.deaths, 0)
+})
+
 test('each floor is carved on its own, so the stack is not one shape repeated', () => {
   const m = createMatch()
   addPlayer(m, 'a')

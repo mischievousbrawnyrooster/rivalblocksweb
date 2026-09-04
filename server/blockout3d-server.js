@@ -3,7 +3,6 @@
 
 import { WebSocketServer } from 'ws'
 import {
-  ARENAS,
   BOT_FILL_TO,
   MAX_PLAYERS,
   FLOORS,
