@@ -946,12 +946,13 @@ test('bridge lays floor forward and only fills holes', () => {
   p.z = 1
   p.face = [1, 0]
   for (let n = 1; n <= BRIDGE_TILES; n++) m.tiles[idx(2 + n, 6, 1)] = 'gone'
+  m.tiles[idx(2 + BRIDGE_TILES + 1, 6, 1)] = 'gone'
   p.held = 'bridge'
   assert.equal(usePowerup(m, p.id), true)
   for (let n = 1; n <= BRIDGE_TILES; n++) {
     assert.equal(m.tiles[idx(2 + n, 6, 1)], 'solid', `tile ${n}`)
   }
-  assert.equal(m.tiles[idx(2 + BRIDGE_TILES + 1, 6, 1)], 'solid', 'and no further')
+  assert.equal(m.tiles[idx(2 + BRIDGE_TILES + 1, 6, 1)], 'gone', 'and no further')
 })
 
 test('bridge over standing ground keeps the item', () => {
@@ -978,4 +979,32 @@ test('anchor plates the floor you are on and never fills a hole', () => {
   assert.equal(m.reinforced.has(idx(5, 5, 1)), false)
   assert.equal(m.reinforced.has(idx(6, 6, 1)), true)
   assert.equal(m.reinforced.has(idx(6, 6, 0)), false, 'your floor only')
+})
+
+test('anchoring a flagged tile buys the wave, and spends the plate doing it', () => {
+  const m = playing(2)
+  const p = m.players[0]
+  const i = tileUnder(m, p)
+  m.tiles[i] = 'warn'
+  m.warnAt[i] = m.now + WARNING_MS
+  p.held = 'anchor'
+  usePowerup(m, p.id)
+  assert.equal(m.tiles[i], 'warn', 'the flag stands; no free cancellation')
+  assert.equal(m.reinforced.has(i), true)
+  m.now += WARNING_MS
+  resolveWarnings(m)
+  assert.equal(m.tiles[i], 'solid', 'the plate took the hit')
+  assert.equal(m.reinforced.has(i), false, 'and was spent doing it')
+})
+
+test('a round puts one pickup on the floor before the first tick', () => {
+  const m = createMatch()
+  addPlayer(m, 'a')
+  addPlayer(m, 'b')
+  startRound(m, () => 0)
+  const keys = Object.keys(m.powerups)
+  assert.equal(keys.length, 1, 'exactly one, seeded by startRound')
+  const i = Number(keys[0])
+  assert.equal(m.tiles[i], 'solid')
+  for (const p of m.players) assert.notEqual(tileUnder(m, p), i, 'never under a body')
 })

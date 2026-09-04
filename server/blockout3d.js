@@ -815,9 +815,9 @@ function anchorAround(state, p) {
       const i = idx(x, y, p.z)
       // Plating goes on standing floor. It is armour, not a repair.
       if (state.tiles[i] === 'gone') continue
-      state.tiles[i] = 'solid'
-      state.warnAt[i] = 0
-      state.warnBy[i] = 0
+      // A flagged tile keeps its flag. The plate is what saves it when the
+      // warning resolves, and resolveWarnings spends the plate doing it — so an
+      // anchor answers a wave you can see coming without cancelling it free.
       state.reinforced.add(i)
     }
   }
