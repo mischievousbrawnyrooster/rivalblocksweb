@@ -79,6 +79,28 @@ export function makeScene(canvas, { size, floors }) {
 
   const playerColor = (n) => token(`--color-player-${n}`, '#ff6b1a')
 
+  // The scene is built once, but the site's theme toggle can flip underneath
+  // it. Re-reading on the attribute change costs nothing per frame and is
+  // correct, which reading once is not — every other surface on this site
+  // re-themes for free because it is driven by CSS custom properties, and a
+  // canvas that ignores the toggle is the one thing on the page that visibly
+  // does not.
+  const retheme = () => {
+    scene.background.set(token('--color-bg', '#16161a'))
+    solidCol.set(token('--color-tile', '#3a3a42'))
+    warnCol.set(token('--color-warn', '#e8a33d'))
+    postMat.color.set(token('--color-warn', '#e8a33d'))
+    pickMat.color.set(token('--color-flare', '#ff6b1a'))
+    for (const [id, mesh] of bodies) {
+      mesh.material.color.set(playerColor(((id - 1) % 8) + 1))
+    }
+  }
+  const themeWatch = new MutationObserver(retheme)
+  themeWatch.observe(document.documentElement, {
+    attributes: true,
+    attributeFilter: ['data-theme'],
+  })
+
   const worldY = (z, fall = 0) => -(z + fall) * FLOOR_GAP
 
   return {
@@ -174,6 +196,7 @@ export function makeScene(canvas, { size, floors }) {
     },
 
     dispose() {
+      themeWatch.disconnect()
       renderer.dispose()
       tileGeo.dispose()
       postGeo.dispose()
