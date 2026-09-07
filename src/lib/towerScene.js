@@ -72,6 +72,11 @@ export function makeScene(canvas, { size, floors }) {
   const col = new THREE.Color()
   const hidden = new THREE.Matrix4().makeScale(0, 0, 0)
 
+  // Resolved once here, not per frame: these only change on a theme flip,
+  // and update() runs sixty times a second.
+  const solidCol = new THREE.Color(token('--color-tile', '#3a3a42'))
+  const warnCol = new THREE.Color(token('--color-warn', '#e8a33d'))
+
   const playerColor = (n) => token(`--color-player-${n}`, '#ff6b1a')
 
   const worldY = (z, fall = 0) => -(z + fall) * FLOOR_GAP
@@ -96,9 +101,6 @@ export function makeScene(canvas, { size, floors }) {
      * faint. Without that a five-deep stack is an unreadable pile of boxes.
      */
     update(view, { viewZ = 0 } = {}) {
-      const solidCol = new THREE.Color(token('--color-tile', '#3a3a42'))
-      const warnCol = new THREE.Color(token('--color-warn', '#e8a33d'))
-
       let posted = 0
       for (let i = 0; i < count; i++) {
         const ch = view.tiles[i]
@@ -150,7 +152,7 @@ export function makeScene(canvas, { size, floors }) {
         if (!mesh) {
           mesh = new THREE.Mesh(
             bodyGeo,
-            new THREE.MeshLambertMaterial({ color: playerColor((p.id % 8) + 1) }),
+            new THREE.MeshLambertMaterial({ color: playerColor(((p.id - 1) % 8) + 1) }),
           )
           bodies.set(p.id, mesh)
           scene.add(mesh)
@@ -177,6 +179,12 @@ export function makeScene(canvas, { size, floors }) {
       postGeo.dispose()
       pickGeo.dispose()
       bodyGeo.dispose()
+      tiles.dispose()
+      posts.dispose()
+      picks.dispose()
+      tileMat.dispose()
+      postMat.dispose()
+      pickMat.dispose()
       for (const mesh of bodies.values()) mesh.material.dispose()
     },
   }
