@@ -168,9 +168,8 @@ export const games = [
       {
         title: 'Something to spend',
         body:
-          'A shield, a dash, a sinkhole to flag the tile under someone else, a ' +
-          'patch to put floor back. One at a time, and when you use it is the ' +
-          'whole decision.',
+          'Shields, dashes, bridges, kinetic shoves, reinforced anchors, and hover repulsors. ' +
+          'One at a time, and when you use it is the whole decision.',
       },
       {
         title: 'Cross-play, phone to desktop',
