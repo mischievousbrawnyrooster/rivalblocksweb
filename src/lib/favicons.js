@@ -50,6 +50,14 @@ export const MARKS = {
       `<rect x="4" y="13" width="24" height="6" fill="${FLARE}"/>` +
       `<circle cx="16" cy="16" r="4" fill="${PAPER}"/>`,
   ),
+
+  // Blockout Royale 3D: the original's three tiles, stacked and offset so the
+  // shape reads as depth rather than as a fourth tile. Same missing corner.
+  blockout3d: wrap(
+    `<rect x="3" y="10" width="10" height="10" fill="${FLARE}"/>` +
+      `<rect x="15" y="10" width="10" height="10" fill="${FLARE}"/>` +
+      `<rect x="9" y="20" width="10" height="10" fill="${PAPER}"/>`,
+  ),
 }
 
 /**

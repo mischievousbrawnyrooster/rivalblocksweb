@@ -20,9 +20,14 @@ export function makeBuffer(delayMs) {
 
     push(snap, at) {
       frames.push({ snap, at })
-      // Two to sit between, plus a little slack for a late frame. Anything
-      // older is already behind the render clock and will never be read.
-      while (frames.length > 4) frames.shift()
+      // At TICK_MS = 33, four frames is three intervals - about 99ms of
+      // history - against a 100ms render delay. That is not a margin, it is a
+      // coincidence: one late or jittered frame pushes sample() into its
+      // oldest-frame clamp and produces exactly the stepping this buffer
+      // exists to remove. Eight frames is ~231ms, comfortably bracketing the
+      // delay, for about 8KB of snapshots. Anything older than that is
+      // already behind the render clock and will never be read.
+      while (frames.length > 8) frames.shift()
     },
 
     sample(now) {

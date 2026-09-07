@@ -20,7 +20,7 @@ export default function PlayIndex() {
           <p className="rule-label">Play</p>
           <h1 className="display mt-2 text-4xl sm:text-5xl">Play now</h1>
           <p className="mt-5 max-w-xl leading-relaxed text-muted">
-            Three titles, running in the browser against the same servers
+            Four titles, running in the browser against the same servers
             everyone else is on. No account, no download. Pick one and drop in.
           </p>
         </div>

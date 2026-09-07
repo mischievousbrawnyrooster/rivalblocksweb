@@ -1,4 +1,4 @@
-// All marketing copy for the three titles. This file is the CMS.
+// All marketing copy for the four titles. This file is the CMS.
 
 export const games = [
   {
@@ -185,6 +185,74 @@ export const games = [
       { seed: 16, caption: 'Ring: a wave flagged, a beat before it drops' },
       { seed: 44, caption: 'Disc: down to the centre island' },
       { seed: 71, caption: 'Scatter: the last tile standing' },
+    ],
+  },
+  {
+    slug: 'blockout-royale-3d',
+    playPath: '/play/blockout-royale-3d',
+    playBlurb:
+      'Five floors stacked on a shrinking board. Tiles flash before they ' +
+      'drop, and floor by floor the void eats the stack from beneath you. ' +
+      'Land on someone from above, stomp one through, or watch the floor ' +
+      'take the rest.',
+    title: 'Blockout Royale 3D',
+    tagline: 'There is always further down.',
+    genre: 'Stacked survival brawler, up to 8',
+    status: 'Early Access',
+    statusTone: 'beta',
+    flagship: false,
+    platforms: ['PC'],
+    art: { variant: 'cavern', seed: 903 },
+    blurb:
+      'Blockout Royale, stacked five floors deep. Waves still flag a tile a ' +
+      'beat before it drops. Now falling through one costs a floor, not the ' +
+      'round, and the void is closing in from underneath the whole time.',
+    features: [
+      {
+        title: 'Five floors, one stack',
+        body:
+          'Walk off the edge of a floor and the drop takes you to the one ' +
+          'below it. The round does not end there. It gets harder.',
+      },
+      {
+        title: 'The void climbs',
+        body:
+          'The bottom floor gives way on a clock of its own, eaten from ' +
+          'underneath. Camp on top too long and there is nowhere left to land.',
+      },
+      {
+        title: 'A stomp puts you through',
+        body:
+          'Wind up and break the tile under your feet. Land on someone from ' +
+          'above and they go down with you.',
+      },
+      {
+        title: 'Six boards, five floors deep',
+        body:
+          'Square, disc, diamond, cross, ring, scatter. Every floor draws its ' +
+          'own, so no two drops land the same.',
+      },
+      {
+        title: 'A fuller kit',
+        body:
+          'Shields, dashes, blinks, swaps, bridges, anchors, foresight and ' +
+          'more, one at a time. Height is worth holding, so a few of these ' +
+          'exist just to take it back.',
+      },
+      {
+        title: 'Orbit and read the whole stack',
+        body:
+          'Drag to turn the camera. Every floor below yours stays lit, faint ' +
+          'enough to read, dark enough that yours is still the one you watch.',
+      },
+    ],
+    serverNote:
+      'One clock runs every floor, every wave, every drop. That clock is ours.',
+    shots: [
+      { seed: 5, caption: 'Floor one: the stack at full height' },
+      { seed: 19, caption: 'A wave flagged, one floor down' },
+      { seed: 38, caption: 'A stomp opening a floor from above' },
+      { seed: 63, caption: 'Two floors left, and the void still climbing' },
     ],
   },
 ]

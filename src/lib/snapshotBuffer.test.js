@@ -47,5 +47,5 @@ test('a body changing floor is not smeared through the floor between them', () =
 test('an old frame is dropped rather than kept forever', () => {
   const b = makeBuffer(100)
   for (let n = 0; n < 200; n++) b.push({ players: [] }, n * 33)
-  assert.ok(b.size() <= 4, `held ${b.size()} frames`)
+  assert.ok(b.size() <= 8, `held ${b.size()} frames`)
 })
