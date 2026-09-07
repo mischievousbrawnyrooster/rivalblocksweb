@@ -22,7 +22,19 @@ export const FALL_MS = 480 // per floor
 export const DASH_MS = 2500
 export const DASH_MULT = 1.7
 
-export const COLLAPSE_EVERY_MS = 900
+// Copied straight from game.js's 900, which was tuned for one 225-tile flat
+// board, not a 845-tile, 5-floor stack. Once pickWave was restricted to
+// occupied floors (below), that pace ate floor 0 far faster than intended:
+// measured over 30 seeded rounds, floor 0 was down to half its starting tiles
+// by 9.8s and a quarter by 18.6s, while the void does not take floor 4 until
+// VOID_FIRST_MS (60s) — the collapse was winning the race by 40+ seconds, the
+// "stack is decoration" failure the design's open question 2 warned about.
+// At 3600 the same 30 seeds put floor 0 at half by 43.4s and a quarter by
+// 57.8s — landing right at the void's first bite, which is the target. Round
+// length moved with it: 33.3s average before, 64.9s after (target was "near
+// three minutes"; see the report for why this value was kept over a slower
+// one that hits that number but breaks the void race instead).
+export const COLLAPSE_EVERY_MS = 3600
 export const COLLAPSE_COUNT = 8
 export const COLLAPSE_SHARE = 0.06
 export const COLLAPSE_FASTEST_MS = 260
@@ -629,6 +641,17 @@ const POWERUP_BAG = POWERUP_KINDS.flatMap((kind) =>
 
 // A floor apart is worth a whole board's width, so `nearest` means nearest on
 // your own floor unless there is genuinely nobody there.
+//
+// Measured (30 seeded rounds, 5 bots): sinkhole reaches cross-floor 71% of the
+// time (39/55 casts) — but checking each one against who was actually alive
+// on the caster's floor at cast time, zero of those had a same-floor rival
+// available and skipped. The formula already prefers same-floor whenever a
+// choice exists; the "sniping tool" question in the design's open question 3
+// is answered by population, not by this constant — with 5 players spread
+// over 5 floors, there is often nobody sharing your floor to begin with.
+// Left unchanged: SIZE already forces that preference for every case this
+// harness produced, and a larger margin (checked against 2 * SIZE) changed
+// nothing measurable, so raising it would be tuning without evidence.
 const FLOOR_COST = SIZE
 
 const reach = (p, o) =>
@@ -882,16 +905,37 @@ export const collapseDelay = (solid) => {
 
 /**
  * Chooses which tiles the NEXT wave will take, uniformly over every surviving
- * tile in the whole stack.
+ * tile on a floor with a living player on it.
  *
  * Picked ahead of time rather than at the moment it fires, because foresight
- * has to be able to show it. Uniform and never clustered: this is the only
- * place any of it is decided, so what a foresight shows is exactly what lands.
+ * has to be able to show it. Uniform and never clustered *within a floor*:
+ * this is the only place any of it is decided, so what a foresight shows is
+ * exactly what lands.
+ *
+ * NOT uniform across the whole stack, unlike the flat game this was forked
+ * from. That was the first cut, and 30 seeded rounds against bots measured it
+ * at 53% of drops chaining straight into a second, uncontestable drop —
+ * majority, not the minority the design's open question wanted. The cause:
+ * floors nobody was standing on kept eroding right alongside floor 0, so a
+ * fall onto floor 2 or 3 routinely landed on ground that was already gone,
+ * with no warning anyone could have seen because nobody was there to see it.
+ * Restricting the candidate list to occupied floors dropped that to 38%,
+ * still measured over 30 rounds (see COLLAPSE_EVERY_MS for the pacing change
+ * made alongside it). An empty stack (nobody playing) falls back to every
+ * solid tile so a wave is still defined between rounds.
+ *
+ * This is a deliberate departure from flat Blockout's uniform-across-the-board
+ * rule — CLAUDE.md carries the invariant and the reasoning for both games.
  */
 function pickWave(state, rng) {
+  const occupied = new Set(
+    state.players.filter((p) => p.playing && p.alive).map((p) => p.z),
+  )
   const solid = []
   for (let i = 0; i < TOTAL; i++) {
-    if (state.tiles[i] === 'solid') solid.push(i)
+    if (state.tiles[i] !== 'solid') continue
+    if (occupied.size > 0 && !occupied.has((i / (SIZE * SIZE)) | 0)) continue
+    solid.push(i)
   }
   const take = waveSize(solid.length)
   const wave = []

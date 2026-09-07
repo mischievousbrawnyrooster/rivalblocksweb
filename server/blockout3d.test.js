@@ -483,7 +483,12 @@ test('waves come faster as the stack runs out', () => {
   assert.ok(collapseDelay(TOTAL / 2) < collapseDelay(TOTAL))
 })
 
-test('a wave is spread over the whole stack, never one floor', () => {
+test('a wave never touches a floor with nobody standing on it', () => {
+  // Both players are on floor 0 (playing() spawns everyone there), and the
+  // whole point of the restriction is that an empty floor never quietly
+  // erodes. Measured at 53% of drops chaining into an immediate second drop
+  // when waves were picked from the whole stack; restricting to occupied
+  // floors brought that to 38% over 30 seeded rounds (see pickWave).
   const m = playing(2)
   let n = 0
   // A rising rng walks the solid list rather than sitting on one index.
@@ -492,7 +497,33 @@ test('a wave is spread over the whole stack, never one floor', () => {
   for (let w = 0; w < 40; w++) {
     for (const i of pickWaveForTest(m, rng)) floors.add(xyz(i)[2])
   }
-  assert.ok(floors.size > 1, `waves touched floors ${[...floors]}`)
+  assert.deepEqual([...floors], [0], `waves touched floors ${[...floors]}`)
+})
+
+test('moving a player to another floor puts that floor back in play for the wave', () => {
+  const m = playing(2)
+  m.players[1].z = 2
+  let n = 0
+  const rng = () => ((n++ * 0.37) % 1)
+  const floors = new Set()
+  for (let w = 0; w < 40; w++) {
+    for (const i of pickWaveForTest(m, rng)) floors.add(xyz(i)[2])
+  }
+  assert.ok(floors.has(0), 'floor 0 still has a player on it')
+  assert.ok(floors.has(2), 'floor 2 now has a player on it too')
+  assert.ok(!floors.has(1) && !floors.has(3) && !floors.has(4), 'nobody stands on the rest')
+})
+
+test('an empty stack falls back to every solid tile, so a wave is still defined', () => {
+  const m = createMatch()
+  m.now = 0
+  let n = 0
+  const rng = () => ((n++ * 0.37) % 1)
+  const floors = new Set()
+  for (let w = 0; w < 40; w++) {
+    for (const i of pickWaveForTest(m, rng)) floors.add(xyz(i)[2])
+  }
+  assert.ok(floors.size > 1, 'no players means no floor is favoured')
 })
 
 test('a wave never picks a tile that is already gone', () => {
