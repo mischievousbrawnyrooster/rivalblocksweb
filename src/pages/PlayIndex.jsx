@@ -63,7 +63,7 @@ export default function PlayIndex() {
 
         <section className="mt-16 border-t border-line pt-10">
           <div className="flex flex-wrap items-baseline justify-between gap-4">
-            <h2 className="display text-2xl">Leaderboard across all three</h2>
+            <h2 className="display text-2xl">Leaderboard across all four</h2>
             <Link
               to="/leaderboard"
               className="text-xs uppercase tracking-[0.16em] text-muted hover:text-flare"

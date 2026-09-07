@@ -20,6 +20,11 @@ const token = (name, fallback) => {
 const FLOOR_GAP = 3.4 // world units between floors
 const TILE = 1
 const WARN_DROP = 0.18 // how far a flagged tile sinks
+// The mirror of WARN_DROP, not a separate number picked independently: a
+// foreseen tile has to read as the opposite of a warned one on the same
+// axis, structurally, not by colour (WCAG 1.4.1) — it is still `solid` in
+// `view.tiles`, just marked to be taken by the wave the server already chose.
+const SOON_RISE = WARN_DROP
 
 export function makeScene(canvas, { size, floors }) {
   const renderer = new THREE.WebGLRenderer({ canvas, antialias: true })
@@ -121,8 +126,16 @@ export function makeScene(canvas, { size, floors }) {
      * `viewZ` is the floor the local player is on. Their floor is opaque, the
      * one below is ghosted so a drop is something you can aim, and the rest are
      * faint. Without that a five-deep stack is an unreadable pile of boxes.
+     *
+     * `view.soon` is only non-empty for a foresight holder (the server hands
+     * it out per-viewer). Empty for everyone else, so this costs nothing on
+     * the common path.
      */
     update(view, { viewZ = 0 } = {}) {
+      // Built once per frame, not scanned per tile: the loop below runs
+      // `count` (845) times a frame, and .includes() in there would be the
+      // per-frame allocation this file was already fixed once for.
+      const soon = new Set(view.soon ?? [])
       let posted = 0
       for (let i = 0; i < count; i++) {
         const ch = view.tiles[i]
@@ -133,8 +146,8 @@ export function makeScene(canvas, { size, floors }) {
         }
         const x = i % size
         const y = Math.floor(i / size) % size
-        const sunk = ch === WARN ? -WARN_DROP : 0
-        m4.makeTranslation(x + 0.5, worldY(z) + sunk, y + 0.5)
+        const lift = ch === WARN ? -WARN_DROP : soon.has(i) ? SOON_RISE : 0
+        m4.makeTranslation(x + 0.5, worldY(z) + lift, y + 0.5)
         tiles.setMatrixAt(i, m4)
 
         col.copy(ch === WARN ? warnCol : solidCol)
