@@ -16,6 +16,7 @@ npm run game     # Blockout Royale   127.0.0.1:8081  ← /ws
 npm run fracture # Fracture Line     127.0.0.1:8082  ← /fracture-ws
 npm run blast    # Blastworks, last man standing  :8083  ← /blast-ws
 npm run blast:dm # Blastworks, deathmatch         :8084  ← /blast-dm-ws
+npm run blockout3d # Blockout Royale 3D            :8085  ← /blockout3d-ws
 npm test         # node --test over src/lib and server/*.test.js
 npm run build    # static output to dist/
 ```
@@ -38,7 +39,7 @@ Two things that waste time if forgotten:
 
 Two things sharing one build:
 
-1. A **static marketing SPA** for a fictional game studio. `src/data/games.js` and `src/data/servers.js` are the CMS — all copy lives there. It fetches exactly one thing: `/board/*.json`, the standing leaderboard, which is four plain files written by the match servers and served straight off disk.
+1. A **static marketing SPA** for a fictional game studio. `src/data/games.js` and `src/data/servers.js` are the CMS — all copy lives there. It fetches exactly one thing: `/board/*.json`, the standing leaderboard, which is five plain files written by the match servers and served straight off disk.
 2. A **playable multiplayer game** at `/play`, the only part that touches a network.
 
 ## Game architecture
@@ -49,19 +50,34 @@ Three layers with a deliberate, enforced split:
 |---|---|---|
 | `server/game.js` | Every rule and all match state | Sockets, Node APIs, *any* import |
 | `server/server.js` | Connection lifecycle, message parsing, broadcast | Any game decision |
+| `server/blockout3d.js` | Every rule and all match state | Sockets, Node APIs, *any* import |
+| `server/blockout3d-server.js` | Connection lifecycle, parsing, broadcast | Any game decision |
 | `server/board.js` | Leaderboard merging and ranking | Node APIs, imports, I/O, a clock |
-| `server/board-store.js` | Reading and writing the four board files | Any ranking decision |
+| `server/board-store.js` | Reading and writing the five board files | Any ranking decision |
 | `src/pages/Play.jsx` | Rendering and input | Simulation, prediction, rule checks |
+| `src/pages/Blockout3D.jsx` | Scene, camera, input, HUD | Simulation, prediction, rule checks |
 
 `game.js` has zero imports on purpose — that purity is why all ~60 tests live against it and why `server.js` and `Play.jsx` have none. Put new logic there, not in the socket wrapper.
 
-**The server is authoritative for everything**: move legality, elimination, who won. The client sends `{t:'join'|'move'|'use'}` and renders the `{t:'state'}` snapshot it receives at 10 Hz. There is no client-side prediction or interpolation, so that entire class of desync bug does not exist. Keep it that way.
+**The server is authoritative for everything**: move legality, elimination, who won. The client sends `{t:'join'|'move'|'use'}` and renders the `{t:'state'}` snapshot it receives at 10 Hz.
+
+**There is no client-side prediction anywhere, and there never will be.** That
+is what keeps the desync class out of all four games: no client ever holds a
+state the server did not author.
+
+**Interpolation is a different thing and is allowed.** Blockout Royale 3D
+renders ~100 ms behind and blends between two snapshots it has *actually
+received* (`src/lib/snapshotBuffer.js`). It renders the recent past, never a
+guessed future, so it cannot desync. The other three games interpolate nothing
+because at their tick rates they do not need to. Do not confuse the two rules:
+predicting your own input ahead of the server is banned; drawing between two
+frames the server sent is not.
 
 **Full state every tick, never diffs.** `snapshot()` returns `state.tiles` **by live reference**, not a copy. That is only safe because `server.js` calls `JSON.stringify(snapshot(match))` synchronously in the same turn as `tick()`. Never retain a snapshot across an await, a timer, or a later tick, and never stash them for diffing.
 
 ## The leaderboard
 
-Four files, one per match server, each with **exactly one writer**. That is the
+Five files, one per match server, each with **exactly one writer**. That is the
 whole concurrency design: no two processes ever write the same path, so there
 is nothing to lock. `BOARD_DIR` says where they live (`./data` in dev,
 `/var/lib/rivalblocks/board` deployed).
@@ -80,7 +96,9 @@ is nothing to lock. `BOARD_DIR` says where they live (`./data` in dev,
   Royale banks every *round*: its rounds are short and self-contained, so the
   round is the unit worth recording. Blockout still has a match — it gained
   `ROUND_TARGET`, where before its rounds ran forever — but that only drives the
-  victory screen, not the board.
+  victory screen, not the board. Blockout Royale 3D banks per round as well,
+  for the same reason, and unlike flat Blockout it banks real kills and deaths
+  — a stomp, a sinkhole and a landing all have an author.
 
 ## Invariants that fail silently
 
@@ -111,6 +129,36 @@ is nothing to lock. `BOARD_DIR` says where they live (`./data` in dev,
   server that will not boot is an outage.
 - **Tests reference constants, never literals.** `SIZE`, `MAX_PLAYERS`, `COLLAPSE_COUNT` are tunable precisely because no test hardcodes `15` or `8`. Preserve this.
 - **The test helper `playing(n)` passes `() => 0` as rng** to force `ARENAS[0] === 'square'`, and freezes `nextCollapseAt`/`nextPowerupAt` at `Infinity`. Randomness in tests goes through an injected rng, never `Math.random`.
+- **Blockout 3D: tiles ship as one character each, indexed
+  `z * SIZE * SIZE + y * SIZE + x`.** 845 tiles as `'solid'|'warn'|'gone'`
+  strings is 300 KB/s per client at a 33 ms tick. `tileString()` is the only
+  encoder and `CHAR` the only table; a fifth tile state means touching both or
+  the wire silently carries `undefined`.
+- **Blockout 3D: the void and the collapse wave are two halves of one trade.**
+  The wave erodes every floor at once; the void eats the stack from the bottom
+  and stops at floor 0. Without the void the correct play is to stand on the top
+  floor and never descend, and the match is one flat Blockout round with four
+  unused floors under it — the same failure the Blastworks closing wall exists
+  to fix. Floor 0 is never consumed: once it is all that is left the game *is* a
+  flat Blockout round, which is the ending it is built to reach.
+- **Blockout 3D: `lift` is the only powerup that creates height.** Everything
+  else moves it or spends it; `swap` is zero-sum by construction. If matches run
+  long, `lift`'s frequency is the first thing to check, and the powerup bag
+  cannot express a weight below one draw in ten without restructuring.
+- **Blockout 3D: `kills`/`deaths` reset per round in `startRound`, because the
+  board banks per round.** They are cumulative from join otherwise, so a
+  best-of-three would bank a player's kills three times over and keep
+  compounding across matches in one session. Each counter is scoped to the
+  unit it is banked in: `wins` is match-scoped, kills and deaths are
+  round-scoped.
+- **Blockout 3D: `anchor` plates a tile without un-flagging it.** Plating is
+  armour, not a repair. A warned tile keeps its warning and is saved when
+  `resolveWarnings` spends the plate — so an anchor answers a wave you can see
+  coming without cancelling it for free.
+- **Blockout 3D: `hover` is one guard at the top of `startFall`.** A hole, a
+  stomp underfoot, a collapsing tile and a shove all drop a body through that
+  one function, so guarding there covers all four. Hover checks scattered
+  elsewhere would be a defect.
 
 ## Design rules inherited from the site
 
@@ -124,7 +172,7 @@ These are non-negotiable and predate the game:
 
 ## Deployment
 
-Single node, two tiers: nginx serves `dist/` and proxies four WebSocket paths to four Node processes on loopback, all four from one systemd template unit (`rivalblocks@<instance>`). nginx also serves `/board/` straight from `BOARD_DIR`. Full sequence in `deploy/DEPLOY.md`.
+Single node, two tiers: nginx serves `dist/` and proxies five WebSocket paths to five Node processes on loopback, all five from one systemd template unit (`rivalblocks@<instance>`). nginx also serves `/board/` straight from `BOARD_DIR`. Full sequence in `deploy/DEPLOY.md`.
 
 **No proxy path but `/ws` itself may begin with `/ws`.** nginx and vite both match by prefix, so `/ws-fracture` is silently swallowed by the Blockout rule and connects the player to the wrong game.
 

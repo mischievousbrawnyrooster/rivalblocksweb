@@ -1,9 +1,9 @@
 #!/bin/sh
-# runit service for one match server (Void Linux). One script, four services:
+# runit service for one match server (Void Linux). One script, five services:
 # the service directory name says which server to run, so this file is copied
 # unchanged into each of them.
 #
-#   for s in server fracture-server blastworks-server blastworks-dm; do
+#   for s in server fracture-server blastworks-server blastworks-dm blockout3d-server; do
 #     sudo mkdir -p "/etc/sv/rivalblocks-$s"
 #     sudo cp rivalblocks.run "/etc/sv/rivalblocks-$s/run"
 #     sudo chmod +x "/etc/sv/rivalblocks-$s/run"

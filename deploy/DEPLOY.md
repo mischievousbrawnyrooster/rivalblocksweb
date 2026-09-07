@@ -120,7 +120,7 @@ disk, and the config has not changed.
 
 ## The match servers
 
-`/play` needs a process holding the match, and there are four of them — one per
+`/play` needs a process holding the match, and there are five of them — one per
 game, plus a second Blastworks for the other mode. nginx keeps serving the site
 exactly as before and proxies each path to its own port.
 
@@ -130,6 +130,7 @@ exactly as before and proxies each path to its own port.
 | `/fracture-ws` | 8082 | `server/fracture-server.js` | Fracture Line |
 | `/blast-ws` | 8083 | `server/blastworks-server.js` | Blastworks, last man standing |
 | `/blast-dm-ws` | 8084 | `server/blastworks-dm.js` | Blastworks, deathmatch |
+| `/blockout3d-ws` | 8085 | `server/blockout3d-server.js` | Blockout Royale 3D |
 
 **No path but the first may begin with `/ws`.** nginx matches locations by
 prefix, so `/ws-fracture` would be swallowed by the Blockout Royale rule and
@@ -181,7 +182,7 @@ Expect `Blockout Royale match server on ws://127.0.0.1:8081`. Ctrl-C.
 
 ### Make somewhere for the leaderboard (once)
 
-The four servers write the standing board here and nginx serves it back out at
+The five servers write the standing board here and nginx serves it back out at
 `/board/`. It sits outside `/var/www` deliberately: replacing the served
 directory is how a redeploy works, and that must never take the leaderboard
 with it.
@@ -196,7 +197,7 @@ yet, which the site reads as an empty board.
 
 ### Run them under systemd (once)
 
-One template unit covers all four; the instance name is the file in `server/`
+One template unit covers all five; the instance name is the file in `server/`
 to run.
 
 ```bash
@@ -207,7 +208,8 @@ sudo systemctl enable --now \
     rivalblocks@server \
     rivalblocks@fracture-server \
     rivalblocks@blastworks-server \
-    rivalblocks@blastworks-dm
+    rivalblocks@blastworks-dm \
+    rivalblocks@blockout3d-server
 systemctl status "rivalblocks@*"
 ```
 
@@ -221,7 +223,7 @@ sudo systemctl disable --now rivalblocks-game
 
 ### Reload nginx with the proxies
 
-Two files: the site config, and the shared WebSocket headers its four proxy
+Two files: the site config, and the shared WebSocket headers its five proxy
 blocks include.
 
 ```bash
@@ -238,11 +240,11 @@ sudo systemctl reload nginx
 From another machine, open `http://<vm-ip>/play` in two browser windows, join
 with two names, and play a round.
 
-If a board never appears, the handshake is the first suspect. Check all four —
+If a board never appears, the handshake is the first suspect. Check all five —
 a mistake in the prefix rules shows as one game working and another not:
 
 ```bash
-for path in /ws /fracture-ws /blast-ws /blast-dm-ws; do
+for path in /ws /fracture-ws /blast-ws /blast-dm-ws /blockout3d-ws; do
   printf "%s " "$path"
   curl -s -o /dev/null -w "%{http_code}\n" -N \
     -H "Connection: Upgrade" -H "Upgrade: websocket" \
@@ -274,12 +276,13 @@ sudo systemctl start \
     rivalblocks@server \
     rivalblocks@fracture-server \
     rivalblocks@blastworks-server \
-    rivalblocks@blastworks-dm
+    rivalblocks@blastworks-dm \
+    rivalblocks@blockout3d-server
 ```
 
 nginx needs nothing unless its config changed. The leaderboard is untouched by
 any of this — it lives on disk, not in the processes — so restarting one server
-or all four costs nothing but the match in progress.
+or all five costs nothing but the match in progress.
 
 ### What is on the wire
 
@@ -335,11 +338,11 @@ grep -E '^\s*user' /etc/nginx/nginx.conf
 ### runit, not systemd
 
 Ignore `rivalblocks@.service`; use `rivalblocks.run`. It is one script copied
-into four service directories — it reads the directory name to know which
+into five service directories — it reads the directory name to know which
 server it is starting.
 
 ```sh
-for s in server fracture-server blastworks-server blastworks-dm; do
+for s in server fracture-server blastworks-server blastworks-dm blockout3d-server; do
   sudo mkdir -p "/etc/sv/rivalblocks-$s"
   sudo cp rivalblocks.run "/etc/sv/rivalblocks-$s/run"
   sudo chmod +x "/etc/sv/rivalblocks-$s/run"

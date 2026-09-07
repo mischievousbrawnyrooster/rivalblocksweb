@@ -1,4 +1,4 @@
-# One unit for all four match servers. The instance name is the file in
+# One unit for all five match servers. The instance name is the file in
 # server/ to run, and each of those already knows its own port and mode — so
 # there is nothing to configure per instance and no way for a unit file to
 # disagree with the code it starts.
@@ -9,7 +9,8 @@
 #       rivalblocks@server \
 #       rivalblocks@fracture-server \
 #       rivalblocks@blastworks-server \
-#       rivalblocks@blastworks-dm
+#       rivalblocks@blastworks-dm \
+#       rivalblocks@blockout3d-server
 #
 # Replaces the old single-game rivalblocks-game.service. If that one is still
 # installed, disable it first or two processes will fight over port 8081:
