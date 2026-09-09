@@ -55,6 +55,43 @@ function makeIconTexture(glyph) {
   return new THREE.CanvasTexture(c)
 }
 
+export function createAstronaut(slot, slotColor) {
+  const group = new THREE.Group()
+  const mat = new THREE.MeshLambertMaterial({ color: slotColor })
+  const visorMat = new THREE.MeshLambertMaterial({ color: '#7ce8ff' })
+
+  // Suit Body
+  const bodyGeo = new THREE.CapsuleGeometry(0.24, 0.36, 8, 16)
+  const body = new THREE.Mesh(bodyGeo, mat)
+  body.position.y = 0.12
+  group.add(body)
+
+  // Visor
+  const visorGeo = new THREE.BoxGeometry(0.26, 0.16, 0.12)
+  const visor = new THREE.Mesh(visorGeo, visorMat)
+  visor.position.set(0, 0.18, 0.2)
+  group.add(visor)
+
+  // Oxygen Tank Backpack
+  const packGeo = new THREE.BoxGeometry(0.24, 0.32, 0.12)
+  const pack = new THREE.Mesh(packGeo, mat)
+  pack.position.set(0, 0.12, -0.2)
+  group.add(pack)
+
+  // Left & Right Boots
+  const bootGeo = new THREE.CylinderGeometry(0.07, 0.08, 0.16, 8)
+  const leftBoot = new THREE.Mesh(bootGeo, mat)
+  leftBoot.position.set(-0.11, -0.14, 0)
+  group.add(leftBoot)
+
+  const rightBoot = new THREE.Mesh(bootGeo, mat)
+  rightBoot.position.set(0.11, -0.14, 0)
+  group.add(rightBoot)
+
+  group.userData = { body, visor, pack, leftBoot, rightBoot, mat, visorMat, slot }
+  return group
+}
+
 export function makeScene(canvas, { size, floors }) {
   const renderer = new THREE.WebGLRenderer({ canvas, antialias: true })
   renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2))
@@ -121,8 +158,7 @@ export function makeScene(canvas, { size, floors }) {
   scene.add(pickCores)
   scene.add(pickRings)
 
-  const bodyGeo = new THREE.BoxGeometry(0.62, 0.9, 0.62)
-  const bodies = new Map() // playerId -> Mesh
+  const bodies = new Map() // playerId -> Group (astronaut)
   const labels = new Map() // playerId -> Sprite, the billboard glyph above it
 
   // Eight small textures, built once and reused by every player who ever
@@ -161,7 +197,7 @@ export function makeScene(canvas, { size, floors }) {
     pickMat.color.set(token('--flare', '#ff6b1a'))
     pickMat.emissive.set(token('--flare', '#ff6b1a'))
     for (const mesh of bodies.values()) {
-      mesh.material.color.set(playerColor(mesh.userData.slot ?? 0))
+      mesh.userData.mat.color.set(playerColor(mesh.userData.slot ?? 0))
     }
   }
   const themeWatch = new MutationObserver(retheme)
@@ -302,7 +338,7 @@ export function makeScene(canvas, { size, floors }) {
         let mesh = bodies.get(p.id)
         let label = labels.get(p.id)
         if (!mesh) {
-          mesh = new THREE.Mesh(bodyGeo, new THREE.MeshLambertMaterial({ color: playerColor(slot) }))
+          mesh = createAstronaut(slot, playerColor(slot))
           bodies.set(p.id, mesh)
           scene.add(mesh)
           // The billboard glyph. Always faces the camera (THREE.Sprite does
@@ -317,14 +353,26 @@ export function makeScene(canvas, { size, floors }) {
         // joining or leaving), so this is a rare write, not a per-frame one.
         if (mesh.userData.slot !== slot) {
           mesh.userData.slot = slot
-          mesh.material.color.set(playerColor(slot))
+          mesh.userData.mat.color.set(playerColor(slot))
           label.material = iconMat[slot]
         }
-        mesh.position.set(p.x, worldY(p.z, p.fall) + 0.62, p.y)
+        const jumpArc = p.jumping ? 4 * 0.85 * p.jumpProgress * (1 - p.jumpProgress) : 0
+        mesh.position.set(p.x, worldY(p.z, p.fall) + 0.52 + jumpArc, p.y)
         mesh.visible = true
+
+        if (mesh.userData.lastX !== undefined) {
+          const dx = p.x - mesh.userData.lastX
+          const dy = p.y - mesh.userData.lastY
+          if (dx * dx + dy * dy > 0.0001) {
+            mesh.rotation.y = Math.atan2(dx, dy)
+          }
+        }
+        mesh.userData.lastX = p.x
+        mesh.userData.lastY = p.y
+
         // A wind-up is a shape change, not a tint.
         mesh.scale.setScalar(p.stomping ? 1.25 : 1)
-        label.position.set(p.x, mesh.position.y + 0.75, p.y)
+        label.position.set(p.x, worldY(p.z, p.fall) + 1.25 + jumpArc, p.y)
         label.visible = true
       }
       for (const [id, mesh] of bodies) {
@@ -346,7 +394,6 @@ export function makeScene(canvas, { size, floors }) {
       postGeo.dispose()
       pickCoreGeo.dispose()
       pickRingGeo.dispose()
-      bodyGeo.dispose()
       for (const mesh of tiles) mesh.dispose()
       posts.dispose()
       pickCores.dispose()
@@ -354,7 +401,17 @@ export function makeScene(canvas, { size, floors }) {
       for (const mat of tileMats) mat.dispose()
       postMat.dispose()
       pickMat.dispose()
-      for (const mesh of bodies.values()) mesh.material.dispose()
+      for (const group of bodies.values()) {
+        group.userData.body?.geometry?.dispose()
+        group.userData.visor?.geometry?.dispose()
+        group.userData.pack?.geometry?.dispose()
+        group.userData.leftBoot?.geometry?.dispose()
+        if (group.userData.rightBoot?.geometry !== group.userData.leftBoot?.geometry) {
+          group.userData.rightBoot?.geometry?.dispose()
+        }
+        group.userData.mat?.dispose()
+        group.userData.visorMat?.dispose()
+      }
       for (const mat of iconMat) mat.dispose()
       for (const tex of iconTex) tex.dispose()
     },
