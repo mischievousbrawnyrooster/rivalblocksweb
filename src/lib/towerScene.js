@@ -132,6 +132,8 @@ export function makeScene(canvas, { size, floors }) {
 
   const m4 = new THREE.Matrix4()
   const scaleM = new THREE.Matrix4()
+  const rotM = new THREE.Matrix4()
+  const ringTiltM = new THREE.Matrix4().makeRotationX(Math.PI / 4)
   const col = new THREE.Color()
   const hidden = new THREE.Matrix4().makeScale(0, 0, 0)
 
@@ -255,8 +257,6 @@ export function makeScene(canvas, { size, floors }) {
       const bob = Math.sin(tSec * 3.5) * 0.12
       const rotCore = tSec * 1.8
       const rotRing = -tSec * 2.2
-      const rotM = new THREE.Matrix4()
-      const ringTiltM = new THREE.Matrix4().makeRotationX(Math.PI / 4)
 
       let n = 0
       for (const key of Object.keys(view.powerups ?? {})) {
