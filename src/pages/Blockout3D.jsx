@@ -3,8 +3,9 @@ import { Link } from 'react-router-dom'
 import Leaderboard from '../components/Leaderboard.jsx'
 import { useTitle } from '../lib/useTitle.js'
 import { useFavicon } from '../lib/useFavicon.js'
+import { makeCamera, orbit, worldDir, poseFor } from '../lib/followCamera.js'
 import { makeBuffer } from '../lib/snapshotBuffer.js'
-import { makeScene } from '../lib/towerScene.js'
+import { makeScene, FLOOR_GAP } from '../lib/towerScene.js'
 
 // Keyed on e.code, so the binding survives a different keyboard layout.
 const KEYS = {
@@ -88,6 +89,7 @@ export default function Blockout3D() {
   const canvasRef = useRef(null)
   const wsRef = useRef(null)
   const bufRef = useRef(makeBuffer(DELAY_MS))
+  const camRef = useRef(makeCamera())
   const heldRef = useRef(new Set())
   const [joined, setJoined] = useState(false)
   const [name, setName] = useState('')
@@ -102,6 +104,7 @@ export default function Blockout3D() {
     // last frames and the new one's first is not a thing that should happen.
     bufRef.current = makeBuffer(DELAY_MS)
     heldRef.current.clear()
+    camRef.current = makeCamera()
     setLostConnection(false)
     const proto = location.protocol === 'https:' ? 'wss:' : 'ws:'
     const ws = new WebSocket(`${proto}//${location.host}/blockout3d-ws`)
@@ -181,7 +184,11 @@ export default function Blockout3D() {
         dx += KEYS[code][0]
         dy += KEYS[code][1]
       }
-      wsRef.current?.send(JSON.stringify({ t: 'input', dir: [dx, dy] }))
+      // Screen directions become world directions here, and nowhere else. The
+      // server's contract is unchanged: it still receives a world vector and
+      // knows nothing about cameras.
+      const [wx, wy] = worldDir(camRef.current, dx, dy)
+      wsRef.current?.send(JSON.stringify({ t: 'input', dir: [wx, wy] }))
     }, SEND_MS)
     return () => clearInterval(id)
   }, [joined])
@@ -192,10 +199,16 @@ export default function Blockout3D() {
     const scene = makeScene(canvasRef.current, { size: hud.size, floors: hud.floors })
     let raf = 0
     const frame = () => {
-      const view = bufRef.current.sample(performance.now())
+      const view = bufRef.current.sample(performance.now(), meRef.current)
       if (view) {
         const me = view.players.find((p) => p.id === meRef.current)
-        scene.update(view, { viewZ: me?.z ?? 0 })
+        const slotOf = new Map(view.players.map((p, i) => [p.id, i]))
+        // No body to follow in the lobby, while spectating, or once you are
+        // out — the scene falls back to its overview when pose is undefined.
+        const pose = me && me.playing && me.alive
+          ? poseFor(camRef.current, me, FLOOR_GAP)
+          : undefined
+        scene.update(view, { viewZ: me?.z ?? 0, slotOf, pose })
       }
       raf = requestAnimationFrame(frame)
     }
@@ -218,7 +231,7 @@ export default function Blockout3D() {
     }
     const mm = (e) => {
       if (!dragging) return
-      scene.orbit(e.clientX - lx, e.clientY - ly)
+      orbit(camRef.current, e.clientX - lx, e.clientY - ly)
       lx = e.clientX
       ly = e.clientY
     }
