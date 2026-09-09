@@ -107,11 +107,19 @@ export function makeScene(canvas, { size, floors }) {
   posts.instanceMatrix.setUsage(THREE.DynamicDrawUsage)
   scene.add(posts)
 
-  const pickGeo = new THREE.OctahedronGeometry(0.28)
-  const pickMat = new THREE.MeshLambertMaterial({ color: token('--flare', '#ff6b1a') })
-  const picks = new THREE.InstancedMesh(pickGeo, pickMat, 64)
-  picks.instanceMatrix.setUsage(THREE.DynamicDrawUsage)
-  scene.add(picks)
+  const pickCoreGeo = new THREE.IcosahedronGeometry(0.36, 0)
+  const pickRingGeo = new THREE.TorusGeometry(0.52, 0.045, 8, 24)
+  const pickMat = new THREE.MeshLambertMaterial({
+    color: token('--flare', '#ff6b1a'),
+    emissive: token('--flare', '#ff6b1a'),
+    emissiveIntensity: 0.25,
+  })
+  const pickCores = new THREE.InstancedMesh(pickCoreGeo, pickMat, 64)
+  const pickRings = new THREE.InstancedMesh(pickRingGeo, pickMat, 64)
+  pickCores.instanceMatrix.setUsage(THREE.DynamicDrawUsage)
+  pickRings.instanceMatrix.setUsage(THREE.DynamicDrawUsage)
+  scene.add(pickCores)
+  scene.add(pickRings)
 
   const bodyGeo = new THREE.BoxGeometry(0.62, 0.9, 0.62)
   const bodies = new Map() // playerId -> Mesh
@@ -149,6 +157,7 @@ export function makeScene(canvas, { size, floors }) {
     warnCol.set(token('--warn', '#e8a33d'))
     postMat.color.set(token('--warn', '#e8a33d'))
     pickMat.color.set(token('--flare', '#ff6b1a'))
+    pickMat.emissive.set(token('--flare', '#ff6b1a'))
     for (const mesh of bodies.values()) {
       mesh.material.color.set(playerColor(mesh.userData.slot ?? 0))
     }
@@ -242,16 +251,42 @@ export function makeScene(canvas, { size, floors }) {
         }
       }
 
+      const tSec = performance.now() * 0.001
+      const bob = Math.sin(tSec * 3.5) * 0.12
+      const rotCore = tSec * 1.8
+      const rotRing = -tSec * 2.2
+      const rotM = new THREE.Matrix4()
+      const ringTiltM = new THREE.Matrix4().makeRotationX(Math.PI / 4)
+
       let n = 0
       for (const key of Object.keys(view.powerups ?? {})) {
-        if (n >= picks.count) break
+        if (n >= 64) break
         const i = Number(key)
         const z = Math.floor(i / (size * size))
-        m4.makeTranslation((i % size) + 0.5, worldY(z) + 0.5, (Math.floor(i / size) % size) + 0.5)
-        picks.setMatrixAt(n++, m4)
+        const px = (i % size) + 0.5
+        const py = worldY(z) + 0.65 + bob
+        const pz = (Math.floor(i / size) % size) + 0.5
+
+        // Core translation and rotation
+        m4.makeTranslation(px, py, pz)
+        rotM.makeRotationY(rotCore)
+        m4.multiply(rotM)
+        pickCores.setMatrixAt(n, m4)
+
+        // Orbital ring translation and counter-rotation
+        m4.makeTranslation(px, py, pz)
+        rotM.makeRotationY(rotRing)
+        m4.multiply(ringTiltM)
+        m4.multiply(rotM)
+        pickRings.setMatrixAt(n, m4)
+        n++
       }
-      for (let i = n; i < 64; i++) picks.setMatrixAt(i, hidden)
-      picks.instanceMatrix.needsUpdate = true
+      for (let i = n; i < 64; i++) {
+        pickCores.setMatrixAt(i, hidden)
+        pickRings.setMatrixAt(i, hidden)
+      }
+      pickCores.instanceMatrix.needsUpdate = true
+      pickRings.instanceMatrix.needsUpdate = true
 
       // Slot = index in the current player list, the same convention
       // Play.jsx and Blastworks.jsx key a piece's colour and icon by, and
@@ -309,11 +344,13 @@ export function makeScene(canvas, { size, floors }) {
       renderer.dispose()
       tileGeo.dispose()
       postGeo.dispose()
-      pickGeo.dispose()
+      pickCoreGeo.dispose()
+      pickRingGeo.dispose()
       bodyGeo.dispose()
       for (const mesh of tiles) mesh.dispose()
       posts.dispose()
-      picks.dispose()
+      pickCores.dispose()
+      pickRings.dispose()
       for (const mat of tileMats) mat.dispose()
       postMat.dispose()
       pickMat.dispose()
