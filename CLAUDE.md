@@ -159,6 +159,20 @@ is nothing to lock. `BOARD_DIR` says where they live (`./data` in dev,
   stomp underfoot, a collapsing tile and a shove all drop a body through that
   one function, so guarding there covers all four. Hover checks scattered
   elsewhere would be a defect.
+- **Blockout 3D picks waves only from floors somebody is standing on; flat
+  Blockout picks uniformly across the whole board.** `pickWave` here used to
+  pick uniformly across the whole 845-tile stack too, and thirty seeded rounds
+  measured what that cost: 53% of drops chained straight into a second,
+  unwarned drop (357/671) — unoccupied floors below had already rotted
+  through before anyone arrived on them, so a fall onto one landed on ground
+  that was already gone. Restricting the candidate list to occupied floors,
+  with `COLLAPSE_EVERY_MS` held at the same value so the comparison isolates
+  this change alone, brought that to 38% (263/686). The divergence is
+  deliberate, and the reason is the third axis: a flat board has nowhere to
+  fall to, so eroding it evenly costs nothing, while a stack that erodes where
+  nobody is looking punishes the descent the whole design is built around.
+  `pickWave` falls back to the whole stack when no floor holds a living
+  player, or the collapse would stall between rounds.
 
 ## Design rules inherited from the site
 

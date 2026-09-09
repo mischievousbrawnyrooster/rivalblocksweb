@@ -31,9 +31,17 @@ export const DASH_MULT = 1.7
 // "stack is decoration" failure the design's open question 2 warned about.
 // At 3600 the same 30 seeds put floor 0 at half by 43.4s and a quarter by
 // 57.8s — landing right at the void's first bite, which is the target. Round
-// length moved with it: 33.3s average before, 64.9s after (target was "near
-// three minutes"; see the report for why this value was kept over a slower
-// one that hits that number but breaks the void race instead).
+// length moved with it: 33.3s average before, 64.9s after. Slower does not
+// buy a longer round for free: at 7200 floor 0 only reached half-solid in
+// 6 of 30 rounds (86.8s when it did) and round length only rose to 81.9s; at
+// 14400 floor 0 never reached half-solid at all and round length rose to just
+// 97.7s. Past about 7200 the void starts winning the race outright — floor 0
+// stops being a threat before the void ever touches it, the opposite failure
+// this constant exists to avoid — while round length keeps falling short of
+// "near three minutes" regardless, because once the collapse stops being the
+// dominant killer, elimination shifts to accumulated stray holes and the void
+// itself, both with their own pace this constant does not touch. 3600 is the
+// point closest to the void-race target of the values tried.
 export const COLLAPSE_EVERY_MS = 3600
 export const COLLAPSE_COUNT = 8
 export const COLLAPSE_SHARE = 0.06
