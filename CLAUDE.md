@@ -66,7 +66,7 @@ is what keeps the desync class out of all four games: no client ever holds a
 state the server did not author.
 
 **Interpolation is a different thing and is allowed.** Blockout Royale 3D
-renders ~100 ms behind and blends between two snapshots it has *actually
+renders ~60 ms behind and blends between two snapshots it has *actually
 received* (`src/lib/snapshotBuffer.js`). It renders the recent past, never a
 guessed future, so it cannot desync. The other three games interpolate nothing
 because at their tick rates they do not need to. Do not confuse the two rules:
@@ -74,7 +74,7 @@ predicting your own input ahead of the server is banned; drawing between two
 frames the server sent is not.
 Blockout Royale 3D exempts one player from that delay: the client draws the
 body its camera is following at the newest position received, while everyone
-else stays smoothed 100 ms back (`sample(now, liveId)`). That is still not
+else stays smoothed 60 ms back (`sample(now, liveId)`). That is still not
 prediction — nothing simulates ahead of the server, and the position drawn is
 one the server has already sent. It is there because a camera attached to a
 body feels the replay delay as the whole world lagging the mouse.
@@ -162,8 +162,8 @@ is nothing to lock. `BOARD_DIR` says where they live (`./data` in dev,
   `resolveWarnings` spends the plate — so an anchor answers a wave you can see
   coming without cancelling it for free.
 - **Blockout 3D: `hover` is one guard at the top of `startFall`.** A hole, a
-  stomp underfoot, a collapsing tile and a shove all drop a body through that
-  one function, so guarding there covers all four. Hover checks scattered
+  collapsing tile and a shove all drop a body through that
+  one function, so guarding there covers all three. Hover checks scattered
   elsewhere would be a defect.
 - **Blockout 3D picks waves only from floors somebody is standing on; flat
   Blockout picks uniformly across the whole board.** `pickWave` here used to
@@ -192,12 +192,33 @@ is nothing to lock. `BOARD_DIR` says where they live (`./data` in dev,
   pure and tested precisely because it failed silently: at yaw 0 it returns the
   input unchanged, so the wrong version looks correct until you notice the
   camera never starts at zero.
+- **Blockout 3D matches are single-round (`ROUND_TARGET = 1`) and advance at 60 FPS (`TICK_MS = 16`).**
+  Multi-round targets caused long matches across five floors. With `ROUND_TARGET = 1`,
+  the first round win triggers `state.final = true` and concludes the match. Both
+  the rules engine tick and client input stream run at 60 Hz (`TICK_MS = 16`,
+  `SEND_MS = 16`), with the client interpolation window set to 60 ms (`DELAY_MS = 60`).
+- **Blockout 3D: `jump` authoritatively clears 1-tile gaps without falling while airborne.**
+  Space triggers `jump` (`JUMP_DURATION_MS = 420`, `JUMP_COOLDOWN_MS = 750`,
+  `JUMP_SPEED_BOOST = 1.25`). During `state.now < p.jumpUntil`, `resolveFalls` ignores
+  missing or gone tiles under the player. Falling triggers only when the landing tile
+  is non-solid after the jump finishes. Jump arcs in `towerScene.js` are purely visual;
+  gap clearance and landing validity are strictly server-authoritative.
+- **Blockout 3D: camera navigation uses canvas pointer lock.**
+  Clicking the arena engages `canvas.requestPointerLock()`, feeding raw `movementX`
+  and `movementY` into `orbit()`, with Escape releasing lock. Drag-based rotation
+  fails silently when the mouse leaves the window or encounters screen boundaries.
+- **Blockout 3D visuals: characters and powerups use procedural Three.js primitives without image textures.**
+  3D chibi astronaut characters (capsule suit, cyan visor box, oxygen tank backpack,
+  stubby boot cylinders) and 3D collectible powerups (rotating icosahedron gem with
+  counter-rotating tilted torus ring) use procedural geometries and materials only.
+  Floating silhouette glyph billboard labels above heads preserve non-color player
+  identification under WCAG 1.4.1.
 
 ## Design rules inherited from the site
 
 These are non-negotiable and predate the game:
 
-- **No image files.** All artwork is generated CSS or inline SVG (`BlockArt.jsx`).
+- **No image files.** All artwork is generated CSS, inline SVG (`BlockArt.jsx`), or procedural Three.js primitives (`towerScene.js`).
 - **Status is never communicated by colour alone** (WCAG 1.4.1). Warning tiles carry a glyph, holes differ structurally from solid tiles, players carry their initial.
 - **Player colour tokens (`--player-1..8`) are separate from status tokens** so a piece can never wear a tile's colour. Never reuse `--warn` for a player.
 - **Only existing `@theme` tokens** from `src/index.css`. No new tokens without reason, no `tailwind.config.js` (Tailwind v4 is CSS-first).
