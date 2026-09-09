@@ -54,30 +54,42 @@ export function makeBuffer(delayMs) {
       const span = newer.at - older.at
       const alpha = span > 0 ? Math.max(0, Math.min(1, (t - older.at) / span)) : 1
 
+      const newest = frames[frames.length - 1]
+      const livePlayer = liveId != null ? newest?.snap?.players?.find((p) => p.id === liveId) : null
+
       const was = new Map((older.snap.players ?? []).map((p) => [p.id, p]))
+      let liveIncluded = false
+      const players = (newer.snap.players ?? []).map((p) => {
+        // The player this client is following is drawn where the server last
+        // put them (the newest frame in the buffer), not three frames back.
+        // With the camera attached to that body, holding it back is felt as
+        // the whole world lagging the mouse. Still not prediction: this is a
+        // position the server has already sent, just not delayed.
+        if (p.id === liveId && livePlayer) {
+          liveIncluded = true
+          return livePlayer
+        }
+        const a = was.get(p.id)
+        // Somebody who was not there a frame ago is drawn where they are.
+        // Changing floors is taken whole rather than blended: a body halfway
+        // through a slab is worse than a body that arrives a frame early.
+        // Returned by reference, not copied — safe only because every
+        // caller of sample() reads this player read-only.
+        if (!a || a.z !== p.z) return p
+        return {
+          ...p,
+          x: a.x + (p.x - a.x) * alpha,
+          y: a.y + (p.y - a.y) * alpha,
+          fall: a.fall + (p.fall - a.fall) * alpha,
+        }
+      })
+      if (livePlayer && !liveIncluded) {
+        players.push(livePlayer)
+      }
+
       return {
         ...newer.snap,
-        players: (newer.snap.players ?? []).map((p) => {
-          // The player this client is following is drawn where the server last
-          // put them, not three frames back. With the camera attached to that
-          // body, holding it back is felt as the whole world lagging the mouse.
-          // Still not prediction: this is a position the server has already
-          // sent, just not delayed.
-          if (p.id === liveId) return p
-          const a = was.get(p.id)
-          // Somebody who was not there a frame ago is drawn where they are.
-          // Changing floors is taken whole rather than blended: a body halfway
-          // through a slab is worse than a body that arrives a frame early.
-          // Returned by reference, not copied — safe only because every
-          // caller of sample() reads this player read-only.
-          if (!a || a.z !== p.z) return p
-          return {
-            ...p,
-            x: a.x + (p.x - a.x) * alpha,
-            y: a.y + (p.y - a.y) * alpha,
-            fall: a.fall + (p.fall - a.fall) * alpha,
-          }
-        }),
+        players,
       }
     },
   }
