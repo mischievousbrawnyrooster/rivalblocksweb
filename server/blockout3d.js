@@ -64,8 +64,8 @@ export const OVER_MS = 5000
 export const MIN_PLAYERS = 2
 export const ROUND_TARGET = 1
 
-export const POWERUP_EVERY_MS = 1600
-export const POWERUP_MAX = 12
+export const POWERUP_EVERY_MS = 800
+export const POWERUP_MAX = 20
 
 export const BOT_FILL_TO = 5
 export const BOT_REACT_MS = 260

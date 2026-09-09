@@ -55,6 +55,146 @@ function makeIconTexture(glyph) {
   return new THREE.CanvasTexture(c)
 }
 
+/**
+ * Procedural platform tile texture: combines a sci-fi modular tech deck
+ * (beveled frame, recessed industrial plate, corner mounting rivets)
+ * with cybernetic circuit traces and a center tech node glyph.
+ * Rendered once into an offscreen canvas and tinted via instanceColor.
+ */
+function makeTileTexture() {
+  const size = 128
+  const c = document.createElement('canvas')
+  c.width = size
+  c.height = size
+  const g = c.getContext('2d')
+
+  // Base metallic surface
+  g.fillStyle = '#cfd4dc'
+  g.fillRect(0, 0, size, size)
+
+  // Outer dark boundary rim for crisp tile separation
+  g.strokeStyle = '#2d3139'
+  g.lineWidth = 6
+  g.strokeRect(3, 3, size - 6, size - 6)
+
+  // Inner beveled highlight and shadow
+  g.strokeStyle = '#f4f6fa'
+  g.lineWidth = 2
+  g.strokeRect(7, 7, size - 14, size - 14)
+
+  g.strokeStyle = '#636975'
+  g.lineWidth = 2
+  g.strokeRect(9, 9, size - 18, size - 18)
+
+  // Recessed inner plate
+  g.fillStyle = '#b6bcc7'
+  g.fillRect(10, 10, size - 20, size - 20)
+
+  // Subtle interior crosshatch grid lines
+  g.strokeStyle = '#a4abb8'
+  g.lineWidth = 1
+  for (let p = 24; p < size - 20; p += 16) {
+    g.beginPath()
+    g.moveTo(p, 12)
+    g.lineTo(p, size - 12)
+    g.stroke()
+    g.beginPath()
+    g.moveTo(12, p)
+    g.lineTo(size - 12, p)
+    g.stroke()
+  }
+
+  // Corner hex rivets / bolts (4 corners)
+  const rivets = [
+    [18, 18],
+    [size - 18, 18],
+    [18, size - 18],
+    [size - 18, size - 18],
+  ]
+  for (const [rx, ry] of rivets) {
+    // Socket ring
+    g.fillStyle = '#444a56'
+    g.beginPath()
+    g.arc(rx, ry, 5, 0, Math.PI * 2)
+    g.fill()
+    // Bolt rim highlight
+    g.fillStyle = '#f0f3f8'
+    g.beginPath()
+    g.arc(rx - 0.7, ry - 0.7, 3.2, 0, Math.PI * 2)
+    g.fill()
+    // Bolt center
+    g.fillStyle = '#5c6370'
+    g.beginPath()
+    g.arc(rx, ry, 1.6, 0, Math.PI * 2)
+    g.fill()
+  }
+
+  // Cybernetic circuit traces / bus routes with 45-degree angled jogs
+  g.strokeStyle = '#5a6270'
+  g.lineWidth = 2.5
+  g.beginPath()
+  // Horizontal routing
+  g.moveTo(26, 42)
+  g.lineTo(46, 42)
+  g.lineTo(54, 50)
+  g.lineTo(74, 50)
+  g.lineTo(82, 42)
+  g.lineTo(size - 26, 42)
+
+  g.moveTo(26, size - 42)
+  g.lineTo(46, size - 42)
+  g.lineTo(54, size - 50)
+  g.lineTo(74, size - 50)
+  g.lineTo(82, size - 42)
+  g.lineTo(size - 26, size - 42)
+
+  // Vertical routing
+  g.moveTo(42, 26)
+  g.lineTo(42, 42)
+  g.moveTo(size - 42, 26)
+  g.lineTo(size - 42, 42)
+  g.moveTo(42, size - 42)
+  g.lineTo(42, size - 26)
+  g.moveTo(size - 42, size - 42)
+  g.lineTo(size - 42, size - 26)
+  g.stroke()
+
+  // Center tech diamond node
+  const mid = size / 2
+  g.fillStyle = '#828a99'
+  g.beginPath()
+  g.moveTo(mid, mid - 15)
+  g.lineTo(mid + 15, mid)
+  g.lineTo(mid, mid + 15)
+  g.lineTo(mid - 15, mid)
+  g.closePath()
+  g.fill()
+
+  // Node highlight ring
+  g.strokeStyle = '#f2f5fa'
+  g.lineWidth = 2
+  g.beginPath()
+  g.moveTo(mid, mid - 15)
+  g.lineTo(mid + 15, mid)
+  g.lineTo(mid, mid + 15)
+  g.lineTo(mid - 15, mid)
+  g.closePath()
+  g.stroke()
+
+  // Center aperture core
+  g.fillStyle = '#3a404c'
+  g.beginPath()
+  g.arc(mid, mid, 4.5, 0, Math.PI * 2)
+  g.fill()
+  g.fillStyle = '#ffffff'
+  g.beginPath()
+  g.arc(mid - 1, mid - 1, 1.8, 0, Math.PI * 2)
+  g.fill()
+
+  const tex = new THREE.CanvasTexture(c)
+  return tex
+}
+
 export function createAstronaut(slot, slotColor) {
   const group = new THREE.Group()
   const mat = new THREE.MeshLambertMaterial({ color: slotColor })
@@ -122,11 +262,16 @@ export function makeScene(canvas, { size, floors }) {
   // fading the floors above the player needs a material per floor. Five draw
   // calls, not one, and still not the 845 that drawing tiles individually
   // would cost.
+  const tileTex = makeTileTexture()
   const tileGeo = new THREE.BoxGeometry(TILE * 0.94, 0.35, TILE * 0.94)
   const tileMats = []
   const tiles = []
   for (let z = 0; z < floors; z++) {
-    const mat = new THREE.MeshLambertMaterial({ transparent: true, depthWrite: true })
+    const mat = new THREE.MeshLambertMaterial({
+      map: tileTex,
+      transparent: true,
+      depthWrite: true,
+    })
     const mesh = new THREE.InstancedMesh(tileGeo, mat, perFloor)
     mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage)
     mesh.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(perFloor * 3), 3)
@@ -414,6 +559,7 @@ export function makeScene(canvas, { size, floors }) {
       }
       for (const mat of iconMat) mat.dispose()
       for (const tex of iconTex) tex.dispose()
+      tileTex.dispose()
     },
   }
 }
