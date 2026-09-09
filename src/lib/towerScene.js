@@ -55,40 +55,495 @@ function makeIconTexture(glyph) {
   return new THREE.CanvasTexture(c)
 }
 
-const ITEM_GLYPH = {
-  shield: '◈',
-  dash: '»',
-  sinkhole: '◍',
-  patch: '▦',
-  blink: '↷',
-  swap: '⇄',
-  foresight: '◎',
-  shove: '↦',
-  hover: '⇧',
-  bridge: '▬',
-  anchor: '╀',
-  lift: '⇑',
+export const POWERUP_THEMES = {
+  shield:    { core: '#38bdf8', ring: '#0284c7', label: 'SHIELD',    glyph: '◈' },
+  dash:      { core: '#facc15', ring: '#eab308', label: 'DASH',      glyph: '»' },
+  sinkhole:  { core: '#c084fc', ring: '#9333ea', label: 'SINKHOLE',  glyph: '◍' },
+  patch:     { core: '#4ade80', ring: '#16a34a', label: 'PATCH',     glyph: '✚' },
+  blink:     { core: '#f472b6', ring: '#db2777', label: 'BLINK',     glyph: '↷' },
+  swap:      { core: '#fb923c', ring: '#ea580c', label: 'SWAP',      glyph: '⇄' },
+  foresight: { core: '#22d3ee', ring: '#0891b2', label: 'FORESIGHT', glyph: '◎' },
+  shove:     { core: '#f87171', ring: '#dc2626', label: 'SHOVE',     glyph: '↦' },
+  hover:     { core: '#a5b4fc', ring: '#6366f1', label: 'HOVER',     glyph: '⇧' },
+  bridge:    { core: '#fcd34d', ring: '#d97706', label: 'BRIDGE',    glyph: '▬' },
+  anchor:    { core: '#94a3b8', ring: '#475569', label: 'ANCHOR',    glyph: '⚓' },
+  lift:      { core: '#34d399', ring: '#059669', label: 'LIFT',      glyph: '⇑' },
 }
 
-function makeItemTexture(glyph) {
-  const c = document.createElement('canvas')
-  c.width = c.height = 64
-  const g = c.getContext('2d')
-  // Dark translucent backing circle
-  g.fillStyle = 'rgba(22, 22, 26, 0.88)'
+function drawHex(g, x, y, r) {
   g.beginPath()
-  g.arc(32, 32, 28, 0, Math.PI * 2)
-  g.fill()
-  // Orange flare border ring
-  g.strokeStyle = '#ff6b1a'
-  g.lineWidth = 3
+  for (let i = 0; i < 6; i++) {
+    const a = (i * Math.PI) / 3
+    const hx = x + r * Math.cos(a)
+    const hy = y + r * Math.sin(a)
+    if (i === 0) g.moveTo(hx, hy)
+    else g.lineTo(hx, hy)
+  }
+  g.closePath()
   g.stroke()
-  // Glyph in center
+}
+
+/** Procedural sci-fi power core texture with circuit traces and reactor coils */
+function makeCoreTexture() {
+  const size = 256
+  const c = document.createElement('canvas')
+  c.width = size
+  c.height = size
+  const g = c.getContext('2d')
+
+  // Base metallic crystal gradient
+  const grad = g.createRadialGradient(size / 2, size / 2, 8, size / 2, size / 2, size / 2)
+  grad.addColorStop(0, '#ffffff')
+  grad.addColorStop(0.45, '#d4dbe8')
+  grad.addColorStop(1, '#828d9f')
+  g.fillStyle = grad
+  g.fillRect(0, 0, size, size)
+
+  // Hexagonal honeycomb cyber-mesh
+  g.strokeStyle = 'rgba(38, 44, 56, 0.4)'
+  g.lineWidth = 2
+  const r = 24
+  const h = r * Math.sqrt(3)
+  for (let y = -h; y < size + h; y += h) {
+    for (let x = -r * 3; x < size + r * 3; x += r * 3) {
+      drawHex(g, x, y, r)
+      drawHex(g, x + r * 1.5, y + h / 2, r)
+    }
+  }
+
+  // Energy circuit routing
+  g.strokeStyle = '#ffffff'
+  g.lineWidth = 3.5
+  g.beginPath()
+  g.moveTo(size / 2, 16)
+  g.lineTo(size / 2, 72)
+  g.lineTo(size / 2 + 32, 104)
+  g.lineTo(size - 18, 104)
+
+  g.moveTo(size / 2, size - 16)
+  g.lineTo(size / 2, size - 72)
+  g.lineTo(size / 2 - 32, size - 104)
+  g.lineTo(18, size - 104)
+
+  g.moveTo(16, size / 2)
+  g.lineTo(72, size / 2)
+  g.lineTo(104, size / 2 - 32)
+  g.lineTo(104, 18)
+
+  g.moveTo(size - 16, size / 2)
+  g.lineTo(size - 72, size / 2)
+  g.lineTo(size - 104, size / 2 + 32)
+  g.lineTo(size - 104, size - 18)
+  g.stroke()
+
+  // Node terminals
   g.fillStyle = '#ffffff'
-  g.font = 'bold 34px monospace, sans-serif'
+  for (const [nx, ny] of [
+    [size / 2, 72],
+    [size / 2, size - 72],
+    [72, size / 2],
+    [size - 72, size / 2],
+  ]) {
+    g.beginPath()
+    g.arc(nx, ny, 6, 0, Math.PI * 2)
+    g.fill()
+  }
+
+  // Central plasma reactor aperture
+  const cx = size / 2
+  const cy = size / 2
+  g.fillStyle = '#181c24'
+  g.beginPath()
+  g.arc(cx, cy, 40, 0, Math.PI * 2)
+  g.fill()
+
+  g.strokeStyle = '#ffffff'
+  g.lineWidth = 4
+  g.beginPath()
+  g.arc(cx, cy, 33, 0, Math.PI * 2)
+  g.stroke()
+
+  g.fillStyle = '#ffffff'
+  g.beginPath()
+  g.arc(cx, cy, 18, 0, Math.PI * 2)
+  g.fill()
+
+  return new THREE.CanvasTexture(c)
+}
+
+function drawBadgeFrame(g, size) {
+  const pad = 6
+  const cut = 14
+  g.beginPath()
+  g.moveTo(pad + cut, pad)
+  g.lineTo(size - pad - cut, pad)
+  g.lineTo(size - pad, pad + cut)
+  g.lineTo(size - pad, size - pad - cut)
+  g.lineTo(size - pad - cut, size - pad)
+  g.lineTo(pad + cut, size - pad)
+  g.lineTo(pad, size - pad - cut)
+  g.lineTo(pad, pad + cut)
+  g.closePath()
+}
+
+function drawTechCorners(g, size) {
+  const p = 6
+  const l = 10
+  g.beginPath()
+  g.moveTo(p, p + l); g.lineTo(p, p); g.lineTo(p + l, p)
+  g.moveTo(size - p - l, p); g.lineTo(size - p, p); g.lineTo(size - p, p + l)
+  g.moveTo(size - p, size - p - l); g.lineTo(size - p, size - p); g.lineTo(size - p - l, size - p)
+  g.moveTo(p + l, size - p); g.lineTo(p, size - p); g.lineTo(p, size - p - l)
+  g.stroke()
+}
+
+function drawKindIcon(g, kind, cx, cy, theme) {
+  switch (kind) {
+    case 'shield': {
+      g.fillStyle = theme.core
+      g.beginPath()
+      g.moveTo(cx, cy - 22)
+      g.lineTo(cx + 19, cy - 14)
+      g.quadraticCurveTo(cx + 19, cy + 9, cx, cy + 24)
+      g.quadraticCurveTo(cx - 19, cy + 9, cx - 19, cy - 14)
+      g.closePath()
+      g.fill()
+      g.strokeStyle = '#ffffff'
+      g.lineWidth = 2.5
+      g.stroke()
+
+      g.fillStyle = '#0f172a'
+      g.beginPath()
+      g.moveTo(cx, cy - 12)
+      g.lineTo(cx + 10, cy - 7)
+      g.quadraticCurveTo(cx + 10, cy + 5, cx, cy + 15)
+      g.quadraticCurveTo(cx - 10, cy + 5, cx - 10, cy - 7)
+      g.closePath()
+      g.fill()
+
+      g.fillStyle = '#ffffff'
+      g.beginPath()
+      g.arc(cx, cy + 2, 4, 0, Math.PI * 2)
+      g.fill()
+      break
+    }
+    case 'dash': {
+      g.strokeStyle = '#ffffff'
+      g.lineWidth = 4.5
+      g.lineCap = 'round'
+      g.lineJoin = 'round'
+      for (const ox of [-14, 0, 14]) {
+        g.beginPath()
+        g.moveTo(cx + ox - 8, cy - 15)
+        g.lineTo(cx + ox + 6, cy)
+        g.lineTo(cx + ox - 8, cy + 15)
+        g.stroke()
+      }
+      break
+    }
+    case 'sinkhole': {
+      g.fillStyle = '#1e1035'
+      g.beginPath()
+      g.arc(cx, cy, 23, 0, Math.PI * 2)
+      g.fill()
+      g.strokeStyle = theme.core
+      g.lineWidth = 2.5
+      g.beginPath()
+      g.arc(cx, cy, 19, 0, Math.PI * 1.6)
+      g.stroke()
+      g.beginPath()
+      g.arc(cx, cy, 12, Math.PI * 0.8, Math.PI * 2.4)
+      g.stroke()
+      g.beginPath()
+      g.arc(cx, cy, 5, 0, Math.PI * 1.5)
+      g.stroke()
+
+      g.strokeStyle = '#ffffff'
+      g.lineWidth = 2
+      for (let a = 0; a < 4; a++) {
+        const ang = (a * Math.PI) / 2
+        g.beginPath()
+        g.moveTo(cx + Math.cos(ang) * 19, cy + Math.sin(ang) * 19)
+        g.lineTo(cx + Math.cos(ang) * 26, cy + Math.sin(ang) * 26)
+        g.stroke()
+      }
+      break
+    }
+    case 'patch': {
+      g.strokeStyle = 'rgba(255, 255, 255, 0.35)'
+      g.lineWidth = 1
+      g.strokeRect(cx - 21, cy - 21, 42, 42)
+      g.beginPath()
+      g.moveTo(cx - 7, cy - 21); g.lineTo(cx - 7, cy + 21)
+      g.moveTo(cx + 7, cy - 21); g.lineTo(cx + 7, cy + 21)
+      g.moveTo(cx - 21, cy - 7); g.lineTo(cx + 21, cy - 7)
+      g.moveTo(cx - 21, cy + 7); g.lineTo(cx + 21, cy + 7)
+      g.stroke()
+
+      g.fillStyle = '#ffffff'
+      g.fillRect(cx - 6, cy - 19, 12, 38)
+      g.fillRect(cx - 19, cy - 6, 38, 12)
+      g.fillStyle = theme.core
+      g.fillRect(cx - 3.5, cy - 3.5, 7, 7)
+      break
+    }
+    case 'blink': {
+      g.fillStyle = theme.ring
+      g.beginPath()
+      g.arc(cx - 15, cy + 11, 5.5, 0, Math.PI * 2)
+      g.fill()
+
+      g.strokeStyle = '#ffffff'
+      g.lineWidth = 3
+      g.beginPath()
+      g.moveTo(cx - 15, cy + 11)
+      g.quadraticCurveTo(cx - 2, cy - 24, cx + 13, cy - 8)
+      g.stroke()
+
+      const dX = cx + 13
+      const dY = cy - 8
+      g.fillStyle = theme.core
+      g.beginPath()
+      g.moveTo(dX, dY - 14)
+      g.lineTo(dX + 4, dY - 4)
+      g.lineTo(dX + 14, dY)
+      g.lineTo(dX + 4, dY + 4)
+      g.lineTo(dX, dY + 14)
+      g.lineTo(dX - 4, dY + 4)
+      g.lineTo(dX - 14, dY)
+      g.lineTo(dX - 4, dY - 4)
+      g.closePath()
+      g.fill()
+      g.fillStyle = '#ffffff'
+      g.beginPath()
+      g.arc(dX, dY, 3, 0, Math.PI * 2)
+      g.fill()
+      break
+    }
+    case 'swap': {
+      g.lineWidth = 3
+      g.strokeStyle = theme.core
+      g.beginPath()
+      g.arc(cx, cy, 17, -Math.PI * 0.85, -Math.PI * 0.1)
+      g.stroke()
+      g.fillStyle = theme.core
+      g.beginPath()
+      g.moveTo(cx + 16, cy - 3)
+      g.lineTo(cx + 9, cy - 13)
+      g.lineTo(cx + 5, cy - 2)
+      g.closePath()
+      g.fill()
+
+      g.strokeStyle = '#ffffff'
+      g.beginPath()
+      g.arc(cx, cy, 17, Math.PI * 0.15, Math.PI * 0.9)
+      g.stroke()
+      g.fillStyle = '#ffffff'
+      g.beginPath()
+      g.moveTo(cx - 16, cy + 3)
+      g.lineTo(cx - 9, cy + 13)
+      g.lineTo(cx - 5, cy + 2)
+      g.closePath()
+      g.fill()
+      break
+    }
+    case 'foresight': {
+      g.strokeStyle = '#ffffff'
+      g.lineWidth = 3
+      g.beginPath()
+      g.moveTo(cx - 23, cy)
+      g.quadraticCurveTo(cx, cy - 18, cx + 23, cy)
+      g.quadraticCurveTo(cx, cy + 18, cx - 23, cy)
+      g.stroke()
+
+      g.fillStyle = theme.core
+      g.beginPath()
+      g.arc(cx, cy, 9.5, 0, Math.PI * 2)
+      g.fill()
+
+      g.fillStyle = '#0f172a'
+      g.beginPath()
+      g.arc(cx, cy, 4.5, 0, Math.PI * 2)
+      g.fill()
+
+      g.fillStyle = '#ffffff'
+      g.beginPath()
+      g.arc(cx - 2, cy - 2, 2.5, 0, Math.PI * 2)
+      g.fill()
+      break
+    }
+    case 'shove': {
+      g.fillStyle = '#ffffff'
+      g.fillRect(cx - 17, cy - 9, 15, 18)
+      g.beginPath()
+      g.moveTo(cx - 2, cy - 11)
+      g.lineTo(cx + 6, cy)
+      g.lineTo(cx - 2, cy + 11)
+      g.closePath()
+      g.fill()
+
+      g.strokeStyle = theme.core
+      g.lineWidth = 3
+      g.beginPath()
+      g.arc(cx + 4, cy, 11, -Math.PI * 0.35, Math.PI * 0.35)
+      g.stroke()
+      g.beginPath()
+      g.arc(cx + 4, cy, 18, -Math.PI * 0.35, Math.PI * 0.35)
+      g.stroke()
+      break
+    }
+    case 'hover': {
+      g.fillStyle = '#ffffff'
+      g.fillRect(cx - 15, cy - 10, 30, 13)
+      g.fillRect(cx - 13, cy + 3, 7, 5)
+      g.fillRect(cx + 6, cy + 3, 7, 5)
+
+      g.fillStyle = theme.core
+      g.beginPath()
+      g.moveTo(cx - 13, cy + 8); g.lineTo(cx - 9.5, cy + 19); g.lineTo(cx - 6, cy + 8); g.closePath()
+      g.fill()
+      g.beginPath()
+      g.moveTo(cx + 6, cy + 8); g.lineTo(cx + 9.5, cy + 19); g.lineTo(cx + 13, cy + 8); g.closePath()
+      g.fill()
+
+      g.strokeStyle = '#ffffff'
+      g.lineWidth = 3
+      g.beginPath()
+      g.moveTo(cx - 7, cy - 15); g.lineTo(cx, cy - 22); g.lineTo(cx + 7, cy - 15)
+      g.stroke()
+      break
+    }
+    case 'bridge': {
+      g.fillStyle = theme.core
+      g.fillRect(cx - 23, cy - 13, 46, 5)
+      g.fillRect(cx - 23, cy + 8, 46, 5)
+
+      g.strokeStyle = '#ffffff'
+      g.lineWidth = 2
+      g.beginPath()
+      g.moveTo(cx - 19, cy - 13); g.lineTo(cx - 9, cy + 8)
+      g.lineTo(cx + 1, cy - 13); g.lineTo(cx + 11, cy + 8)
+      g.lineTo(cx + 21, cy - 13)
+      g.stroke()
+
+      g.fillStyle = '#ffffff'
+      g.fillRect(cx - 21, cy - 2, 42, 4)
+      break
+    }
+    case 'anchor': {
+      g.strokeStyle = theme.core
+      g.lineWidth = 3
+      g.beginPath()
+      g.arc(cx, cy - 17, 5, 0, Math.PI * 2)
+      g.stroke()
+
+      g.fillStyle = '#ffffff'
+      g.fillRect(cx - 17, cy - 10, 34, 4)
+      g.fillRect(cx - 2.5, cy - 10, 5, 27)
+
+      g.strokeStyle = '#ffffff'
+      g.lineWidth = 3.5
+      g.beginPath()
+      g.arc(cx, cy + 4, 15, Math.PI * 0.15, Math.PI * 0.85)
+      g.stroke()
+      break
+    }
+    case 'lift': {
+      g.fillStyle = theme.core
+      g.beginPath()
+      g.moveTo(cx, cy - 3)
+      g.lineTo(cx + 15, cy + 10)
+      g.lineTo(cx + 6, cy + 10)
+      g.lineTo(cx + 6, cy + 20)
+      g.lineTo(cx - 6, cy + 20)
+      g.lineTo(cx - 6, cy + 10)
+      g.lineTo(cx - 15, cy + 10)
+      g.closePath()
+      g.fill()
+
+      g.fillStyle = '#ffffff'
+      g.beginPath()
+      g.moveTo(cx, cy - 23)
+      g.lineTo(cx + 13, cy - 10)
+      g.lineTo(cx + 5, cy - 10)
+      g.lineTo(cx + 5, cy - 4)
+      g.lineTo(cx - 5, cy - 4)
+      g.lineTo(cx - 5, cy - 10)
+      g.lineTo(cx - 13, cy - 10)
+      g.closePath()
+      g.fill()
+      break
+    }
+    default: {
+      g.fillStyle = theme.core
+      g.font = 'bold 36px monospace, sans-serif'
+      g.textAlign = 'center'
+      g.textBaseline = 'middle'
+      g.fillText(theme.glyph, cx, cy)
+    }
+  }
+}
+
+/**
+ * Procedural high-resolution holographic badge texture for powerup collectibles.
+ * Displays glowing cyber-chassis, scanlines, distinctive icon graphic, and clear text label.
+ */
+function makeItemTexture(kind) {
+  const theme = POWERUP_THEMES[kind] ?? POWERUP_THEMES.shield
+  const size = 128
+  const c = document.createElement('canvas')
+  c.width = size
+  c.height = size
+  const g = c.getContext('2d')
+  const cx = size / 2
+  const cy = size / 2
+
+  // 1. Dark translucent cyber-chassis backing
+  g.fillStyle = 'rgba(15, 17, 24, 0.94)'
+  drawBadgeFrame(g, size)
+  g.fill()
+
+  // 2. Inner ambient theme glow
+  const glow = g.createRadialGradient(cx, cy - 6, 4, cx, cy - 6, 52)
+  glow.addColorStop(0, theme.core + '55')
+  glow.addColorStop(1, 'rgba(0, 0, 0, 0)')
+  g.fillStyle = glow
+  g.fillRect(8, 8, size - 16, size - 16)
+
+  // 3. Neon border and mounting corners
+  g.strokeStyle = theme.core
+  g.lineWidth = 3
+  drawBadgeFrame(g, size)
+  g.stroke()
+
+  g.strokeStyle = theme.ring
+  g.lineWidth = 5
+  drawTechCorners(g, size)
+
+  // 4. Subtle holographic scanlines
+  g.fillStyle = 'rgba(255, 255, 255, 0.04)'
+  for (let y = 14; y < size - 14; y += 4) {
+    g.fillRect(12, y, size - 24, 1.5)
+  }
+
+  // 5. Distinct procedural icon artwork
+  drawKindIcon(g, kind, cx, cy - 7, theme)
+
+  // 6. Crisp label capsule banner at bottom
+  g.fillStyle = 'rgba(10, 12, 16, 0.88)'
+  g.beginPath()
+  g.roundRect(14, size - 26, size - 28, 16, 4)
+  g.fill()
+  g.strokeStyle = theme.core
+  g.lineWidth = 1
+  g.stroke()
+
+  g.fillStyle = '#ffffff'
+  g.font = '900 11px monospace, system-ui, sans-serif'
   g.textAlign = 'center'
   g.textBaseline = 'middle'
-  g.fillText(glyph, 32, 33)
+  g.fillText(theme.label, cx, size - 18)
+
   return new THREE.CanvasTexture(c)
 }
 
@@ -337,15 +792,22 @@ export function makeScene(canvas, { size, floors }) {
 
   const pickCoreGeo = new THREE.IcosahedronGeometry(0.46, 0)
   const pickRingGeo = new THREE.TorusGeometry(0.68, 0.08, 8, 24)
+  const coreTex = makeCoreTexture()
   const pickMat = new THREE.MeshLambertMaterial({
-    color: token('--flare', '#ff6b1a'),
-    emissive: token('--flare', '#ff6b1a'),
-    emissiveIntensity: 0.65,
+    map: coreTex,
+    color: 0xffffff,
+    emissive: 0x303030,
+  })
+  const ringMat = new THREE.MeshLambertMaterial({
+    color: 0xffffff,
+    emissive: 0x404040,
   })
   const pickCores = new THREE.InstancedMesh(pickCoreGeo, pickMat, 64)
-  const pickRings = new THREE.InstancedMesh(pickRingGeo, pickMat, 64)
+  const pickRings = new THREE.InstancedMesh(pickRingGeo, ringMat, 64)
   pickCores.instanceMatrix.setUsage(THREE.DynamicDrawUsage)
   pickRings.instanceMatrix.setUsage(THREE.DynamicDrawUsage)
+  pickCores.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(64 * 3), 3)
+  pickRings.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(64 * 3), 3)
   pickCores.frustumCulled = false
   pickRings.frustumCulled = false
   scene.add(pickCores)
@@ -353,8 +815,8 @@ export function makeScene(canvas, { size, floors }) {
 
   const itemTex = new Map()
   const itemMat = new Map()
-  for (const [kind, glyph] of Object.entries(ITEM_GLYPH)) {
-    const tex = makeItemTexture(glyph)
+  for (const kind of Object.keys(POWERUP_THEMES)) {
+    const tex = makeItemTexture(kind)
     itemTex.set(kind, tex)
     itemMat.set(kind, new THREE.SpriteMaterial({ map: tex, transparent: true, depthTest: true }))
   }
@@ -396,8 +858,6 @@ export function makeScene(canvas, { size, floors }) {
     solidCol.set(token('--tile', '#3a3a42'))
     warnCol.set(token('--warn', '#e8a33d'))
     postMat.color.set(token('--warn', '#e8a33d'))
-    pickMat.color.set(token('--flare', '#ff6b1a'))
-    pickMat.emissive.set(token('--flare', '#ff6b1a'))
     for (const mesh of bodies.values()) {
       mesh.userData.mat.color.set(playerColor(mesh.userData.slot ?? 0))
     }
@@ -517,21 +977,29 @@ export function makeScene(canvas, { size, floors }) {
         m4.multiply(rotM)
         pickRings.setMatrixAt(n, m4)
 
-        // Floating glyph billboard badge
+        // Distinct per-powerup colors for 3D core and orbital ring
+        const theme = POWERUP_THEMES[kind] ?? POWERUP_THEMES.shield
+        col.set(theme.core)
+        pickCores.setColorAt(n, col)
+        col.set(theme.ring)
+        pickRings.setColorAt(n, col)
+
+        // Floating holographic billboard badge
         const mat = itemMat.get(kind) ?? itemMat.get('shield')
         let spr = pickSprites[n]
         if (!spr) {
           spr = new THREE.Sprite(mat)
-          spr.scale.set(0.65, 0.65, 1)
+          spr.scale.set(0.92, 0.92, 1)
           spr.renderOrder = 21
           pickSprites.push(spr)
           scene.add(spr)
         } else {
           spr.material = mat
+          spr.scale.set(0.92, 0.92, 1)
           spr.renderOrder = 21
           spr.visible = true
         }
-        spr.position.set(px, py + 0.62, pz)
+        spr.position.set(px, py + 0.68, pz)
 
         n++
       }
@@ -541,6 +1009,8 @@ export function makeScene(canvas, { size, floors }) {
       pickRings.renderOrder = 20
       pickCores.instanceMatrix.needsUpdate = true
       pickRings.instanceMatrix.needsUpdate = true
+      if (pickCores.instanceColor) pickCores.instanceColor.needsUpdate = true
+      if (pickRings.instanceColor) pickRings.instanceColor.needsUpdate = true
 
       for (let i = n; i < pickSprites.length; i++) {
         pickSprites[i].visible = false
@@ -682,6 +1152,8 @@ export function makeScene(canvas, { size, floors }) {
       for (const mat of tileMats) mat.dispose()
       postMat.dispose()
       pickMat.dispose()
+      ringMat.dispose()
+      coreTex.dispose()
       for (const group of bodies.values()) {
         group.userData.body?.geometry?.dispose()
         group.userData.visor?.geometry?.dispose()
