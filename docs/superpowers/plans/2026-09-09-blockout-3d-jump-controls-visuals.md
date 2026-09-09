@@ -103,11 +103,12 @@ node --test --test-name-pattern="jump" server/blockout3d.test.js
 ```
 Expected: FAIL with `jump is not defined`.
 
-- [ ] **Step 3: Implement Jump and Single-Round rules in `server/blockout3d.js`**
+- [ ] **Step 3: Implement Jump, Single-Round rules, and 60 FPS tick in `server/blockout3d.js`**
 
-1. Set `ROUND_TARGET = 1`:
+1. Set `ROUND_TARGET = 1` and `TICK_MS = 16` (60 Hz server rate):
    ```js
    export const ROUND_TARGET = 1
+   export const TICK_MS = 16
    ```
 2. Define jump constants:
    ```js
@@ -255,6 +256,12 @@ Replace `stomp` with `jump`:
    When `game.phase === 'over'`, always display:
    ```js
    const what = 'takes the match'
+   ```
+4. Transition to 60 FPS input & render stream:
+   Update constants in `src/pages/Blockout3D.jsx`:
+   ```js
+   const DELAY_MS = 60
+   const SEND_MS = 16
    ```
 
 - [ ] **Step 5: Verify build & tests**
@@ -522,3 +529,4 @@ Plan complete and saved to `docs/superpowers/plans/2026-09-09-blockout-3d-jump-c
 2. **Inline Execution** - Execute tasks in this session using executing-plans, batch execution with checkpoints.
 
 Which approach?
+

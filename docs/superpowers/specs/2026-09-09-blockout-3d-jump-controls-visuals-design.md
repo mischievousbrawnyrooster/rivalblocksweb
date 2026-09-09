@@ -139,6 +139,18 @@ Powerups are rendered using a composite 3D collectible object:
 
 ---
 
+### 3.6 60 FPS Transition (60 Hz Simulation & Uplink)
+
+1. **`server/blockout3d.js`**:
+   - Change `TICK_MS = 16` (advancing simulation at 60 Hz).
+2. **`server/blockout3d-server.js`**:
+   - Ticks and broadcasts snapshot packets at 60 Hz (`TICK_MS = 16`).
+3. **`src/pages/Blockout3D.jsx`**:
+   - `SEND_MS = 16`: Input send interval matches the 60 Hz server rate.
+   - `DELAY_MS = 60`: Interpolation buffer window reduced from 100 ms to 60 ms (~3-4 server frames), halving interpolation delay while preserving smooth jitter-free interpolation.
+
+---
+
 ## 4. Verification Plan
 
 ### Automated Tests
@@ -162,3 +174,4 @@ Run `npm.cmd run dev` and `npm.cmd run blockout3d`, then verify in browser at `h
 4. Landing on a hole after a jump begins downward falling into the floor below.
 5. Powerups appear as rotating, bobbing 3D gems with orbital rings.
 6. Winning a round concludes the match immediately without requiring 3 rounds.
+
