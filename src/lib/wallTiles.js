@@ -431,23 +431,281 @@ const spall = (g, s, colour, rng) => {
   g.globalAlpha = 1
 }
 
-/** The arena boundary. Nothing damages it, so it never wears a damage state. */
+/** The arena boundary and indestructible pillars. High-contrast reinforced steel column. */
 const boundary = (g, s, colour) => {
   g.fillStyle = colour.edge
   g.fillRect(0, 0, s, s)
-  g.globalAlpha = 0.3
-  g.strokeStyle = colour.grid
-  g.lineWidth = Math.max(1, s * 0.06)
+
+  // Inner recessed steel plate
+  const pad = Math.max(2, Math.round(s * 0.12))
+  const inner = s - pad * 2
+  g.fillStyle = colour.grid
+  g.fillRect(pad, pad, inner, inner)
+
+  // High-contrast industrial hazard diagonal stripes
+  g.globalAlpha = 0.65
+  g.strokeStyle = colour.muted
+  g.lineWidth = Math.max(2, Math.round(s * 0.08))
   g.beginPath()
-  for (let i = -1; i < 3; i++) {
-    g.moveTo(i * s * 0.5, 0)
-    g.lineTo(i * s * 0.5 + s, s)
+  for (let i = -1; i < 4; i++) {
+    const x0 = i * s * 0.4
+    g.moveTo(x0, 0)
+    g.lineTo(x0 + s, s)
   }
   g.stroke()
   g.globalAlpha = 1
-  g.strokeStyle = colour.grid
+
+  // Raised 3D bevel lighting on outer rim
+  bevel(g, s, colour, 0.28, 0.45)
+
+  // Crisp framing outlines
+  g.strokeStyle = colour.muted
   g.lineWidth = 1
   g.strokeRect(0.5, 0.5, s - 1, s - 1)
+  g.strokeRect(pad + 0.5, pad + 0.5, inner - 1, inner - 1)
+
+  // Corner rivets on the structural frame
+  const r = Math.max(1, s * 0.035)
+  const ro = pad * 0.5
+  for (const [rx, ry] of [
+    [ro, ro],
+    [s - ro, ro],
+    [ro, s - ro],
+    [s - ro, s - ro],
+  ]) {
+    g.fillStyle = colour.fg
+    g.globalAlpha = 0.8
+    g.beginPath()
+    g.arc(rx, ry, r, 0, Math.PI * 2)
+    g.fill()
+  }
+  g.globalAlpha = 1
+}
+
+/** The dropped hole / void chasm left when a floor block falls away. */
+function holePit(g, s, colour, rng) {
+  g.fillStyle = colour.edge
+  g.fillRect(0, 0, s, s)
+
+  // Inner cliff shadow along top & left (slab thickness of surrounding floor)
+  const d = Math.max(2, Math.round(s * 0.14))
+  g.fillStyle = colour.grid
+  g.globalAlpha = 0.5
+  g.fillRect(0, 0, s, d)
+  g.fillRect(0, 0, d, s)
+
+  // Deep vertical drop shadow
+  g.fillStyle = colour.edge
+  g.globalAlpha = 0.65
+  g.fillRect(0, d, s, d * 0.7)
+  g.fillRect(d, 0, d * 0.7, s)
+  g.globalAlpha = 1
+
+  // Concentric receding drop ledge (depth perspective into the void)
+  const pad1 = Math.max(3, Math.round(s * 0.2))
+  g.strokeStyle = colour.grid
+  g.globalAlpha = 0.35
+  g.lineWidth = 1
+  g.strokeRect(pad1 + 0.5, pad1 + 0.5, s - pad1 * 2 - 1, s - pad1 * 2 - 1)
+
+  const pad2 = Math.max(5, Math.round(s * 0.35))
+  g.globalAlpha = 0.2
+  g.strokeRect(pad2 + 0.5, pad2 + 0.5, s - pad2 * 2 - 1, s - pad2 * 2 - 1)
+  g.globalAlpha = 1
+
+  // Broken stone aggregate chips along the sheared cliff edge
+  g.fillStyle = colour.wall
+  g.globalAlpha = 0.4
+  for (let i = 0; i < 4; i++) {
+    const rx = rng() > 0.5 ? rng() * s : rng() * d
+    const ry = rx < d ? rng() * s : rng() * d
+    g.fillRect(rx, ry, Math.max(1, s * 0.035), Math.max(1, s * 0.035))
+  }
+  g.globalAlpha = 1
+
+  // Perimeter rim outline
+  g.strokeStyle = colour.grid
+  g.globalAlpha = 0.4
+  g.lineWidth = 1
+  g.strokeRect(0.5, 0.5, s - 1, s - 1)
+  g.globalAlpha = 1
+}
+
+/** Procedural warning / collapsing hazard decal for dropping tiles. */
+function warnDecal(g, s, colour, variant = 0) {
+  const cx = s / 2
+  const cy = s / 2
+
+  // 1. Industrial corner caution brackets
+  const arm = s * 0.22
+  const pad = s * 0.08
+  g.strokeStyle = colour.warn
+  g.lineWidth = Math.max(2, Math.round(s * 0.08))
+  g.beginPath()
+  // Top-left
+  g.moveTo(pad, pad + arm)
+  g.lineTo(pad, pad)
+  g.lineTo(pad + arm, pad)
+  // Top-right
+  g.moveTo(s - pad - arm, pad)
+  g.lineTo(s - pad, pad)
+  g.lineTo(s - pad, pad + arm)
+  // Bottom-left
+  g.moveTo(pad, s - pad - arm)
+  g.lineTo(pad, s - pad)
+  g.lineTo(pad + arm, s - pad)
+  // Bottom-right
+  g.moveTo(s - pad - arm, s - pad)
+  g.lineTo(s - pad, s - pad)
+  g.lineTo(s - pad, s - pad - arm)
+  g.stroke()
+
+  // Corner rivets
+  g.fillStyle = colour.warn
+  const rSize = Math.max(2, Math.round(s * 0.04))
+  g.fillRect(pad + rSize * 0.8, pad + rSize * 0.8, rSize, rSize)
+  g.fillRect(s - pad - rSize * 1.8, pad + rSize * 0.8, rSize, rSize)
+  g.fillRect(pad + rSize * 0.8, s - pad - rSize * 1.8, rSize, rSize)
+  g.fillRect(s - pad - rSize * 1.8, s - pad - rSize * 1.8, rSize, rSize)
+
+  // 2. Jagged seismic fracture fault lines across the slab
+  g.strokeStyle = colour.edge
+  g.lineWidth = Math.max(2, Math.round(s * 0.05))
+  g.beginPath()
+  g.moveTo(s * 0.14, s * 0.22)
+  g.lineTo(s * 0.38, s * 0.44)
+  g.lineTo(s * 0.48, s * 0.52)
+  g.lineTo(s * 0.82, s * 0.78)
+  g.moveTo(s * 0.84, s * 0.2)
+  g.lineTo(s * 0.56, s * 0.46)
+  g.lineTo(s * 0.22, s * 0.82)
+  g.stroke()
+
+  g.strokeStyle = colour.warn
+  g.lineWidth = Math.max(1, Math.round(s * 0.03))
+  g.stroke()
+
+  // 3. Central Drop Hazard Emblem
+  // Outer hazard badge diamond
+  const r = s * 0.25
+  g.fillStyle = colour.edge
+  g.globalAlpha = 0.85
+  g.beginPath()
+  g.moveTo(cx, cy - r)
+  g.lineTo(cx + r, cy)
+  g.lineTo(cx, cy + r)
+  g.lineTo(cx - r, cy)
+  g.closePath()
+  g.fill()
+
+  g.globalAlpha = 1
+  g.strokeStyle = colour.warn
+  g.lineWidth = Math.max(1.5, Math.round(s * 0.04))
+  g.stroke()
+
+  // Inner downward collapse chevron badge (triple stacked descending arrows)
+  const cw = s * 0.14
+  const ch = s * 0.07
+  g.fillStyle = colour.warn
+
+  // Chevron 1 (top)
+  g.beginPath()
+  g.moveTo(cx - cw, cy - s * 0.11)
+  g.lineTo(cx, cy - s * 0.11 + ch)
+  g.lineTo(cx + cw, cy - s * 0.11)
+  g.lineTo(cx, cy - s * 0.11 + ch * 1.8)
+  g.closePath()
+  g.fill()
+
+  // Chevron 2 (middle)
+  g.beginPath()
+  g.moveTo(cx - cw, cy - s * 0.02)
+  g.lineTo(cx, cy - s * 0.02 + ch)
+  g.lineTo(cx + cw, cy - s * 0.02)
+  g.lineTo(cx, cy - s * 0.02 + ch * 1.8)
+  g.closePath()
+  g.fill()
+
+  // Chevron 3 / Bottom Drop Spearhead
+  g.beginPath()
+  g.moveTo(cx - cw * 0.8, cy + s * 0.07)
+  g.lineTo(cx + cw * 0.8, cy + s * 0.07)
+  g.lineTo(cx, cy + s * 0.17)
+  g.closePath()
+  g.fill()
+}
+
+/**
+ * Renders an industrial reinforced steel armor plate over the tile slab.
+ * Bolted cross girders, central heavy boss plate, and 4 corner rivets.
+ */
+function reinforcedPlate(g, s, colour, variant) {
+  const pad = Math.max(1, Math.round(s * 0.08))
+  const inner = s - pad * 2
+
+  // Steel perimeter rim
+  g.strokeStyle = colour.flare
+  g.lineWidth = Math.max(1.5, s * 0.05)
+  g.strokeRect(pad, pad, inner, inner)
+
+  // Diagonal cross-brace steel girders
+  g.strokeStyle = colour.wall
+  g.lineWidth = Math.max(2, s * 0.08)
+  g.beginPath()
+  g.moveTo(pad, pad)
+  g.lineTo(s - pad, s - pad)
+  g.moveTo(s - pad, pad)
+  g.lineTo(pad, s - pad)
+  g.stroke()
+
+  // Highlighting inner edge of diagonal cross
+  g.strokeStyle = colour.flare
+  g.lineWidth = Math.max(1, s * 0.03)
+  g.beginPath()
+  g.moveTo(pad + s * 0.04, pad)
+  g.lineTo(s - pad, s - pad - s * 0.04)
+  g.stroke()
+
+  // Central heavy diamond armor boss plate
+  const cx = s / 2
+  const cy = s / 2
+  const cr = s * 0.18
+  g.fillStyle = colour.edge
+  g.beginPath()
+  g.moveTo(cx, cy - cr)
+  g.lineTo(cx + cr, cy)
+  g.lineTo(cx, cy + cr)
+  g.lineTo(cx - cr, cy)
+  g.closePath()
+  g.fill()
+
+  g.strokeStyle = colour.flare
+  g.lineWidth = Math.max(1, s * 0.035)
+  g.stroke()
+
+  // Center steel core rivet
+  g.fillStyle = colour.flare
+  g.beginPath()
+  g.arc(cx, cy, s * 0.05, 0, Math.PI * 2)
+  g.fill()
+
+  // 4 heavy corner anchor bolts / rivets
+  const boltR = Math.max(1.5, s * 0.04)
+  const bDist = pad + s * 0.07
+  g.fillStyle = colour.flare
+  for (const [bx, by] of [
+    [bDist, bDist],
+    [s - bDist, bDist],
+    [bDist, s - bDist],
+    [s - bDist, s - bDist],
+  ]) {
+    g.beginPath()
+    g.arc(bx, by, boltR, 0, Math.PI * 2)
+    g.fill()
+    g.strokeStyle = colour.edge
+    g.lineWidth = Math.max(1, s * 0.015)
+    g.stroke()
+  }
 }
 
 /**
@@ -502,6 +760,24 @@ export function makeWallTiles(colour, px, style = 'concrete') {
     floor: [0, 1, 2].map((v) =>
       paint((g) => {
         mat.floor(g, s, colour, seeded(2207 + v * 149))
+      }),
+    ),
+    // Dropped hole chasm cuts
+    hole: [0, 1, 2].map((v) =>
+      paint((g) => {
+        holePit(g, s, colour, seeded(3313 + v * 211))
+      }),
+    ),
+    // Warning / collapsing hazard decals
+    warn: [0, 1].map((v) =>
+      paint((g) => {
+        warnDecal(g, s, colour, v)
+      }),
+    ),
+    // Reinforced steel armor plate cuts
+    reinforced: [0, 1].map((v) =>
+      paint((g) => {
+        reinforcedPlate(g, s, colour, v)
       }),
     ),
     states: [intact, chipped, failing],

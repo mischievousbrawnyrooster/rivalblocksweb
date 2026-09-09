@@ -27,6 +27,10 @@ export const BLAST_MS = 460
 // three and no further. Everything past that has to be picked up off the floor.
 export const RANGE_START = 1
 export const RANGE_MAX = 7
+// A square grows by (2r+1)^2, so at RANGE_MAX (7) a single bomb would fill a
+// 15x15 square — almost the entire 17-tile board height. Bound the square
+// radius to 3 (a 7x7 square, 49 tiles) so it scales with arms but leaves room to flee.
+export const SQUARE_RANGE_MAX = 3
 export const BOMBS_START = 1
 export const BOMBS_MAX = 6
 // A chained bomb goes a beat later than the one that set it off, so a cascade
@@ -726,8 +730,9 @@ function blastTiles(state, b) {
   const hit = [idx(tx, ty)]
 
   if (b.square) {
-    for (let y = ty - 1; y <= ty + 1; y++) {
-      for (let x = tx - 1; x <= tx + 1; x++) {
+    const r = Math.min(SQUARE_RANGE_MAX, b.range ?? 1)
+    for (let y = ty - r; y <= ty + r; y++) {
+      for (let x = tx - r; x <= tx + r; x++) {
         if (!inBounds(x, y) || (x === tx && y === ty)) continue
         if (state.tiles[idx(x, y)] === HARD) continue
         hit.push(idx(x, y))
@@ -1208,7 +1213,7 @@ function driveBots(state, rng) {
     )
     if (value >= (hunting ? 2 : 1) && liveBombs(state, b) < b.bombs) {
       const after = new Set(danger)
-      for (const i of blastTiles(state, { x: b.x, y: b.y, range: b.range })) after.add(i)
+      for (const i of blastTiles(state, { x: b.x, y: b.y, range: b.range, square: b.square })) after.add(i)
       if (stepToSafety(state, b, after)) {
         drop(state, b.id)
         b.duckUntil = state.now + BOMB_FUSE_MS + BLAST_MS

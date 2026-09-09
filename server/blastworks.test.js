@@ -28,6 +28,7 @@ import {
   BLAST_MS,
   RANGE_START,
   RANGE_MAX,
+  SQUARE_RANGE_MAX,
   BOMBS_START,
   BOMBS_MAX,
   CHAIN_STAGGER_MS,
@@ -1301,14 +1302,14 @@ test('a vest eats one blast and is spent', () => {
   assert.equal(p.alive, true, 'the same fire ate the vest and then the player')
 })
 
-test('a square charge takes the three by three and no arms', () => {
+test('a square charge takes the three by three at range 1', () => {
   const { m, players } = playing()
   clearField(m)
   const [p] = players
   park(m, players[1])
   p.square = true
   stand(p, 8, 8)
-  p.range = RANGE_MAX // and it still does not reach past one tile
+  p.range = 1
   drop(m, p.id)
   stand(p, W - 4, H - 4)
 
@@ -1318,8 +1319,55 @@ test('a square charge takes the three by three and no arms', () => {
   for (const [dx, dy] of [[1, 1], [-1, 1], [1, -1], [-1, -1]]) {
     assert.ok(lit.has(cell(8 + dx, 8 + dy)), `the corner ${dx},${dy} was left alone`)
   }
-  assert.ok(!lit.has(cell(10, 8)), 'a square charge grew an arm')
+  assert.ok(!lit.has(cell(10, 8)), 'a square charge at range 1 reached distance 2')
   assert.equal(lit.size, 9, `a three by three is nine tiles, not ${lit.size}`)
+})
+
+test('a square charge scales its radius with blast arms range', () => {
+  const { m, players } = playing()
+  clearField(m)
+  const [p] = players
+  park(m, players[1])
+  p.square = true
+  stand(p, 8, 8)
+  p.range = 2
+  drop(m, p.id)
+  stand(p, W - 4, H - 4)
+
+  m.now += BOMB_FUSE_MS
+  tick(m, TICK_MS, () => 1)
+  const lit = new Set(Object.keys(m.fires).map(Number))
+  for (let dy = -2; dy <= 2; dy++) {
+    for (let dx = -2; dx <= 2; dx++) {
+      assert.ok(lit.has(cell(8 + dx, 8 + dy)), `tile at ${8 + dx},${8 + dy} was not lit`)
+    }
+  }
+  assert.ok(!lit.has(cell(8 + 3, 8)), 'a square charge at range 2 reached distance 3')
+  assert.equal(lit.size, 25, `a five by five is 25 tiles, not ${lit.size}`)
+})
+
+test('a square charge caps its blast radius at SQUARE_RANGE_MAX', () => {
+  const { m, players } = playing()
+  clearField(m)
+  const [p] = players
+  park(m, players[1])
+  p.square = true
+  stand(p, 8, 8)
+  p.range = RANGE_MAX
+  drop(m, p.id)
+  stand(p, W - 4, H - 4)
+
+  m.now += BOMB_FUSE_MS
+  tick(m, TICK_MS, () => 1)
+  const lit = new Set(Object.keys(m.fires).map(Number))
+  for (let dy = -SQUARE_RANGE_MAX; dy <= SQUARE_RANGE_MAX; dy++) {
+    for (let dx = -SQUARE_RANGE_MAX; dx <= SQUARE_RANGE_MAX; dx++) {
+      assert.ok(lit.has(cell(8 + dx, 8 + dy)), `tile at ${8 + dx},${8 + dy} was not lit`)
+    }
+  }
+  assert.ok(!lit.has(cell(8 + SQUARE_RANGE_MAX + 1, 8)), 'square reached past SQUARE_RANGE_MAX')
+  const expectedSize = (2 * SQUARE_RANGE_MAX + 1) ** 2
+  assert.equal(lit.size, expectedSize, `capped square should be ${expectedSize} tiles, got ${lit.size}`)
 })
 
 test('a drill charge runs its arms through stock', () => {

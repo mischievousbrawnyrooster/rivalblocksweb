@@ -4,6 +4,7 @@ import Leaderboard from '../components/Leaderboard.jsx'
 import { useTitle } from '../lib/useTitle.js'
 import { useFavicon } from '../lib/useFavicon.js'
 import { makeWallTiles, styleFor } from '../lib/wallTiles.js'
+import { makePickupArt } from '../lib/pickupArt.js'
 
 // One icon per slot, and eight silhouettes that are nothing like each other —
 // this is what tells players apart when colour cannot. Same order as PIECE, so
@@ -55,6 +56,14 @@ const POWERUP = {
     glyph: '◎',
     label: 'Foresight',
     blurb: 'Shows which tiles the next wave will take, for a few seconds.',
+  },
+  shove: { glyph: '⊕', label: 'Shockwave', blurb: 'Shove rivals within two tiles into holes.' },
+  hover: { glyph: '⇡', label: 'Hover', blurb: 'High-speed anti-grav levitation over void holes for 2.5s.' },
+  bridge: { glyph: '═', label: 'Bridge', blurb: 'Pave four tiles of solid ground forward across holes.' },
+  anchor: {
+    glyph: '⚓',
+    label: 'Anchor',
+    blurb: 'Reinforce the three by three around you with steel armor to absorb a collapse.',
   },
 }
 
@@ -182,7 +191,8 @@ export default function Play() {
 
   useEffect(() => {
     if (status !== 'live') return undefined
-    function onKey(e) {
+    const heldKeys = new Set()
+    function onKeyDown(e) {
       if (e.code === 'Space') {
         e.preventDefault() // space scrolls the page by default
         useHeld()
@@ -191,10 +201,26 @@ export default function Play() {
       const dir = KEYS[e.code]
       if (!dir) return
       e.preventDefault() // arrows must not scroll the page mid-round
+      heldKeys.add(dir)
       send(dir)
     }
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
+    function onKeyUp(e) {
+      const dir = KEYS[e.code]
+      if (dir) heldKeys.delete(dir)
+    }
+    const hoverInterval = setInterval(() => {
+      const mine = gameRef.current?.players?.find((p) => p.id === myIdRef.current)
+      if (mine?.hovering && heldKeys.size > 0) {
+        for (const dir of heldKeys) send(dir)
+      }
+    }, 20)
+    window.addEventListener('keydown', onKeyDown)
+    window.addEventListener('keyup', onKeyUp)
+    return () => {
+      clearInterval(hoverInterval)
+      window.removeEventListener('keydown', onKeyDown)
+      window.removeEventListener('keyup', onKeyUp)
+    }
   }, [status, send, useHeld])
 
   // ---------- Board ----------
@@ -209,6 +235,7 @@ export default function Play() {
     let theme = null
     let colour = {}
     let tiles = null
+    let pickupArt = null
     let tilesPx = 0
     let tilesStyle = null
     const readTheme = () => {
@@ -238,6 +265,7 @@ export default function Play() {
         theme = nowTheme
         readTheme()
         tiles = null
+        pickupArt = null
       }
 
       const n = g.size
@@ -260,6 +288,7 @@ export default function Play() {
       const style = styleFor(g.arena)
       if (!tiles || tilesPx !== px || tilesStyle !== style) {
         tiles = makeWallTiles(colour, px, style)
+        pickupArt = makePickupArt(colour, px)
         tilesPx = px
         tilesStyle = style
       }
@@ -267,55 +296,84 @@ export default function Play() {
       // Standing ground. A flagged tile is the same slab with a chevron and a
       // closing inset on it — a shape, not a shade, so it reads whether or not
       // amber and grey can be told apart.
-      const beat = 0.5 + 0.5 * Math.sin(performance.now() / 110)
       const soon = new Set(g.soon ?? [])
+      const reinforced = new Set(g.reinforced ?? [])
       for (let i = 0; i < g.tiles.length; i++) {
         const kind = g.tiles[i]
-        if (kind === 'gone') continue
         const x = (i % n) * u
         const y = Math.floor(i / n) * u
-        const cuts = tiles.states[0]
+        if (kind === 'gone') {
+          if (tiles?.hole) {
+            const cut = tiles.hole[i % tiles.hole.length]
+            ctx.drawImage(cut, x, y, u, u)
+          }
+          continue
+        }
+        const isWarn = kind === 'warn'
+        const isSoon = kind === 'solid' && soon.has(i)
+        // Texture: intact (0) for solid, chipped (1) for soon, failing/fractured (2) for warn
+        const stateIdx = isWarn ? 2 : isSoon ? 1 : 0
+        const cuts = tiles.states[stateIdx]
         ctx.drawImage(tiles.floor[i % tiles.floor.length], x, y, u, u)
         ctx.drawImage(cuts[i % cuts.length], x, y, u, u)
 
-        // Told in advance, and not yet flagged: an open outline, plainly
-        // different from the solid chevron a real warning carries.
-        if (kind === 'solid' && soon.has(i)) {
+        if (reinforced.has(i) && tiles?.reinforced) {
+          const rCut = tiles.reinforced[i % tiles.reinforced.length]
+          ctx.drawImage(rCut, x, y, u, u)
+        }
+
+        // Told in advance: hairline stress cracks plus tactical corner brackets.
+        if (isSoon) {
+          const arm = u * 0.18
           ctx.strokeStyle = colour.flare
           ctx.lineWidth = Math.max(1, u * 0.07)
-          ctx.setLineDash([u * 0.16, u * 0.12])
-          ctx.strokeRect(x + u * 0.16, y + u * 0.16, u * 0.68, u * 0.68)
-          ctx.setLineDash([])
+          ctx.beginPath()
+          ctx.moveTo(x + u * 0.1, y + u * 0.1 + arm)
+          ctx.lineTo(x + u * 0.1, y + u * 0.1)
+          ctx.lineTo(x + u * 0.1 + arm, y + u * 0.1)
+          ctx.moveTo(x + u * 0.9 - arm, y + u * 0.1)
+          ctx.lineTo(x + u * 0.9, y + u * 0.1)
+          ctx.lineTo(x + u * 0.9, y + u * 0.1 + arm)
+          ctx.moveTo(x + u * 0.1, y + u * 0.9 - arm)
+          ctx.lineTo(x + u * 0.1, y + u * 0.9)
+          ctx.lineTo(x + u * 0.1 + arm, y + u * 0.9)
+          ctx.moveTo(x + u * 0.9 - arm, y + u * 0.9)
+          ctx.lineTo(x + u * 0.9, y + u * 0.9)
+          ctx.lineTo(x + u * 0.9, y + u * 0.9 - arm)
+          ctx.stroke()
         }
-        if (kind !== 'warn') continue
-        ctx.strokeStyle = colour.warn
-        ctx.lineWidth = Math.max(1, u * 0.09)
-        const inset = u * (0.08 + 0.12 * beat)
-        ctx.strokeRect(x + inset, y + inset, u - inset * 2, u - inset * 2)
-        ctx.fillStyle = colour.warn
-        ctx.textAlign = 'center'
-        ctx.textBaseline = 'middle'
-        ctx.font = `bold ${Math.round(u * 0.5)}px ui-sans-serif, system-ui, sans-serif`
-        ctx.fillText('▲', x + u / 2, y + u / 2 + u * 0.02)
+
+        // About to fall: keep the procedural drop warning emblem, without the animated border.
+        if (isWarn && tiles?.warn) {
+          const decal = tiles.warn[i % tiles.warn.length]
+          ctx.drawImage(decal, x, y, u, u)
+        }
       }
 
       // Pickups.
-      ctx.textAlign = 'center'
-      ctx.textBaseline = 'middle'
       for (const [key, kind] of Object.entries(g.powerups ?? {})) {
         const i = Number(key)
-        const cx = ((i % n) + 0.5) * u
-        const cy = (Math.floor(i / n) + 0.5) * u
-        ctx.strokeStyle = colour.flare
-        ctx.lineWidth = Math.max(1, u * 0.07)
-        ctx.strokeRect(cx - u * 0.34, cy - u * 0.34, u * 0.68, u * 0.68)
-        ctx.fillStyle = colour.flare
-        ctx.font = `${Math.round(u * 0.5)}px ui-sans-serif, system-ui, sans-serif`
-        ctx.fillText(POWERUP[kind]?.glyph ?? '?', cx, cy + u * 0.02)
+        const gx = (i % n) * u
+        const gy = Math.floor(i / n) * u
+        const art = pickupArt?.[kind]
+        if (art) {
+          ctx.drawImage(art, gx, gy, u, u)
+        } else {
+          const cx = gx + u * 0.5
+          const cy = gy + u * 0.5
+          ctx.strokeStyle = colour.flare
+          ctx.lineWidth = Math.max(1, u * 0.07)
+          ctx.strokeRect(cx - u * 0.34, cy - u * 0.34, u * 0.68, u * 0.68)
+          ctx.fillStyle = colour.flare
+          ctx.textAlign = 'center'
+          ctx.textBaseline = 'middle'
+          ctx.font = `${Math.round(u * 0.5)}px ui-sans-serif, system-ui, sans-serif`
+          ctx.fillText(POWERUP[kind]?.glyph ?? '?', cx, cy + u * 0.02)
+        }
       }
-
-      // Pieces. Slot order is the order they were handed pieces, which is what
       // the scoreboard colours off too.
+      ctx.textAlign = 'center'
+      ctx.textBaseline = 'middle'
       const slots = g.players.filter((q) => q.playing)
       slots.forEach((q, slot) => {
         if (!q.alive) return
@@ -354,9 +412,25 @@ export default function Play() {
           ctx.fill()
           ctx.globalAlpha = 1
         }
+        if (q.hovering) {
+          ctx.strokeStyle = colour.flare
+          ctx.lineWidth = Math.max(1, u * 0.08)
+          ctx.setLineDash([u * 0.12, u * 0.08])
+          ctx.beginPath()
+          ctx.arc(cx, cy, r * 1.5, 0, Math.PI * 2)
+          ctx.stroke()
+          ctx.setLineDash([])
 
-        ctx.font = `${Math.round(r * 1.4)}px ${ICON_FONT}`
-        ctx.fillText(PIECE_ICON[slot % PIECE_ICON.length], cx, cy + r * 0.06)
+          // Dual high-speed thruster exhaust plumes
+          ctx.fillStyle = colour.warn
+          ctx.beginPath()
+          ctx.arc(cx - r * 0.5, cy + r * 1.05, r * 0.22, 0, Math.PI * 2)
+          ctx.arc(cx + r * 0.5, cy + r * 1.05, r * 0.22, 0, Math.PI * 2)
+          ctx.fill()
+        }
+
+        ctx.font = `${Math.round(r * 1.35)}px ${ICON_FONT}`
+        ctx.fillText(PIECE_ICON[slot % PIECE_ICON.length], cx, cy)
 
         if (mine) {
           ctx.fillStyle = colour.flare
@@ -388,7 +462,7 @@ export default function Play() {
               ? `A new match in ${g.secs}`
               : `Next drop in ${g.secs}`
             : g.phase === 'countdown'
-              ? `First to ${g.target} rounds`
+              ? 'Get ready to drop'
               : 'The round starts the moment someone else drops in'
 
         ctx.textAlign = 'center'
@@ -675,8 +749,8 @@ export default function Play() {
               <h2 className="display mt-2 text-5xl sm:text-6xl">You win</h2>
               <p className="mt-4 text-muted">
                 {game?.final
-                  ? `${me?.wins} rounds taken · a new match in ${game?.secs}`
-                  : `${me?.wins} of ${game?.target} rounds · next drop in ${game?.secs}`}
+                  ? `A new match in ${game?.secs}`
+                  : `Next drop in ${game?.secs}`}
               </p>
             </div>
           </div>

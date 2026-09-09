@@ -92,6 +92,10 @@ export const POWERUP_KINDS = [
   'blink',
   'swap',
   'foresight',
+  'shove',
+  'hover',
+  'bridge',
+  'anchor',
 ]
 
 // How often a kind comes up, against one for everything not listed.
@@ -118,6 +122,12 @@ export const BLINK_TILES = 3
 // picked early for everyone, but only they are told which tiles it is.
 export const FORESIGHT_MS = 6000
 export const DASH_MS = 2500
+export const HOVER_MS = 2500
+export const HOVER_STEP = 0.4
+export const HOVER_COOLDOWN_MS = 20
+export const SHOVE_RADIUS = 2
+export const SHOVE_DIST = 2
+export const BRIDGE_TILES = 4
 // `now` only ever advances inside tick(), so every move message arriving
 // between two ticks reads the same clock. Any cooldown above zero therefore
 // means exactly one move per tick — double normal speed, and still bounded no
@@ -178,6 +188,7 @@ export function createMatch() {
     phaseUntil: 0,
     tiles: new Array(SIZE * SIZE).fill('solid'),
     warnAt: new Array(SIZE * SIZE).fill(0),
+    reinforced: new Set(),
     nextCollapseAt: Infinity,
     // Sparse: tile index -> kind. Only occupied tiles appear, which keeps the
     // broadcast small and the Wireshark view readable.
@@ -225,6 +236,7 @@ function seat(state, name, bot) {
     held: null,
     shielded: false,
     dashUntil: 0,
+    hoverUntil: 0,
     // The way they last moved, so a blink knows where to go.
     face: [1, 0],
     seeingUntil: 0,
@@ -422,6 +434,7 @@ export function startRound(state, rng = Math.random) {
 
   state.tiles.fill('solid')
   state.warnAt.fill(0)
+  state.reinforced = new Set()
   state.winner = null
   state.nextCollapseAt = state.now + COLLAPSE_EVERY_MS
   state.nextWave = []
@@ -440,6 +453,7 @@ export function startRound(state, rng = Math.random) {
     p.held = null
     p.shielded = false
     p.dashUntil = 0
+    p.hoverUntil = 0
     p.face = [1, 0]
     p.seeingUntil = 0
     if (p.playing) {
@@ -463,11 +477,32 @@ export function move(state, id, dir) {
 
   const p = state.players.find((q) => q.id === id)
   if (!p || !p.playing || !p.alive) return false
-  const cooldown = state.now < p.dashUntil ? DASH_COOLDOWN_MS : MOVE_COOLDOWN_MS
+  const isHovering = state.now < p.hoverUntil
+  const cooldown = isHovering
+    ? HOVER_COOLDOWN_MS
+    : state.now < p.dashUntil
+      ? DASH_COOLDOWN_MS
+      : MOVE_COOLDOWN_MS
   if (state.now - p.lastMoveAt < cooldown) return false
 
   const step = Object.hasOwn(DIRS, dir) ? DIRS[dir] : null
   if (!step) return false
+
+  if (isHovering) {
+    const nx = Math.max(0, Math.min(SIZE - 1, p.x + step[0] * HOVER_STEP))
+    const ny = Math.max(0, Math.min(SIZE - 1, p.y + step[1] * HOVER_STEP))
+    p.x = Math.round(nx * 100) / 100
+    p.y = Math.round(ny * 100) / 100
+    p.face = step
+    p.lastMoveAt = state.now
+
+    const dest = Math.round(p.y) * SIZE + Math.round(p.x)
+    if (!p.held && Object.hasOwn(state.powerups, dest)) {
+      p.held = state.powerups[dest]
+      delete state.powerups[dest]
+    }
+    return true
+  }
 
   const x = p.x + step[0]
   const y = p.y + step[1]
@@ -544,7 +579,11 @@ function sinkholeNearest(state, p) {
     }
   }
   if (target === null) return
-  const i = target.y * SIZE + target.x
+  const i = Math.round(target.y) * SIZE + Math.round(target.x)
+  if (state.reinforced.has(i)) {
+    state.reinforced.delete(i)
+    return
+  }
   if (state.tiles[i] !== 'solid') return
   state.tiles[i] = 'warn'
   state.warnAt[i] = state.now + WARNING_MS
@@ -600,6 +639,89 @@ function swap(state, p) {
   return true
 }
 
+/**
+ * Emits a kinetic impulse wave shoving all living rivals within SHOVE_RADIUS by SHOVE_DIST away.
+ */
+function shoveRivals(state, p) {
+  let any = false
+  for (const o of state.players) {
+    if (o === p || !o.playing || !o.alive) continue
+    const dx = o.x - p.x
+    const dy = o.y - p.y
+    const dist = Math.max(Math.abs(dx), Math.abs(dy))
+    if (dist > SHOVE_RADIUS) continue
+
+    any = true
+    const sx = Math.sign(dx) || (dy === 0 ? p.face[0] : 0)
+    const sy = Math.sign(dy) || (dx === 0 ? p.face[1] : 0)
+
+    for (let step = 1; step <= SHOVE_DIST; step++) {
+      const nx = o.x + sx
+      const ny = o.y + sy
+      if (nx < 0 || ny < 0 || nx >= SIZE || ny >= SIZE) break
+      if (state.players.some((q) => q !== o && q.playing && q.alive && q.x === nx && q.y === ny)) {
+        break
+      }
+      o.x = nx
+      o.y = ny
+      if (state.tiles[ny * SIZE + nx] === 'gone') {
+        if (state.now < o.hoverUntil) continue
+        if (o.shielded) {
+          o.shielded = false
+          const safe = adjacentSolid(state, o)
+          if (safe) {
+            ;[o.x, o.y] = safe
+            break
+          }
+        }
+        o.alive = false
+        break
+      }
+    }
+  }
+  return any
+}
+
+/**
+ * Projects a straight line of solid tiles forward in the player's facing direction.
+ */
+function buildBridge(state, p) {
+  const [dx, dy] = p.face ?? [1, 0]
+  let repaired = 0
+  for (let n = 1; n <= BRIDGE_TILES; n++) {
+    const x = p.x + dx * n
+    const y = p.y + dy * n
+    if (x < 0 || y < 0 || x >= SIZE || y >= SIZE) break
+    const i = y * SIZE + x
+    if (state.tiles[i] === 'gone') {
+      state.tiles[i] = 'solid'
+      state.warnAt[i] = 0
+      repaired++
+    }
+  }
+  return repaired > 0
+}
+
+/**
+ * Hardens the 3x3 area around the player with reinforced steel plating to absorb a collapse wave.
+ */
+function anchorAround(state, p) {
+  const px = Math.round(p.x)
+  const py = Math.round(p.y)
+  for (let dy = -1; dy <= 1; dy++) {
+    for (let dx = -1; dx <= 1; dx++) {
+      const x = px + dx
+      const y = py + dy
+      if (x < 0 || y < 0 || x >= SIZE || y >= SIZE) continue
+      const i = y * SIZE + x
+      if (state.tiles[i] === 'gone') continue
+      state.tiles[i] = 'solid'
+      state.warnAt[i] = 0
+      state.reinforced.add(i)
+    }
+  }
+}
+
 /** Spends the held powerup. Returns false, silently, if there is nothing to spend. */
 export function usePowerup(state, id) {
   if (state.phase !== 'playing') return false
@@ -615,11 +737,19 @@ export function usePowerup(state, id) {
   else if (kind === 'patch') patchAround(state, p)
   else if (kind === 'sinkhole') sinkholeNearest(state, p)
   else if (kind === 'foresight') p.seeingUntil = state.now + FORESIGHT_MS
+  else if (kind === 'hover') p.hoverUntil = state.now + HOVER_MS
+  else if (kind === 'anchor') anchorAround(state, p)
   else if (kind === 'blink' && !blink(state, p)) {
     // Nowhere to land. Keep it rather than eat it for a hop into the void.
     p.held = kind
     return false
   } else if (kind === 'swap' && !swap(state, p)) {
+    p.held = kind
+    return false
+  } else if (kind === 'shove' && !shoveRivals(state, p)) {
+    p.held = kind
+    return false
+  } else if (kind === 'bridge' && !buildBridge(state, p)) {
     p.held = kind
     return false
   }
@@ -646,7 +776,10 @@ function spawnPowerup(state, rng) {
  * only way off an island — but they are never a destination.
  */
 function stepTo(state, p, want) {
-  const start = p.y * SIZE + p.x
+  const isHovering = state.now < p.hoverUntil
+  const px = Math.round(p.x)
+  const py = Math.round(p.y)
+  const start = py * SIZE + px
   const seen = new Set([start])
   const queue = [[start, null]]
 
@@ -660,10 +793,19 @@ function stepTo(state, p, want) {
       const ny = y + dy
       if (nx < 0 || ny < 0 || nx >= SIZE || ny >= SIZE) continue
       const j = ny * SIZE + nx
-      if (seen.has(j) || state.tiles[j] === 'gone') continue
+      if (seen.has(j)) continue
+      if (!isHovering && state.tiles[j] === 'gone') continue
       seen.add(j)
       // Another piece is a wall as far as pathing is concerned.
-      if (state.players.some((o) => o.playing && o.alive && o !== p && o.y * SIZE + o.x === j)) {
+      if (
+        state.players.some(
+          (o) =>
+            o.playing &&
+            o.alive &&
+            o !== p &&
+            Math.round(o.y) * SIZE + Math.round(o.x) === j,
+        )
+      ) {
         continue
       }
       queue.push([j, first ?? [dx, dy]])
@@ -704,42 +846,84 @@ const dirName = (step) =>
  */
 export function driveBots(state, rng = Math.random) {
   for (const b of state.players) {
-    if (!b.bot || !b.playing || !b.alive || state.now < b.thinkAt) continue
-    b.thinkAt = state.now + BOT_REACT_MS
+    if (!b.bot || !b.playing || !b.alive) continue
 
     if (b.held) usePowerup(state, b.id)
 
-    const here = b.y * SIZE + b.x
-    const safe = (i) => state.tiles[i] === 'solid'
+    const isHovering = state.now < b.hoverUntil
+    if (!isHovering && state.now < b.thinkAt) continue
 
-    // Standing on a tile that has been flagged: anywhere solid will do.
-    let step = state.tiles[here] === 'warn' ? stepTo(state, b, safe) : null
+    const cooldown = isHovering ? HOVER_COOLDOWN_MS : BOT_REACT_MS
+    if (state.now - b.lastMoveAt < cooldown) continue
 
-    // Then something to carry, if a hand is free.
-    if (!step && !b.held) {
-      step = stepTo(state, b, (i) => safe(i) && Object.hasOwn(state.powerups, i))
+    const stepsToTake = isHovering
+      ? Math.max(1, Math.min(5, Math.floor((state.now - b.lastMoveAt) / HOVER_COOLDOWN_MS)))
+      : 1
+
+    for (let s = 0; s < stepsToTake; s++) {
+      const bx = Math.round(b.x)
+      const by = Math.round(b.y)
+      const here = by * SIZE + bx
+      const safe = (i) => state.tiles[i] === 'solid'
+
+      let step = null
+      if (isHovering) {
+        // If on or near a hole/warning or small island, path towards large solid ground
+        if (state.tiles[here] !== 'solid' || roomAround(state, here) < 12) {
+          step = stepTo(state, b, (i) => safe(i) && roomAround(state, i) >= 12)
+          if (!step) step = stepTo(state, b, safe)
+        }
+        // If already safe, seek powerups across holes
+        if (!step && !b.held) {
+          step = stepTo(state, b, (i) => safe(i) && Object.hasOwn(state.powerups, i))
+        }
+        // Otherwise fly towards any open in-bounds direction
+        if (!step) {
+          const open = Object.values(DIRS).filter(([dx, dy]) => {
+            const x = bx + dx
+            const y = by + dy
+            return x >= 0 && y >= 0 && x < SIZE && y < SIZE
+          })
+          if (open.length > 0) step = open[Math.floor(rng() * open.length)]
+        }
+      } else {
+        // Standing on a tile that has been flagged: anywhere solid will do.
+        step = state.tiles[here] === 'warn' ? stepTo(state, b, safe) : null
+
+        // Then something to carry, if a hand is free.
+        if (!step && !b.held) {
+          step = stepTo(state, b, (i) => safe(i) && Object.hasOwn(state.powerups, i))
+        }
+
+        // Otherwise work towards more floor than this. Nothing to gain from a
+        // shrinking island, and every reason to leave it early.
+        if (!step) {
+          const room = roomAround(state, here)
+          if (room < 12) step = stepTo(state, b, (i) => safe(i) && roomAround(state, i) > room)
+        }
+
+        // Nothing worth doing: shuffle, rather than stand on one tile waiting for
+        // it to be the one that goes.
+        if (!step) {
+          const open = Object.values(DIRS).filter(([dx, dy]) => {
+            const x = bx + dx
+            const y = by + dy
+            if (x < 0 || y < 0 || x >= SIZE || y >= SIZE) return false
+            return state.tiles[y * SIZE + x] === 'solid'
+          })
+          if (open.length > 0) step = open[Math.floor(rng() * open.length)]
+        }
+      }
+
+      if (step) {
+        if (isHovering && s > 0) b.lastMoveAt = state.now - HOVER_COOLDOWN_MS
+        move(state, b.id, dirName(step))
+      } else {
+        break
+      }
     }
 
-    // Otherwise work towards more floor than this. Nothing to gain from a
-    // shrinking island, and every reason to leave it early.
-    if (!step) {
-      const room = roomAround(state, here)
-      if (room < 12) step = stepTo(state, b, (i) => safe(i) && roomAround(state, i) > room)
-    }
-
-    // Nothing worth doing: shuffle, rather than stand on one tile waiting for
-    // it to be the one that goes.
-    if (!step) {
-      const open = Object.values(DIRS).filter(([dx, dy]) => {
-        const x = b.x + dx
-        const y = b.y + dy
-        if (x < 0 || y < 0 || x >= SIZE || y >= SIZE) return false
-        return state.tiles[y * SIZE + x] === 'solid'
-      })
-      if (open.length > 0) step = open[Math.floor(rng() * open.length)]
-    }
-
-    if (step) move(state, b.id, dirName(step))
+    b.thinkAt = state.now + (isHovering ? HOVER_COOLDOWN_MS : BOT_REACT_MS)
   }
 }
 
@@ -793,6 +977,10 @@ function collapse(state, rng) {
   for (const i of state.nextWave) {
     // A tile can be patched or already flagged between the pick and the wave.
     if (state.tiles[i] !== 'solid') continue
+    if (state.reinforced.has(i)) {
+      state.reinforced.delete(i)
+      continue
+    }
     state.tiles[i] = 'warn'
     state.warnAt[i] = state.now + WARNING_MS
   }
@@ -817,6 +1005,7 @@ function resolveWarnings(state) {
           continue
         }
       }
+      if (state.now < p.hoverUntil) continue
       p.alive = false
     }
   }
@@ -884,6 +1073,28 @@ export function tick(state, dt, rng = Math.random) {
   }
   resolveWarnings(state)
 
+  for (const p of state.players) {
+    if (!p.playing || !p.alive) continue
+    if (p.hoverUntil && state.now >= p.hoverUntil) {
+      p.hoverUntil = 0
+      p.x = Math.max(0, Math.min(SIZE - 1, Math.round(p.x)))
+      p.y = Math.max(0, Math.min(SIZE - 1, Math.round(p.y)))
+      if (state.tiles[p.y * SIZE + p.x] === 'gone') {
+        if (p.shielded) {
+          p.shielded = false
+          const safe = adjacentSolid(state, p)
+          if (safe) {
+            ;[p.x, p.y] = safe
+            continue
+          }
+        }
+        p.alive = false
+      }
+    } else if (state.tiles[Math.round(p.y) * SIZE + Math.round(p.x)] === 'gone' && state.now >= p.hoverUntil) {
+      p.alive = false
+    }
+  }
+
   const standing = state.players.filter((p) => p.playing && p.alive)
   if (standing.length <= 1) endRound(state, standing[0] ?? null)
 }
@@ -893,16 +1104,6 @@ export function tick(state, dt, rng = Math.random) {
  * ponytail: full-state broadcast every tick, no diffing. 81 tiles and four
  * players is a small object, and a client never needs earlier messages to
  * render. Delta-encode only if the grid ever exceeds ~400 tiles.
- */
-/**
- * The one message shape broadcast to clients.
- *
- * `viewerId` is optional and changes exactly one field: somebody holding a
- * foresight is told which tiles the next wave will take. That is the only
- * per-viewer information in any of these games, and it is why this takes an
- * argument at all — the alternative was broadcasting the next wave to everyone
- * and hiding it in the client, which would be a lie on a protocol whose whole
- * point is being readable off the wire.
  */
 export function snapshot(state, viewerId = null) {
   const timed = state.phase === 'countdown' || state.phase === 'over'
@@ -925,6 +1126,7 @@ export function snapshot(state, viewerId = null) {
     botsWanted: state.botsWanted,
     botsOnly: state.botsOnly,
     tiles: state.tiles,
+    reinforced: Array.from(state.reinforced),
     powerups: state.powerups,
     players: state.players.map((p) => ({
       id: p.id,
@@ -938,6 +1140,7 @@ export function snapshot(state, viewerId = null) {
       held: p.held,
       shielded: p.shielded,
       dashing: state.now < p.dashUntil,
+      hovering: state.now < p.hoverUntil,
       seeing: state.now < p.seeingUntil,
     })),
   }

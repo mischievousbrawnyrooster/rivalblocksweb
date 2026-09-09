@@ -5,6 +5,7 @@ import BlockArt from '../components/BlockArt.jsx'
 import { games } from '../data/games.js'
 import { makeWallTiles, styleFor } from '../lib/wallTiles.js'
 import { makeBombArt } from '../lib/fireTiles.js'
+import { makePickupArt } from '../lib/pickupArt.js'
 import { useTitle } from '../lib/useTitle.js'
 import { useFavicon } from '../lib/useFavicon.js'
 
@@ -391,6 +392,7 @@ export default function Fracture() {
     let colour = {}
     let tiles = null
     let bombArt = null
+    let pickupArt = null
     let tilesPx = 0
     // The arena's material is part of what the tiles are, so a change of arena
     // rebuilds them exactly like a change of size or theme.
@@ -423,6 +425,7 @@ export default function Fracture() {
         readTheme()
         tiles = null
         bombArt = null
+        pickupArt = null
       }
 
       const [a, b, t] = bracket(buf, performance.now() - DELAY_MS)
@@ -472,6 +475,7 @@ export default function Fracture() {
       if (!tiles || tilesPx !== px || tilesStyle !== style) {
         tiles = makeWallTiles(colour, px, style)
         bombArt = makeBombArt(colour, px)
+        pickupArt = makePickupArt(colour, px)
         tilesPx = px
         tilesStyle = style
       }
@@ -516,18 +520,18 @@ export default function Fracture() {
         }
       }
 
-      // Pickups: glyph on the floor, one per kind.
-      ctx.textAlign = 'center'
-      ctx.textBaseline = 'middle'
-      ctx.font = `${Math.round(u * 0.8)}px ui-sans-serif, system-ui, sans-serif`
+      // Pickups.
       for (const [i, kind] of Object.entries(powerups)) {
-        const cx = ((Number(i) % w) + 0.5) * u
-        const cy = (Math.floor(Number(i) / w) + 0.5) * u
-        ctx.strokeStyle = colour.flare
-        ctx.lineWidth = Math.max(1, u * 0.06)
-        ctx.strokeRect(cx - u * 0.42, cy - u * 0.42, u * 0.84, u * 0.84)
-        ctx.fillStyle = colour.flare
-        ctx.fillText(POWERUP[kind]?.glyph ?? '?', cx, cy + u * 0.04)
+        const gx = (Number(i) % w) * u
+        const gy = Math.floor(Number(i) / w) * u
+        const art = pickupArt?.[kind]
+        if (art) {
+          ctx.drawImage(art, gx, gy, u, u)
+        } else {
+          ctx.strokeStyle = colour.flare
+          ctx.lineWidth = Math.max(1, u * 0.06)
+          ctx.strokeRect(gx + u * 0.08, gy + u * 0.08, u * 0.84, u * 0.84)
+        }
       }
 
       const tintOf = new Map(
@@ -630,6 +634,8 @@ export default function Fracture() {
       }
 
       // Players.
+      ctx.textAlign = 'center'
+      ctx.textBaseline = 'middle'
       const playersB = byId(b.players)
       const drawnAt = new Map()
       a.players.forEach((from, slot) => {
@@ -719,8 +725,8 @@ export default function Fracture() {
           }
         }
 
-        ctx.font = `${Math.round(r * 1.5)}px ${ICON_FONT}`
-        ctx.fillText(iconOf.get(from.id), x, y + r * 0.06)
+        ctx.font = `${Math.round(r * 1.35)}px ${ICON_FONT}`
+        ctx.fillText(iconOf.get(from.id), x, y)
 
         // Health as pips above the head: countable, not a colour gradient.
         // Overheal adds pips beyond the normal run and stacks them double

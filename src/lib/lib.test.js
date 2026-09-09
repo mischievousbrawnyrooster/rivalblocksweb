@@ -5,6 +5,7 @@ import { filterSortRegions } from './servers.js'
 import { isValidEmail } from './validate.js'
 import { makeWallTiles, MATERIALS, ARENA_STYLE, styleFor } from './wallTiles.js'
 import { makeFireTiles } from './fireTiles.js'
+import { makePickupArt, PICKUP_KINDS } from './pickupArt.js'
 import { MARKS, markHref } from './favicons.js'
 import { games } from '../data/games.js'
 
@@ -126,6 +127,9 @@ test('every wall damage state is drawn with more structure than the last', () =>
 
   assert.equal(tiles.states.length, 3, 'three damage states')
   assert.ok(tiles.border, 'the boundary has its own art')
+  assert.ok(tiles.hole, 'the hole has its own art')
+  assert.ok(tiles.warn, 'warning decals have their own art')
+  assert.ok(tiles.reinforced, 'reinforced tiles have their own art')
 
   // The tiles come back in build order: intact, chipped, failing, then border.
   const count = (rec) => rec.ops.filter((o) => o[0] === 'lineTo' || o[0] === 'arc').length
@@ -320,3 +324,25 @@ test('every playable title has a mark of its own', () => {
     assert.notEqual(MARKS[mark], MARKS.rivalblocks, `${game.slug} is wearing the studio mark`)
   }
 })
+
+// --- pickup artwork -------------------------------------------------------
+
+test('every pickup kind has its own distinct artwork', () => {
+  const { result: pickups, made } = withStubbedCanvas(() => makePickupArt(PALETTE, 32))
+
+  for (const kind of PICKUP_KINDS) {
+    assert.ok(pickups[kind], `${kind} is missing from pickup artwork`)
+  }
+
+  // Each distinct base renderer produces unique drawing operations
+  const signatures = new Set(made.map((r) => JSON.stringify(r.ops)))
+  assert.equal(signatures.size, made.length, 'two base pickup renderers drew identical operations')
+  assert.equal(made.length, 27, 'expected 27 base artwork textures')
+})
+
+test('pickup artwork is deterministic across redraws', () => {
+  const a = withStubbedCanvas(() => makePickupArt(PALETTE, 32)).made.map((r) => JSON.stringify(r.ops))
+  const b = withStubbedCanvas(() => makePickupArt(PALETTE, 32)).made.map((r) => JSON.stringify(r.ops))
+  assert.deepEqual(a, b, 'pickup art rendered differently on redraw')
+})
+

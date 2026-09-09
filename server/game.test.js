@@ -35,6 +35,12 @@ import {
   wantBots,
   BLINK_TILES,
   FORESIGHT_MS,
+  HOVER_MS,
+  HOVER_STEP,
+  HOVER_COOLDOWN_MS,
+  SHOVE_RADIUS,
+  SHOVE_DIST,
+  BRIDGE_TILES,
   canRun,
 } from './game.js'
 
@@ -316,7 +322,7 @@ test('the snapshot carries everything a client needs and nothing private', () =>
   assert.equal(s.players.length, 2)
   assert.deepEqual(
     Object.keys(s.players[0]).sort(),
-    ['alive', 'bot', 'dashing', 'held', 'id', 'name', 'playing', 'seeing', 'shielded', 'wins', 'x', 'y'],
+    ['alive', 'bot', 'dashing', 'held', 'hovering', 'id', 'name', 'playing', 'seeing', 'shielded', 'wins', 'x', 'y'],
     'lastMoveAt and dashUntil stay server-side',
   )
   assert.equal(s.winner, null)
@@ -549,7 +555,7 @@ test('a new round clears the board of powerups and everything held', () => {
   p.dashUntil = m.now + DASH_MS
   m.powerups[7] = 'patch'
 
-  startRound(m)
+  startRound(m, () => 0)
   assert.equal(Object.hasOwn(m.powerups, 7), false, 'last round’s powerup survived')
   assert.equal(
     Object.keys(m.powerups).length,
@@ -570,7 +576,7 @@ test('the snapshot carries powerups and per-player powerup state', () => {
   assert.deepEqual(s.powerups, { 9: 'dash' })
   assert.deepEqual(
     Object.keys(s.players[0]).sort(),
-    ['alive', 'bot', 'dashing', 'held', 'id', 'name', 'playing', 'seeing', 'shielded', 'wins', 'x', 'y'],
+    ['alive', 'bot', 'dashing', 'held', 'hovering', 'id', 'name', 'playing', 'seeing', 'shielded', 'wins', 'x', 'y'],
   )
   assert.equal(s.players[0].held, 'shield')
   assert.equal(s.players[0].dashing, false)
@@ -801,6 +807,27 @@ test('a bot plays by every rule a person does', () => {
   }
 })
 
+test('a bot that holds hover uses it and moves continuously while levitating', () => {
+  const m = playing(2)
+  m.botsWanted = true
+  m.botFill = 2
+  const bot = m.players[1]
+  bot.bot = true
+  bot.x = 5
+  bot.y = 5
+  bot.held = 'hover'
+
+  const initialX = bot.x
+  const initialY = bot.y
+
+  // Tick the match: bot should activate hover and take continuous steps
+  tick(m, TICK_MS, () => 0)
+
+  assert.equal(bot.held, null, 'bot consumed hover powerup')
+  assert.ok(m.now < bot.hoverUntil, 'bot is currently hovering')
+  assert.ok(bot.x !== initialX || bot.y !== initialY, 'bot moved while hovering')
+})
+
 
 // --- the wider kit --------------------------------------------------------
 
@@ -866,6 +893,110 @@ test('a swap with nobody left is refused rather than wasted', () => {
   p.held = 'swap'
   assert.equal(usePowerup(m, p.id), false)
   assert.equal(p.held, 'swap')
+})
+
+test('shove pushes nearby rivals away and eliminates rivals pushed into holes', () => {
+  const m = playing(2)
+  const [p, other] = m.players
+  p.x = 5
+  p.y = 5
+  other.x = 6
+  other.y = 5
+  p.held = 'shove'
+
+  assert.equal(usePowerup(m, p.id), true)
+  assert.equal(other.x, 8, 'shoved 2 tiles away along the axis')
+  assert.equal(other.y, 5)
+
+  // When pushed into a hole
+  m.tiles[5 * SIZE + 9] = 'gone'
+  other.x = 7
+  other.y = 5
+  p.held = 'shove'
+  assert.equal(usePowerup(m, p.id), true)
+  assert.equal(other.alive, false, 'eliminated when pushed into a hole')
+
+  // With nobody in range, powerup is preserved
+  p.held = 'shove'
+  assert.equal(usePowerup(m, p.id), false)
+  assert.equal(p.held, 'shove')
+})
+
+test('hover enables continuous levitation movement and lands on nearest tile when expired', () => {
+  const m = playing(2)
+  const p = m.players[0]
+  p.x = 4
+  p.y = 4
+  m.tiles[4 * SIZE + 5] = 'gone'
+
+  // Walking onto hole without hover is rejected
+  assert.equal(move(m, p.id, 'right'), false)
+  assert.equal(p.x, 4)
+
+  // With hover active, player levitates with continuous movement
+  p.held = 'hover'
+  assert.equal(usePowerup(m, p.id), true)
+  p.lastMoveAt = m.now - HOVER_COOLDOWN_MS
+  assert.equal(move(m, p.id, 'right'), true)
+  assert.equal(p.x, 4.4, 'moved continuous fractional step at high speed')
+  assert.equal(p.alive, true)
+
+  // Move further into the tile
+  p.lastMoveAt = m.now - HOVER_COOLDOWN_MS
+  assert.equal(move(m, p.id, 'right'), true)
+  assert.equal(p.x, 4.8)
+
+  // When hover expires, player lands on nearest integer tile (5)
+  // Since tile 5 is gone, player falls into the void and is eliminated
+  m.now += HOVER_MS
+  tick(m, 0)
+  assert.equal(p.x, 5, 'snapped/landed on nearest tile')
+  assert.equal(p.alive, false, 'fell when landing on a hole')
+})
+
+test('anchor reinforces 3x3 surrounding tiles and absorbs collapse waves', () => {
+  const m = playing(2)
+  const p = m.players[0]
+  p.x = 5
+  p.y = 5
+
+  p.held = 'anchor'
+  assert.equal(usePowerup(m, p.id), true)
+  assert.equal(m.reinforced.size, 9, 'reinforced 3x3 around player')
+  assert.ok(m.reinforced.has(5 * SIZE + 5))
+
+  // When targeted by a collapse wave
+  m.nextWave = [5 * SIZE + 5]
+  m.nextCollapseAt = m.now
+  tick(m, 0)
+
+  // The tile should have absorbed the wave and stayed solid
+  assert.equal(m.tiles[5 * SIZE + 5], 'solid', 'tile did not collapse')
+  assert.equal(m.reinforced.has(5 * SIZE + 5), false, 'reinforcement was consumed')
+})
+
+test('bridge paves solid tiles across holes in the direction faced', () => {
+  const m = playing(2)
+  const p = m.players[0]
+  p.x = 2
+  p.y = 2
+  p.face = [1, 0] // facing right
+
+  // Make 4 tiles ahead into holes
+  for (let n = 1; n <= BRIDGE_TILES; n++) {
+    m.tiles[2 * SIZE + (2 + n)] = 'gone'
+  }
+
+  p.held = 'bridge'
+  assert.equal(usePowerup(m, p.id), true)
+  for (let n = 1; n <= BRIDGE_TILES; n++) {
+    assert.equal(m.tiles[2 * SIZE + (2 + n)], 'solid', `tile ${2 + n} restored to solid`)
+  }
+
+  // When no holes are ahead, bridge is not wasted
+  p.held = 'bridge'
+  assert.equal(usePowerup(m, p.id), false)
+  assert.equal(p.held, 'bridge')
 })
 
 test('the next wave is chosen before it lands, and only a seer is told', () => {

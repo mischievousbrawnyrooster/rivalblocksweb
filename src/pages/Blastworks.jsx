@@ -5,6 +5,7 @@ import { useTitle } from '../lib/useTitle.js'
 import { useFavicon } from '../lib/useFavicon.js'
 import { makeWallTiles, styleFor } from '../lib/wallTiles.js'
 import { makeFireTiles, makeBombArt } from '../lib/fireTiles.js'
+import { makePickupArt } from '../lib/pickupArt.js'
 
 // Keyed on e.code, so the binding survives a different keyboard layout.
 const KEYS = {
@@ -286,13 +287,14 @@ export default function Blastworks() {
     let tiles = null
     let fire = null
     let bombArt = null
+    let pickupArt = null
     let tilesPx = 0
     let tilesStyle = null
     const readTheme = () => {
       const css = getComputedStyle(document.documentElement)
       const v = (n) => css.getPropertyValue(n).trim()
       colour = {
-        floor: v('--bg'),
+        floor: v('--arena') || v('--bg'),
         grid: v('--line'),
         wall: v('--tile'),
         edge: v('--hole'),
@@ -317,6 +319,7 @@ export default function Blastworks() {
         tiles = null
         fire = null
         bombArt = null
+        pickupArt = null
       }
 
       const [a, b, t] = bracket(buf, performance.now() - DELAY_MS)
@@ -346,6 +349,7 @@ export default function Blastworks() {
         tiles = makeWallTiles(colour, px, style)
         fire = makeFireTiles(colour, px)
         bombArt = makeBombArt(colour, px)
+        pickupArt = makePickupArt(colour, px)
         tilesPx = px
         tilesStyle = style
       }
@@ -375,18 +379,18 @@ export default function Blastworks() {
       }
 
       // Pickups.
-      ctx.textAlign = 'center'
-      ctx.textBaseline = 'middle'
       for (const [key, kind] of Object.entries(a.pickups ?? {})) {
         const i = Number(key)
-        const cx = ((i % w) + 0.5) * u
-        const cy = (Math.floor(i / w) + 0.5) * u
-        ctx.strokeStyle = colour.flare
-        ctx.lineWidth = Math.max(1, u * 0.07)
-        ctx.strokeRect(cx - u * 0.36, cy - u * 0.36, u * 0.72, u * 0.72)
-        ctx.fillStyle = colour.flare
-        ctx.font = `${Math.round(u * 0.55)}px ui-sans-serif, system-ui, sans-serif`
-        ctx.fillText(PICKUP[kind]?.glyph ?? '?', cx, cy + u * 0.03)
+        const gx = (i % w) * u
+        const gy = Math.floor(i / w) * u
+        const art = pickupArt?.[kind]
+        if (art) {
+          ctx.drawImage(art, gx, gy, u, u)
+        } else {
+          ctx.strokeStyle = colour.flare
+          ctx.lineWidth = Math.max(1, u * 0.07)
+          ctx.strokeRect(gx + u * 0.14, gy + u * 0.14, u * 0.72, u * 0.72)
+        }
       }
 
       // Fire. Which piece a tile gets is worked out from its burning
@@ -489,6 +493,8 @@ export default function Blastworks() {
         a.players.map((q, i) => [q.id, colour.players[i % colour.players.length]]),
       )
 
+      ctx.textAlign = 'center'
+      ctx.textBaseline = 'middle'
       a.players.forEach((from) => {
         if (!from.alive) return
         const to = playersB.get(from.id)
@@ -511,8 +517,8 @@ export default function Blastworks() {
         ctx.arc(x, y, r, 0, Math.PI * 2)
         ctx.fill()
 
-        ctx.font = `${Math.round(r * 1.5)}px ${ICON_FONT}`
-        ctx.fillText(iconOf.get(from.id), x, y + r * 0.06)
+        ctx.font = `${Math.round(r * 1.35)}px ${ICON_FONT}`
+        ctx.fillText(iconOf.get(from.id), x, y)
 
         if (from.carrying) {
           // Holding a live bomb over their head.
@@ -738,7 +744,7 @@ export default function Blastworks() {
             ref={canvasRef}
             role="img"
             aria-label={`Blastworks arena, ${hud?.w ?? 25} by ${hud?.h ?? 17} tiles. ${statusLine(hud, myId)}`}
-            className="w-full border border-line bg-bg"
+            className="w-full border border-line bg-arena"
           />
 
           <div className="mt-3 grid gap-px border border-line bg-line sm:grid-cols-4">
