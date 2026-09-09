@@ -20,7 +20,7 @@ const token = (name, fallback) => {
   return v || fallback
 }
 
-const FLOOR_GAP = 3.4 // world units between floors
+export const FLOOR_GAP = 3.4 // world units between floors
 const TILE = 1
 const WARN_DROP = 0.18 // how far a flagged tile sinks
 // The mirror of WARN_DROP, not a separate number picked independently: a
@@ -63,10 +63,14 @@ export function makeScene(canvas, { size, floors }) {
   scene.background = new THREE.Color(token('--bg', '#16161a'))
 
   const camera = new THREE.PerspectiveCamera(45, 1, 0.1, 400)
-  const target = new THREE.Vector3(size / 2, -FLOOR_GAP * (floors - 1) / 2, size / 2)
-  let yaw = Math.PI / 4
-  let pitch = 0.9
-  let dist = size * 2.4
+
+  // Where the camera looks when there is nobody to follow: the lobby, a
+  // spectator past capacity, or after elimination. Without this the camera
+  // ends up at the origin staring into the void.
+  const overview = {
+    target: [size / 2, (-FLOOR_GAP * (floors - 1)) / 2, size / 2],
+    position: [size / 2 + size * 1.7, size * 1.7, size / 2 + size * 1.7],
+  }
 
   scene.add(new THREE.AmbientLight(0xffffff, 0.55))
   const key = new THREE.DirectionalLight(0xffffff, 0.9)
@@ -164,11 +168,6 @@ export function makeScene(canvas, { size, floors }) {
       camera.updateProjectionMatrix()
     },
 
-    orbit(dx, dy) {
-      yaw -= dx * 0.005
-      pitch = Math.max(0.25, Math.min(1.4, pitch - dy * 0.005))
-    },
-
     /**
      * Paints one frame.
      *
@@ -180,7 +179,7 @@ export function makeScene(canvas, { size, floors }) {
      * it out per-viewer). Empty for everyone else, so this costs nothing on
      * the common path.
      */
-    update(view, { viewZ = 0 } = {}) {
+    update(view, { viewZ = 0, slotOf, pose } = {}) {
       // Built once per frame, not scanned per tile: the loop below runs
       // `count` (845) times a frame, and .includes() in there would be the
       // per-frame allocation this file was already fixed once for.
@@ -258,13 +257,13 @@ export function makeScene(canvas, { size, floors }) {
       // Play.jsx and Blastworks.jsx key a piece's colour and icon by, and
       // what the scoreboard already uses. The id stays fixed across a
       // disconnect; this is rebuilt every frame precisely so it does not.
-      const slotOf = new Map(view.players.map((q, i) => [q.id, i % 8]))
+      const slots = slotOf ?? new Map(view.players.map((q, i) => [q.id, i % 8]))
 
       const seen = new Set()
       for (const p of view.players) {
         if (!p.playing || !p.alive) continue
         seen.add(p.id)
-        const slot = slotOf.get(p.id)
+        const slot = (slots.get(p.id) ?? 0) % 8
         let mesh = bodies.get(p.id)
         let label = labels.get(p.id)
         if (!mesh) {
@@ -299,12 +298,9 @@ export function makeScene(canvas, { size, floors }) {
         labels.get(id).visible = false
       }
 
-      camera.position.set(
-        target.x + Math.sin(yaw) * Math.cos(pitch) * dist,
-        target.y + Math.sin(pitch) * dist,
-        target.z + Math.cos(yaw) * Math.cos(pitch) * dist,
-      )
-      camera.lookAt(target)
+      const shot = pose ?? overview
+      camera.position.set(shot.position[0], shot.position[1], shot.position[2])
+      camera.lookAt(shot.target[0], shot.target[1], shot.target[2])
       renderer.render(scene, camera)
     },
 
