@@ -1059,13 +1059,85 @@ test('hover carries you over a hole until it runs out', () => {
   assert.ok(p.fallUntil > m.now, 'and down when it lapses')
 })
 
-test('hover does not climb', () => {
+test('hovering lifts you visibly before it ever gains you a floor', () => {
   const m = playing(2)
   const p = m.players[0]
   p.z = 2
   p.held = 'hover'
   usePowerup(m, p.id)
-  assert.equal(p.z, 2, 'it buys time, never height')
+  tick(m, TICK_MS)
+  assert.ok(p.lift > 0, 'off the ground straight away')
+  assert.ok(p.lift < 1, 'but not a whole floor yet')
+  assert.equal(p.z, 2, 'so the floor has not changed')
+})
+
+test('enough lift gains a floor and the climb starts again from there', () => {
+  const m = playing(2)
+  const p = m.players[0]
+  p.z = 2
+  p.held = 'hover'
+  usePowerup(m, p.id)
+  for (let n = 0; n < 200 && p.z === 2; n++) tick(m, TICK_MS)
+  assert.equal(p.z, 1, 'a floor gained')
+  assert.ok(p.lift < 1, 'and the climb measured from the new floor')
+})
+
+test('on the top floor hover lifts you but cannot leave the stack', () => {
+  const m = playing(2)
+  const p = m.players[0]
+  p.z = 0
+  p.held = 'hover'
+  usePowerup(m, p.id)
+  // Stop well inside HOVER_MS. Ticking past it would let the lift decay back to
+  // zero and the assertions below would pass or fail for the wrong reason.
+  const inside = Math.floor(HOVER_MS / TICK_MS / 2)
+  for (let n = 0; n < inside; n++) tick(m, TICK_MS)
+  assert.equal(p.z, 0, 'there is no floor above the top one to reach')
+  assert.ok(p.lift > 0, 'but you are off the ground rather than doing nothing')
+  assert.ok(p.lift < 1, 'and never a full floor clear of the stack')
+})
+
+test('when hover lapses you settle back down rather than snapping', () => {
+  const m = playing(2)
+  const p = m.players[0]
+  p.z = 0
+  p.held = 'hover'
+  usePowerup(m, p.id)
+  for (let n = 0; n < 60; n++) tick(m, TICK_MS)
+  const high = p.lift
+  assert.ok(high > 0)
+
+  m.now += HOVER_MS
+  tick(m, TICK_MS)
+  assert.ok(p.lift < high, 'coming down')
+  for (let n = 0; n < 400 && p.lift > 0; n++) tick(m, TICK_MS)
+  assert.equal(p.lift, 0, 'and all the way back to the floor')
+})
+
+test('the snapshot sends lift as a negative fall, so a body draws above its floor', () => {
+  const m = playing(2)
+  const p = m.players[0]
+  p.held = 'hover'
+  usePowerup(m, p.id)
+  for (let n = 0; n < 20; n++) tick(m, TICK_MS)
+  const row = snapshot(m).players.find((q) => q.id === p.id)
+  assert.ok(row.fall < 0, `a rising body reports a negative fall, got ${row.fall}`)
+  assert.ok(row.fall > -1, 'and never a whole floor')
+})
+
+test('settling onto a hole drops you the moment the lift runs out', () => {
+  const m = playing(2)
+  const p = m.players[0]
+  p.z = 1
+  p.held = 'hover'
+  usePowerup(m, p.id)
+  for (let n = 0; n < 20; n++) tick(m, TICK_MS)
+  m.tiles[tileUnder(m, p)] = 'gone'
+  assert.equal(p.fallUntil, 0, 'held up while the hover lasts')
+
+  m.now += HOVER_MS
+  for (let n = 0; n < 400 && p.fallUntil === 0; n++) tick(m, TICK_MS)
+  assert.ok(p.fallUntil > 0, 'and through the hole once it lapses')
 })
 
 test('bridge lays floor forward and only fills holes', () => {

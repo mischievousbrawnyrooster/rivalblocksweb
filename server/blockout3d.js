@@ -64,8 +64,8 @@ export const OVER_MS = 5000
 export const MIN_PLAYERS = 2
 export const ROUND_TARGET = 1
 
-export const POWERUP_EVERY_MS = 400
-export const POWERUP_MAX = 20
+export const POWERUP_EVERY_MS = 1600
+export const POWERUP_MAX = 12
 export const POWERUP_FLOOR_MAX = 8
 
 export const BOT_FILL_TO = 5
@@ -199,6 +199,9 @@ function seat(state, name, bot) {
     jumpUntil: 0,
     jumpReadyAt: 0,
     thinkAt: 0,
+    // Floors above `z` while a hover holds the body up. Goes out on the wire
+    // as a negative `fall`, which the renderer already draws as height.
+    lift: 0,
   }
   state.players.push(player)
   return player
@@ -414,6 +417,7 @@ export function startRound(state, rng = Math.random) {
     p.fallBy = 0
     p.jumpUntil = 0
     p.jumpReadyAt = 0
+    p.lift = 0
     p.z = 0
     if (p.playing) {
       // Centre of the tile: positions are continuous, tiles are not.
@@ -616,6 +620,17 @@ export const POWERUP_KINDS = [
 export const SHOVE_RADIUS = 2
 export const SHOVE_DIST = 2
 export const HOVER_MS = 2500
+// Floors per second of climb while a hover holds. Per second, not per tick:
+// the old per-tick figure silently doubled in speed when TICK_MS went from 33
+// to 16, which is the bug a rate expressed in ticks always invites. Over
+// HOVER_MS this is a little over two floors, matching what the per-tick
+// version delivered at the tick rate it was written for.
+export const JETPACK_RISE = 0.9
+
+// How far above the top floor a hover can hold you. Short of a full floor on
+// purpose: there is no tile above floor 0 to arrive at, and a negative `z`
+// would index off the end of the tile array.
+export const LIFT_CEILING = 0.9
 export const BRIDGE_TILES = 4
 
 // How often a kind comes up, against one for everything not listed.
@@ -886,6 +901,20 @@ export function usePowerup(state, id) {
   return true
 }
 
+/** Left-click: use held item if any, otherwise start a dash. */
+export function handleClick(state, id) {
+  if (state.phase !== 'playing') return false
+  const p = state.players.find((q) => q.id === id)
+  if (!p || !p.playing || !p.alive) return false
+  if (p.held) return usePowerup(state, id)
+  // No item held: short dash burst
+  if (state.now >= p.dashUntil) {
+    p.dashUntil = state.now + DASH_MS
+    return true
+  }
+  return false
+}
+
 /** How many tiles the next wave takes, given how much stack is left to take. */
 export const waveSize = (solid) =>
   Math.max(1, Math.min(COLLAPSE_COUNT, Math.ceil(solid * COLLAPSE_SHARE)))
@@ -1135,6 +1164,12 @@ export function driveBots(state, rng = Math.random) {
     if (b.fallUntil) continue
 
     const here = tileUnder(state, b)
+
+    // Bots jump to escape warned or broken tiles
+    if (state.tiles[here] === 'warn' || state.tiles[here] === 'gone') {
+      jump(state, b.id)
+    }
+
     const safe = (i) => state.tiles[i] === 'solid'
 
     let step = state.tiles[here] === 'warn' ? stepTo(state, b, safe) : null
@@ -1270,6 +1305,39 @@ export function tick(state, dt, rng = Math.random) {
   driveBots(state, rng)
   stepPlayers(state, dt)
 
+  // The climb, and the settle back down afterwards.
+  //
+  // `lift` is how many floors above `z` the body is floating, always under one:
+  // the moment it would pass a whole floor the body simply belongs to the floor
+  // above, so `z` drops and the climb starts again from there. That keeps the
+  // rise continuous on the wire without ever putting a body somewhere the tile
+  // lookup cannot answer for.
+  //
+  // On the top floor there is nothing above to arrive at, so the lift clamps
+  // short of a full floor and the body hangs over the stack instead. That is
+  // the difference between hover doing something on floor 0 and hover looking
+  // broken there, which is where a round starts and most of it is spent.
+  const rise = JETPACK_RISE * (dt / 1000)
+  for (const p of state.players) {
+    if (!p.playing || !p.alive) {
+      p.lift = 0
+      continue
+    }
+    if (state.now < p.hoverUntil && !p.fallUntil) {
+      p.lift += rise
+      if (p.z > 0 && p.lift >= 1) {
+        p.lift -= 1
+        p.z -= 1 // lower z is a higher floor
+      } else if (p.z === 0) {
+        p.lift = Math.min(LIFT_CEILING, p.lift)
+      }
+    } else if (p.lift > 0) {
+      // Settling, not snapping. Whether there is anything under you to settle
+      // onto is resolveFalls' business, as it is for every other way down.
+      p.lift = Math.max(0, p.lift - rise)
+    }
+  }
+
   while (state.now >= state.nextCollapseAt) {
     // Read before the wave lands, so the gap that follows is paced by the floor
     // the players are actually standing on.
@@ -1357,7 +1425,12 @@ export function snapshot(state, viewerId = null) {
       z: p.z,
       // 0 grounded, 1 landed. The client draws the body at z + fall and needs
       // to know nothing else about how a drop works.
-      fall: p.fallUntil ? Math.max(0, Math.min(1, 1 - (p.fallUntil - state.now) / FALL_MS)) : 0,
+      // One signed field for the whole vertical story: positive is a drop in
+      // progress, negative is a hover holding you above your floor. The
+      // renderer draws height as -(z + fall), so this needs nothing there.
+      fall: p.fallUntil
+        ? Math.max(0, Math.min(1, 1 - (p.fallUntil - state.now) / FALL_MS))
+        : -p.lift,
       playing: p.playing,
       alive: p.alive,
       wins: p.wins,
