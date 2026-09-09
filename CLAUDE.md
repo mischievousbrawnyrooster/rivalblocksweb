@@ -72,6 +72,12 @@ guessed future, so it cannot desync. The other three games interpolate nothing
 because at their tick rates they do not need to. Do not confuse the two rules:
 predicting your own input ahead of the server is banned; drawing between two
 frames the server sent is not.
+Blockout Royale 3D exempts one player from that delay: the client draws the
+body its camera is following at the newest position received, while everyone
+else stays smoothed 100 ms back (`sample(now, liveId)`). That is still not
+prediction — nothing simulates ahead of the server, and the position drawn is
+one the server has already sent. It is there because a camera attached to a
+body feels the replay delay as the whole world lagging the mouse.
 
 **Full state every tick, never diffs.** `snapshot()` returns `state.tiles` **by live reference**, not a copy. That is only safe because `server.js` calls `JSON.stringify(snapshot(match))` synchronously in the same turn as `tick()`. Never retain a snapshot across an await, a timer, or a later tick, and never stash them for diffing.
 
@@ -173,6 +179,19 @@ is nothing to lock. `BOARD_DIR` says where they live (`./data` in dev,
   punishes the descent the whole design is built around. `pickWave` falls
   back to the whole stack when no floor holds a living player, or the
   collapse would stall between rounds.
+- **Blockout 3D draws one `InstancedMesh` per floor, not one per stack.**
+  `InstancedMesh` has no per-instance opacity — `instanceColor` is RGB only —
+  so fading the floors above the player needs a material per floor. Five draw
+  calls, not one, and still not the 845 that drawing tiles individually would
+  cost. Merging them back into a single mesh to "tidy up" silently removes the
+  fade and puts the underside of a slab between the camera and the player.
+- **Keyboard input is rotated by camera yaw in `followCamera.worldDir`, and
+  nowhere else.** The game shipped with `KeyW` sending the fixed world vector
+  `[0, -1]` while the camera sat at 45 degrees and its yaw never left the
+  renderer, so W never once moved the player up the screen. The rotation is
+  pure and tested precisely because it failed silently: at yaw 0 it returns the
+  input unchanged, so the wrong version looks correct until you notice the
+  camera never starts at zero.
 
 ## Design rules inherited from the site
 
