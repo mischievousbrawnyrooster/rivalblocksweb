@@ -44,7 +44,6 @@ import {
   jump,
   JUMP_DURATION_MS,
   JUMP_COOLDOWN_MS,
-  JUMP_SPEED_BOOST,
   eliminate,
   POWERUP_KINDS,
   POWERUP_WEIGHTS,
@@ -1193,10 +1192,10 @@ test('a match concludes after 1 round win', () => {
   playing(m, 2)
   const [a, b] = m.players
   eliminate(m, b, a.id)
-  tick(m, 1)
+  tick(m, TICK_MS)
   assert.equal(m.phase, 'over')
   assert.equal(m.final, true, 'match is final on first round win')
-  assert.equal(a.wins, 1)
+  assert.equal(a.wins, ROUND_TARGET)
 })
 
 test('the snapshot carries tiles as a string of the right length', () => {
