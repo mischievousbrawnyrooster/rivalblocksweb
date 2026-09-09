@@ -55,6 +55,43 @@ function makeIconTexture(glyph) {
   return new THREE.CanvasTexture(c)
 }
 
+const ITEM_GLYPH = {
+  shield: '◈',
+  dash: '»',
+  sinkhole: '◍',
+  patch: '▦',
+  blink: '↷',
+  swap: '⇄',
+  foresight: '◎',
+  shove: '↦',
+  hover: '⇧',
+  bridge: '▬',
+  anchor: '╀',
+  lift: '⇑',
+}
+
+function makeItemTexture(glyph) {
+  const c = document.createElement('canvas')
+  c.width = c.height = 64
+  const g = c.getContext('2d')
+  // Dark translucent backing circle
+  g.fillStyle = 'rgba(22, 22, 26, 0.88)'
+  g.beginPath()
+  g.arc(32, 32, 28, 0, Math.PI * 2)
+  g.fill()
+  // Orange flare border ring
+  g.strokeStyle = '#ff6b1a'
+  g.lineWidth = 3
+  g.stroke()
+  // Glyph in center
+  g.fillStyle = '#ffffff'
+  g.font = 'bold 34px monospace, sans-serif'
+  g.textAlign = 'center'
+  g.textBaseline = 'middle'
+  g.fillText(glyph, 32, 33)
+  return new THREE.CanvasTexture(c)
+}
+
 /**
  * Procedural platform tile texture: combines a sci-fi modular tech deck
  * (beveled frame, recessed industrial plate, corner mounting rivets)
@@ -275,6 +312,7 @@ export function makeScene(canvas, { size, floors }) {
     const mesh = new THREE.InstancedMesh(tileGeo, mat, perFloor)
     mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage)
     mesh.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(perFloor * 3), 3)
+    mesh.frustumCulled = false
     tileMats.push(mat)
     tiles.push(mesh)
     scene.add(mesh)
@@ -287,21 +325,33 @@ export function makeScene(canvas, { size, floors }) {
   const postMat = new THREE.MeshLambertMaterial({ color: token('--warn', '#e8a33d') })
   const posts = new THREE.InstancedMesh(postGeo, postMat, count)
   posts.instanceMatrix.setUsage(THREE.DynamicDrawUsage)
+  posts.frustumCulled = false
   scene.add(posts)
 
-  const pickCoreGeo = new THREE.IcosahedronGeometry(0.36, 0)
-  const pickRingGeo = new THREE.TorusGeometry(0.52, 0.045, 8, 24)
+  const pickCoreGeo = new THREE.IcosahedronGeometry(0.46, 0)
+  const pickRingGeo = new THREE.TorusGeometry(0.68, 0.08, 8, 24)
   const pickMat = new THREE.MeshLambertMaterial({
     color: token('--flare', '#ff6b1a'),
     emissive: token('--flare', '#ff6b1a'),
-    emissiveIntensity: 0.25,
+    emissiveIntensity: 0.65,
   })
   const pickCores = new THREE.InstancedMesh(pickCoreGeo, pickMat, 64)
   const pickRings = new THREE.InstancedMesh(pickRingGeo, pickMat, 64)
   pickCores.instanceMatrix.setUsage(THREE.DynamicDrawUsage)
   pickRings.instanceMatrix.setUsage(THREE.DynamicDrawUsage)
+  pickCores.frustumCulled = false
+  pickRings.frustumCulled = false
   scene.add(pickCores)
   scene.add(pickRings)
+
+  const itemTex = new Map()
+  const itemMat = new Map()
+  for (const [kind, glyph] of Object.entries(ITEM_GLYPH)) {
+    const tex = makeItemTexture(glyph)
+    itemTex.set(kind, tex)
+    itemMat.set(kind, new THREE.SpriteMaterial({ map: tex, transparent: true, depthTest: true }))
+  }
+  const pickSprites = []
 
   const bodies = new Map() // playerId -> Group (astronaut)
   const labels = new Map() // playerId -> Sprite, the billboard glyph above it
@@ -440,12 +490,12 @@ export function makeScene(canvas, { size, floors }) {
       const rotRing = -tSec * 2.2
 
       let n = 0
-      for (const key of Object.keys(view.powerups ?? {})) {
+      for (const [key, kind] of Object.entries(view.powerups ?? {})) {
         if (n >= 64) break
         const i = Number(key)
         const z = Math.floor(i / (size * size))
         const px = (i % size) + 0.5
-        const py = worldY(z) + 0.65 + bob
+        const py = worldY(z) + 0.82 + bob
         const pz = (Math.floor(i / size) % size) + 0.5
 
         // Core translation and rotation
@@ -460,14 +510,31 @@ export function makeScene(canvas, { size, floors }) {
         m4.multiply(ringTiltM)
         m4.multiply(rotM)
         pickRings.setMatrixAt(n, m4)
+
+        // Floating glyph billboard badge
+        const mat = itemMat.get(kind) ?? itemMat.get('shield')
+        let spr = pickSprites[n]
+        if (!spr) {
+          spr = new THREE.Sprite(mat)
+          spr.scale.set(0.65, 0.65, 1)
+          pickSprites.push(spr)
+          scene.add(spr)
+        } else {
+          spr.material = mat
+          spr.visible = true
+        }
+        spr.position.set(px, py + 0.62, pz)
+
         n++
       }
-      for (let i = n; i < 64; i++) {
-        pickCores.setMatrixAt(i, hidden)
-        pickRings.setMatrixAt(i, hidden)
-      }
+      pickCores.count = n
+      pickRings.count = n
       pickCores.instanceMatrix.needsUpdate = true
       pickRings.instanceMatrix.needsUpdate = true
+
+      for (let i = n; i < pickSprites.length; i++) {
+        pickSprites[i].visible = false
+      }
 
       // Slot = index in the current player list, the same convention
       // Play.jsx and Blastworks.jsx key a piece's colour and icon by, and
@@ -559,6 +626,12 @@ export function makeScene(canvas, { size, floors }) {
       }
       for (const mat of iconMat) mat.dispose()
       for (const tex of iconTex) tex.dispose()
+      for (const spr of pickSprites) {
+        scene.remove(spr)
+        spr.geometry?.dispose()
+      }
+      for (const mat of itemMat.values()) mat.dispose()
+      for (const tex of itemTex.values()) tex.dispose()
       tileTex.dispose()
     },
   }
