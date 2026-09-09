@@ -9,10 +9,13 @@ import * as THREE from 'three'
 const SOLID = '.'
 const WARN = '!'
 
-// Straight from the @theme tokens in src/index.css. Read once here rather than
-// hardcoded twice.
+// Read the hand-written `:root` custom properties directly, never the
+// `--color-*` Tailwind aliases. Tailwind v4's `@theme inline` substitutes
+// those into utility classes rather than emitting them as real custom
+// properties, so `getComputedStyle` returns '' for a `--color-*` read and
+// this falls back silently — see CLAUDE.md. `src/pages/Play.jsx` and
+// `Blastworks.jsx` read the same raw names for the same reason.
 const token = (name, fallback) => {
-  if (typeof window === 'undefined') return fallback
   const v = getComputedStyle(document.documentElement).getPropertyValue(name).trim()
   return v || fallback
 }
@@ -25,13 +28,39 @@ const WARN_DROP = 0.18 // how far a flagged tile sinks
 // axis, structurally, not by colour (WCAG 1.4.1) — it is still `solid` in
 // `view.tiles`, just marked to be taken by the wave the server already chose.
 const SOON_RISE = WARN_DROP
+// A third structural signal, alongside the two above: a plated tile grows
+// visibly thicker rather than changing colour, so armour reads without
+// depending on a hue (WCAG 1.4.1). A tile can be both plated and warned —
+// the plate still absorbs the wave that is coming for it, so it keeps BOTH
+// signals at once: sunk like any warned tile, but visibly thicker than one
+// that is not plated, which is what tells a defended warning apart from an
+// undefended one.
+const PLATE_SCALE_Y = 1.9
+
+// Billboard glyphs. Same convention as every other game here (`PIECE_ICON` in
+// Play.jsx, Blastworks.jsx, Fracture.jsx): one emoji per slot, so a player is
+// told apart without colour (WCAG 1.4.1) exactly as every sibling piece's
+// initial does. Drawn once into an offscreen canvas per icon, never per frame.
+const PIECE_ICON = ['🦊', '🐺', '🐙', '🦈', '🐝', '🐸', '🦅', '🐧']
+const ICON_FONT = '"Segoe UI Emoji", "Apple Color Emoji", "Noto Color Emoji", sans-serif'
+
+function makeIconTexture(glyph) {
+  const c = document.createElement('canvas')
+  c.width = c.height = 64
+  const g = c.getContext('2d')
+  g.font = `52px ${ICON_FONT}`
+  g.textAlign = 'center'
+  g.textBaseline = 'middle'
+  g.fillText(glyph, 32, 34)
+  return new THREE.CanvasTexture(c)
+}
 
 export function makeScene(canvas, { size, floors }) {
   const renderer = new THREE.WebGLRenderer({ canvas, antialias: true })
   renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2))
 
   const scene = new THREE.Scene()
-  scene.background = new THREE.Color(token('--color-bg', '#16161a'))
+  scene.background = new THREE.Color(token('--bg', '#16161a'))
 
   const camera = new THREE.PerspectiveCamera(45, 1, 0.1, 400)
   const target = new THREE.Vector3(size / 2, -FLOOR_GAP * (floors - 1) / 2, size / 2)
@@ -59,30 +88,40 @@ export function makeScene(canvas, { size, floors }) {
   // a status signal anywhere in this project (WCAG 1.4.1), and in three
   // dimensions a shape change is the cheapest thing there is.
   const postGeo = new THREE.BoxGeometry(0.16, 0.9, 0.16)
-  const postMat = new THREE.MeshLambertMaterial({ color: token('--color-warn', '#e8a33d') })
+  const postMat = new THREE.MeshLambertMaterial({ color: token('--warn', '#e8a33d') })
   const posts = new THREE.InstancedMesh(postGeo, postMat, count)
   posts.instanceMatrix.setUsage(THREE.DynamicDrawUsage)
   scene.add(posts)
 
   const pickGeo = new THREE.OctahedronGeometry(0.28)
-  const pickMat = new THREE.MeshLambertMaterial({ color: token('--color-flare', '#ff6b1a') })
+  const pickMat = new THREE.MeshLambertMaterial({ color: token('--flare', '#ff6b1a') })
   const picks = new THREE.InstancedMesh(pickGeo, pickMat, 64)
   picks.instanceMatrix.setUsage(THREE.DynamicDrawUsage)
   scene.add(picks)
 
   const bodyGeo = new THREE.BoxGeometry(0.62, 0.9, 0.62)
   const bodies = new Map() // playerId -> Mesh
+  const labels = new Map() // playerId -> Sprite, the billboard glyph above it
+
+  // Eight small textures, built once and reused by every player who ever
+  // takes that slot — never rebuilt per player and never per frame.
+  const iconTex = PIECE_ICON.map(makeIconTexture)
+  const iconMat = iconTex.map((map) => new THREE.SpriteMaterial({ map, transparent: true }))
 
   const m4 = new THREE.Matrix4()
+  const scaleM = new THREE.Matrix4()
   const col = new THREE.Color()
   const hidden = new THREE.Matrix4().makeScale(0, 0, 0)
 
   // Resolved once here, not per frame: these only change on a theme flip,
   // and update() runs sixty times a second.
-  const solidCol = new THREE.Color(token('--color-tile', '#3a3a42'))
-  const warnCol = new THREE.Color(token('--color-warn', '#e8a33d'))
+  const solidCol = new THREE.Color(token('--tile', '#3a3a42'))
+  const warnCol = new THREE.Color(token('--warn', '#e8a33d'))
 
-  const playerColor = (n) => token(`--color-player-${n}`, '#ff6b1a')
+  // Takes a slot (0-based, the player's index in the current player list —
+  // the same convention Play.jsx and Blastworks.jsx key their pieces by, and
+  // what keeps this in step with the scoreboard after somebody disconnects).
+  const playerColor = (slot) => token(`--player-${(slot % 8) + 1}`, '#ff6b1a')
 
   // The scene is built once, but the site's theme toggle can flip underneath
   // it. Re-reading on the attribute change costs nothing per frame and is
@@ -91,13 +130,13 @@ export function makeScene(canvas, { size, floors }) {
   // canvas that ignores the toggle is the one thing on the page that visibly
   // does not.
   const retheme = () => {
-    scene.background.set(token('--color-bg', '#16161a'))
-    solidCol.set(token('--color-tile', '#3a3a42'))
-    warnCol.set(token('--color-warn', '#e8a33d'))
-    postMat.color.set(token('--color-warn', '#e8a33d'))
-    pickMat.color.set(token('--color-flare', '#ff6b1a'))
-    for (const [id, mesh] of bodies) {
-      mesh.material.color.set(playerColor(((id - 1) % 8) + 1))
+    scene.background.set(token('--bg', '#16161a'))
+    solidCol.set(token('--tile', '#3a3a42'))
+    warnCol.set(token('--warn', '#e8a33d'))
+    postMat.color.set(token('--warn', '#e8a33d'))
+    pickMat.color.set(token('--flare', '#ff6b1a'))
+    for (const mesh of bodies.values()) {
+      mesh.material.color.set(playerColor(mesh.userData.slot ?? 0))
     }
   }
   const themeWatch = new MutationObserver(retheme)
@@ -136,6 +175,7 @@ export function makeScene(canvas, { size, floors }) {
       // `count` (845) times a frame, and .includes() in there would be the
       // per-frame allocation this file was already fixed once for.
       const soon = new Set(view.soon ?? [])
+      const reinforced = new Set(view.reinforced ?? [])
       let posted = 0
       for (let i = 0; i < count; i++) {
         const ch = view.tiles[i]
@@ -148,6 +188,10 @@ export function makeScene(canvas, { size, floors }) {
         const y = Math.floor(i / size) % size
         const lift = ch === WARN ? -WARN_DROP : soon.has(i) ? SOON_RISE : 0
         m4.makeTranslation(x + 0.5, worldY(z) + lift, y + 0.5)
+        // Plated: a visibly thicker slab rather than a colour change (see
+        // PLATE_SCALE_Y). Composed after the translation, so the tile scales
+        // about its own centre and still lands at (x, z, y).
+        if (reinforced.has(i)) m4.multiply(scaleM.makeScale(1, PLATE_SCALE_Y, 1))
         tiles.setMatrixAt(i, m4)
 
         col.copy(ch === WARN ? warnCol : solidCol)
@@ -179,25 +223,50 @@ export function makeScene(canvas, { size, floors }) {
       for (let i = n; i < 64; i++) picks.setMatrixAt(i, hidden)
       picks.instanceMatrix.needsUpdate = true
 
+      // Slot = index in the current player list, the same convention
+      // Play.jsx and Blastworks.jsx key a piece's colour and icon by, and
+      // what the scoreboard already uses. The id stays fixed across a
+      // disconnect; this is rebuilt every frame precisely so it does not.
+      const slotOf = new Map(view.players.map((q, i) => [q.id, i % 8]))
+
       const seen = new Set()
       for (const p of view.players) {
         if (!p.playing || !p.alive) continue
         seen.add(p.id)
+        const slot = slotOf.get(p.id)
         let mesh = bodies.get(p.id)
+        let label = labels.get(p.id)
         if (!mesh) {
-          mesh = new THREE.Mesh(
-            bodyGeo,
-            new THREE.MeshLambertMaterial({ color: playerColor(((p.id - 1) % 8) + 1) }),
-          )
+          mesh = new THREE.Mesh(bodyGeo, new THREE.MeshLambertMaterial({ color: playerColor(slot) }))
           bodies.set(p.id, mesh)
           scene.add(mesh)
+          // The billboard glyph. Always faces the camera (THREE.Sprite does
+          // this natively), which is what makes it readable from any angle
+          // the orbit control can reach.
+          label = new THREE.Sprite(iconMat[slot])
+          label.scale.set(0.6, 0.6, 1)
+          labels.set(p.id, label)
+          scene.add(label)
+        }
+        // A slot only changes when the player list reorders (someone
+        // joining or leaving), so this is a rare write, not a per-frame one.
+        if (mesh.userData.slot !== slot) {
+          mesh.userData.slot = slot
+          mesh.material.color.set(playerColor(slot))
+          label.material = iconMat[slot]
         }
         mesh.position.set(p.x, worldY(p.z, p.fall) + 0.62, p.y)
         mesh.visible = true
         // A wind-up is a shape change, not a tint.
         mesh.scale.setScalar(p.stomping ? 1.25 : 1)
+        label.position.set(p.x, mesh.position.y + 0.75, p.y)
+        label.visible = true
       }
-      for (const [id, mesh] of bodies) if (!seen.has(id)) mesh.visible = false
+      for (const [id, mesh] of bodies) {
+        if (seen.has(id)) continue
+        mesh.visible = false
+        labels.get(id).visible = false
+      }
 
       camera.position.set(
         target.x + Math.sin(yaw) * Math.cos(pitch) * dist,
@@ -222,6 +291,8 @@ export function makeScene(canvas, { size, floors }) {
       postMat.dispose()
       pickMat.dispose()
       for (const mesh of bodies.values()) mesh.material.dispose()
+      for (const mat of iconMat) mat.dispose()
+      for (const tex of iconTex) tex.dispose()
     },
   }
 }

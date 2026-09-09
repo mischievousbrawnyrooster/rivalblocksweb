@@ -200,6 +200,15 @@ export default function AdminMatch({ adminKey }) {
         adminKey={adminKey}
       />
       <MatchPanel title="Blockout Royale" path="/ws" controllable adminKey={adminKey} />
+      {/* No entry in ARENAS above: the 3D wrapper has no 'arena' admin branch,
+          unlike flat Blockout, so the arena row simply renders empty for it —
+          restart, botsonly and fill-to all still work, unaffected. */}
+      <MatchPanel
+        title="Blockout Royale 3D"
+        path="/blockout3d-ws"
+        controllable
+        adminKey={adminKey}
+      />
     </div>
   )
 }

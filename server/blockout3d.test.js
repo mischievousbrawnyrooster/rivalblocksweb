@@ -308,6 +308,19 @@ test('movement is clamped to the grid rather than walking off the array', () => 
   assert.ok(p.x >= 0 && p.x <= SIZE, `x stayed in bounds at ${p.x}`)
 })
 
+test('movement never quite reaches SIZE, so a bare Math.floor at the edge stays a valid column', () => {
+  const m = playing(2)
+  const p = m.players[0]
+  p.x = SIZE - 0.5
+  p.y = 6.5
+  input(m, p.id, [1, 0])
+  stepPlayers(m, 5000)
+  // patchAround, anchorAround, blink and buildBridge all read Math.floor(p.x)
+  // with no clamp of their own — tileUnder's SIZE - 1 clamp does not cover
+  // them, so the coordinate itself has to stay short of SIZE.
+  assert.ok(Math.floor(p.x) < SIZE, `floor(x) still a real column at ${p.x}`)
+})
+
 test('a dash multiplies ground speed for its duration', () => {
   const m = playing(2)
   const p = m.players[0]
@@ -951,6 +964,21 @@ test('shove with nobody in range keeps the item', () => {
   p.held = 'shove'
   assert.equal(usePowerup(m, p.id), false)
   assert.equal(p.held, 'shove')
+})
+
+test('shove skips a rival already falling, rather than teleporting them sideways in the air', () => {
+  const m = playing(2)
+  const [p, o] = m.players
+  p.x = 6.5
+  p.y = 6.5
+  o.x = 7.5
+  o.y = 6.5
+  o.z = p.z
+  o.fallUntil = m.now + 1000
+  p.held = 'shove'
+  assert.equal(usePowerup(m, p.id), false, 'nobody eligible in range')
+  assert.equal(o.x, 7.5, 'left where the drop already put them')
+  assert.equal(p.held, 'shove', 'kept rather than spent on a body already falling')
 })
 
 test('shove over a hole is credited to whoever threw it', () => {

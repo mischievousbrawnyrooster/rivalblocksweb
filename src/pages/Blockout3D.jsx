@@ -89,7 +89,6 @@ export default function Blockout3D() {
   const wsRef = useRef(null)
   const bufRef = useRef(makeBuffer(DELAY_MS))
   const heldRef = useRef(new Set())
-  const sentRef = useRef([0, 0])
   const [joined, setJoined] = useState(false)
   const [name, setName] = useState('')
   const [hud, setHud] = useState(null)
@@ -103,7 +102,6 @@ export default function Blockout3D() {
     // last frames and the new one's first is not a thing that should happen.
     bufRef.current = makeBuffer(DELAY_MS)
     heldRef.current.clear()
-    sentRef.current = [0, 0]
     setLostConnection(false)
     const proto = location.protocol === 'https:' ? 'wss:' : 'ws:'
     const ws = new WebSocket(`${proto}//${location.host}/blockout3d-ws`)
@@ -167,6 +165,13 @@ export default function Blockout3D() {
 
   // Send the held direction on a clock rather than per keypress: a direction is
   // a state, not an event, and the server holds it until it changes.
+  //
+  // Unconditional, same as Blastworks.jsx — no dedupe against the last sent
+  // vector. A dedupe here was what dropped a held key at every round
+  // boundary: `input()` refuses anything sent before `phase === 'playing'`,
+  // so the "held during countdown" frame that got refused would still mark
+  // itself as sent, and nothing after it would repeat the direction once the
+  // round actually started. 20 bytes every 50ms is nothing to buy that back.
   useEffect(() => {
     if (!joined) return undefined
     const id = setInterval(() => {
@@ -176,9 +181,6 @@ export default function Blockout3D() {
         dx += KEYS[code][0]
         dy += KEYS[code][1]
       }
-      const [px, py] = sentRef.current
-      if (dx === px && dy === py) return
-      sentRef.current = [dx, dy]
       wsRef.current?.send(JSON.stringify({ t: 'input', dir: [dx, dy] }))
     }, SEND_MS)
     return () => clearInterval(id)

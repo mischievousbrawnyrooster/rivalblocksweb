@@ -10,7 +10,7 @@ import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node
 import { join } from 'node:path'
 import { emptyBoard, isBoard, merge, once, top } from './board.js'
 
-/** Where the four files live. Set by the systemd units; a repo folder in dev. */
+/** Where the five files live. Set by the systemd units; a repo folder in dev. */
 export const boardDir = (env = process.env) => env.BOARD_DIR || 'data'
 
 /**
@@ -68,7 +68,7 @@ export function save(dir, spec, board) {
  *
  * It decides nothing about ordering or contents — merge and top do that — and
  * nothing about when a match is over, which only the game knows. It exists so
- * that four wrappers do not each carry their own copy of load-merge-save.
+ * that five wrappers do not each carry their own copy of load-merge-save.
  *
  * `results` is a function rather than a list because it is only worth building
  * on the one frame in a whole match where it is actually banked.

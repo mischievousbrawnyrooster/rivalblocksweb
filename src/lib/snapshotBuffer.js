@@ -55,6 +55,8 @@ export function makeBuffer(delayMs) {
           // Somebody who was not there a frame ago is drawn where they are.
           // Changing floors is taken whole rather than blended: a body halfway
           // through a slab is worse than a body that arrives a frame early.
+          // Returned by reference, not copied — safe only because every
+          // caller of sample() reads this player read-only.
           if (!a || a.z !== p.z) return p
           return {
             ...p,

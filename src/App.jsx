@@ -1,4 +1,4 @@
-import { lazy, Suspense } from 'react'
+import { Component, lazy, Suspense } from 'react'
 import { Routes, Route } from 'react-router-dom'
 import Layout from './components/Layout.jsx'
 import Home from './pages/Home.jsx'
@@ -28,6 +28,38 @@ function LoadingStack() {
   )
 }
 
+// React.lazy only covers the pending state; a chunk 404 after a redeploy
+// throws during render, and with no boundary above it React unmounts the
+// whole tree, not just this route. Scoped to this one Suspense rather than
+// the whole app, so the failure stays a blank card in the play area — the
+// nav and every other page around it keep working.
+class StackLoadError extends Component {
+  state = { failed: false }
+  static getDerivedStateFromError() {
+    return { failed: true }
+  }
+  render() {
+    if (!this.state.failed) return this.props.children
+    return (
+      <div className="mx-auto max-w-xl px-5 py-24 text-center">
+        <p className="rule-label">Blockout Royale 3D</p>
+        <h1 className="display mt-2 text-2xl">The stack did not load</h1>
+        <p className="mt-4 leading-relaxed text-muted">
+          A newer version of the site shipped while this tab was open. Reload
+          to pick it up.
+        </p>
+        <button
+          type="button"
+          onClick={() => window.location.reload()}
+          className="mt-8 bg-flare px-7 py-3.5 text-xs font-bold uppercase tracking-[0.12em] text-on-flare transition-opacity hover:opacity-90"
+        >
+          Reload
+        </button>
+      </div>
+    )
+  }
+}
+
 export default function App() {
   return (
     <Routes>
@@ -43,9 +75,11 @@ export default function App() {
         <Route
           path="play/blockout-royale-3d"
           element={
-            <Suspense fallback={<LoadingStack />}>
-              <Blockout3D />
-            </Suspense>
+            <StackLoadError>
+              <Suspense fallback={<LoadingStack />}>
+                <Blockout3D />
+              </Suspense>
+            </StackLoadError>
           }
         />
         <Route path="leaderboard" element={<LeaderboardPage />} />

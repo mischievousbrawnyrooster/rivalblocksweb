@@ -131,7 +131,7 @@ is nothing to lock. `BOARD_DIR` says where they live (`./data` in dev,
 - **The test helper `playing(n)` passes `() => 0` as rng** to force `ARENAS[0] === 'square'`, and freezes `nextCollapseAt`/`nextPowerupAt` at `Infinity`. Randomness in tests goes through an injected rng, never `Math.random`.
 - **Blockout 3D: tiles ship as one character each, indexed
   `z * SIZE * SIZE + y * SIZE + x`.** 845 tiles as `'solid'|'warn'|'gone'`
-  strings is 300 KB/s per client at a 33 ms tick. `tileString()` is the only
+  strings is 183 KB/s per client at a 33 ms tick. `tileString()` is the only
   encoder and `CHAR` the only table; a fifth tile state means touching both or
   the wire silently carries `undefined`.
 - **Blockout 3D: the void and the collapse wave are two halves of one trade.**
@@ -144,7 +144,7 @@ is nothing to lock. `BOARD_DIR` says where they live (`./data` in dev,
 - **Blockout 3D: `lift` is the only powerup that creates height.** Everything
   else moves it or spends it; `swap` is zero-sum by construction. If matches run
   long, `lift`'s frequency is the first thing to check, and the powerup bag
-  cannot express a weight below one draw in ten without restructuring.
+  cannot express a weight below one draw in fourteen without restructuring.
 - **Blockout 3D: `kills`/`deaths` reset per round in `startRound`, because the
   board banks per round.** They are cumulative from join otherwise, so a
   best-of-three would bank a player's kills three times over and keep
@@ -163,16 +163,16 @@ is nothing to lock. `BOARD_DIR` says where they live (`./data` in dev,
   Blockout picks uniformly across the whole board.** `pickWave` here used to
   pick uniformly across the whole 845-tile stack too, and thirty seeded rounds
   measured what that cost: 53% of drops chained straight into a second,
-  unwarned drop (357/671) — unoccupied floors below had already rotted
-  through before anyone arrived on them, so a fall onto one landed on ground
-  that was already gone. Restricting the candidate list to occupied floors,
-  with `COLLAPSE_EVERY_MS` held at the same value so the comparison isolates
-  this change alone, brought that to 38% (263/686). The divergence is
-  deliberate, and the reason is the third axis: a flat board has nowhere to
-  fall to, so eroding it evenly costs nothing, while a stack that erodes where
-  nobody is looking punishes the descent the whole design is built around.
-  `pickWave` falls back to the whole stack when no floor holds a living
-  player, or the collapse would stall between rounds.
+  unwarned drop — unoccupied floors below had already rotted through before
+  anyone arrived on them, so a fall onto one landed on ground that was
+  already gone. Restricting the candidate list to occupied floors, with
+  `COLLAPSE_EVERY_MS` held at the same value so the comparison isolates this
+  change alone, brought that to 38%. The divergence is deliberate, and the
+  reason is the third axis: a flat board has nowhere to fall to, so eroding it
+  evenly costs nothing, while a stack that erodes where nobody is looking
+  punishes the descent the whole design is built around. `pickWave` falls
+  back to the whole stack when no floor holds a living player, or the
+  collapse would stall between rounds.
 
 ## Design rules inherited from the site
 
@@ -182,6 +182,7 @@ These are non-negotiable and predate the game:
 - **Status is never communicated by colour alone** (WCAG 1.4.1). Warning tiles carry a glyph, holes differ structurally from solid tiles, players carry their initial.
 - **Player colour tokens (`--player-1..8`) are separate from status tokens** so a piece can never wear a tile's colour. Never reuse `--warn` for a player.
 - **Only existing `@theme` tokens** from `src/index.css`. No new tokens without reason, no `tailwind.config.js` (Tailwind v4 is CSS-first).
+- **Canvas and WebGL code reads the raw `:root` variables** (`--bg`, `--tile`, `--player-N`), never the `--color-*` aliases. Tailwind v4's `@theme inline` substitutes those into utilities rather than emitting them, so a `--color-*` read returns an empty string at runtime and silently falls back.
 - **In-fiction copy.** The studio is fictional; the site never says so. Nothing may read as a demo, mock, test, or placeholder.
 
 ## Deployment

@@ -95,7 +95,7 @@ export const idx = (x, y, z) => z * SIZE * SIZE + y * SIZE + x
 /** The inverse of `idx`. */
 export const xyz = (i) => [i % SIZE, ((i / SIZE) | 0) % SIZE, (i / (SIZE * SIZE)) | 0]
 
-// One character per tile on the wire. 845 tiles as quoted words is 300 KB/s per
+// One character per tile on the wire. 845 tiles as quoted words is 183 KB/s per
 // client at this tick rate, which is not acceptable; this is 25 KB/s and reads
 // better in a packet capture than an array of strings does.
 const CHAR = { solid: '.', warn: '!', gone: '_' }
@@ -449,6 +449,13 @@ export function input(state, id, dir) {
   return true
 }
 
+// Just under SIZE, not SIZE itself: tileUnder clamps its own read to
+// SIZE - 1, but patchAround, anchorAround, blink and buildBridge all read a
+// bare `Math.floor(p.x)` with no clamp of their own. A body pinned exactly at
+// SIZE would floor to a column one past the grid, and everything that reads
+// the raw coordinate would cover one column instead of two along that edge.
+const EDGE = SIZE - 1e-6
+
 /** Advances every body by dt, on the ground or in the air. */
 export function stepPlayers(state, dt) {
   const secs = dt / 1000
@@ -461,8 +468,8 @@ export function stepPlayers(state, dt) {
       : SPEED_BASE * (state.now < p.dashUntil ? DASH_MULT : 1)
     // Clamped to the grid rather than to the arena: the arena edge is carved
     // `gone`, so walking off it is a fall and needs no rule of its own.
-    p.x = Math.max(0, Math.min(SIZE, p.x + dx * speed * secs))
-    p.y = Math.max(0, Math.min(SIZE, p.y + dy * speed * secs))
+    p.x = Math.max(0, Math.min(EDGE, p.x + dx * speed * secs))
+    p.y = Math.max(0, Math.min(EDGE, p.y + dy * speed * secs))
   }
 }
 
@@ -637,8 +644,8 @@ export const BRIDGE_TILES = 4
 //
 // `lift` is deliberately NOT weighted. It is the only item that creates height
 // rather than moving it, so every one collected adds a life the void then has
-// to spend time eating. One draw in ten is the rarest this bag can express;
-// anything rarer needs the bag to change, not the number.
+// to spend time eating. One draw in fourteen is the rarest this bag can
+// express; anything rarer needs the bag to change, not the number.
 export const POWERUP_WEIGHTS = { patch: 3 }
 
 // Built from POWERUP_KINDS rather than written out, so a kind added above
@@ -796,7 +803,11 @@ function lift(state, p) {
 function shoveRivals(state, p) {
   let any = false
   for (const o of state.players) {
-    if (o === p || !o.playing || !o.alive || o.z !== p.z) continue
+    // Same skip list as swap and resolveStomps: a body mid-drop is not
+    // standing anywhere, so there is nowhere for a shove to drive it from —
+    // without this it got teleported sideways in the air, and startFall's
+    // early return (already falling) silently ate the credit.
+    if (o === p || !o.playing || !o.alive || o.fallUntil || o.z !== p.z) continue
     const dx = o.x - p.x
     const dy = o.y - p.y
     if (Math.max(Math.abs(dx), Math.abs(dy)) > SHOVE_RADIUS) continue

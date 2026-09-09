@@ -2,12 +2,22 @@ import { Link } from 'react-router-dom'
 import Leaderboard from '../components/Leaderboard.jsx'
 import { useTitle } from '../lib/useTitle.js'
 import { useBoard } from '../lib/useBoard.js'
-import { games } from '../data/games.js'
 import { rank } from '../../server/board.js'
 
+// Mapped explicitly rather than by substring match against games.js: `game`
+// here is a board key ('blockout', 'blockout3d', 'fracture', 'blastworks'),
+// and '/play/blockout-royale-3d'.includes('blockout') is true, so a substring
+// search finds the wrong route — or, for 'blockout3d' itself, no route at all,
+// since the slug is 'blockout-royale-3d' and never contains that string.
+const PLAY_PATH = {
+  blockout: '/play/blockout-royale',
+  blockout3d: '/play/blockout-royale-3d',
+  fracture: '/play/fracture-line',
+  blastworks: '/play/blastworks',
+}
+
 /** The play route for a board, so a name on the table is one click from a match. */
-const playPathFor = (game) =>
-  games.find((g) => g.playPath && g.playPath.includes(game))?.playPath ?? '/play'
+const playPathFor = (game) => PLAY_PATH[game] ?? '/play'
 
 export default function LeaderboardPage() {
   useTitle('Leaderboard')
@@ -20,10 +30,10 @@ export default function LeaderboardPage() {
           <p className="rule-label">Every title</p>
           <h1 className="display mt-2 text-4xl sm:text-5xl">Leaderboard</h1>
           <p className="mt-5 max-w-xl leading-relaxed text-muted">
-            Every round of Blockout Royale and every match of Fracture Line
-            and Blastworks, on every server. A result goes on the board the
-            moment it finishes and stays there. Nothing is cleared between
-            sessions.
+            Every round of Blockout Royale and Blockout Royale 3D, and every
+            match of Fracture Line and Blastworks, on every server. A result
+            goes on the board the moment it finishes and stays there. Nothing
+            is cleared between sessions.
           </p>
         </div>
       </header>
