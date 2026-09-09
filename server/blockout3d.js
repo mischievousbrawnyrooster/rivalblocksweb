@@ -991,11 +991,23 @@ export function resolveWarnings(state) {
   }
 }
 
+/**
+ * Places a powerup on a surviving solid tile on a floor with a living player.
+ *
+ * Restricting powerups to occupied floors ensures pickups are reachable on
+ * the active platform rather than accumulating on abandoned floors.
+ * An empty stack falls back to every solid tile so seeding works before
+ * players are seated.
+ */
 function spawnPowerup(state, rng) {
   if (Object.keys(state.powerups).length >= POWERUP_MAX) return
+  const occupied = new Set(
+    state.players.filter((p) => p.playing && p.alive).map((p) => p.z),
+  )
   const free = []
   for (let i = 0; i < TOTAL; i++) {
     if (state.tiles[i] !== 'solid') continue
+    if (occupied.size > 0 && !occupied.has((i / (SIZE * SIZE)) | 0)) continue
     if (Object.hasOwn(state.powerups, i)) continue
     if (state.players.some((p) => p.playing && p.alive && tileUnder(state, p) === i)) continue
     free.push(i)

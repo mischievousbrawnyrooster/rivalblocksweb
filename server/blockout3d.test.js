@@ -927,6 +927,36 @@ test('a pickup never lands in a hole, on a player, or past the cap', () => {
   }
 })
 
+test('powerups spawn only on floors with living players', () => {
+  const m = playing(2)
+  let n = 0
+  const rng = () => ((n++ * 0.37) % 1)
+  for (let k = 0; k < POWERUP_MAX; k++) spawnPowerup(m, rng)
+  const floors = new Set(Object.keys(m.powerups).map((k) => xyz(Number(k))[2]))
+  assert.deepEqual([...floors], [0], 'all powerups spawned on floor 0 where players reside')
+})
+
+test('moving a player to another floor allows powerups to spawn on that floor too', () => {
+  const m = playing(2)
+  m.players[1].z = 2
+  let n = 0
+  const rng = () => ((n++ * 0.37) % 1)
+  for (let k = 0; k < POWERUP_MAX; k++) spawnPowerup(m, rng)
+  const floors = new Set(Object.keys(m.powerups).map((k) => xyz(Number(k))[2]))
+  assert.ok(floors.has(0), 'floor 0 has a player')
+  assert.ok(floors.has(2), 'floor 2 has a player')
+  assert.ok(!floors.has(1) && !floors.has(3) && !floors.has(4), 'unoccupied floors have no powerups')
+})
+
+test('an empty match falls back to any solid tile for powerup spawning', () => {
+  const m = createMatch()
+  let n = 0
+  const rng = () => ((n++ * 0.37) % 1)
+  for (let k = 0; k < POWERUP_MAX; k++) spawnPowerup(m, rng)
+  const floors = new Set(Object.keys(m.powerups).map((k) => xyz(Number(k))[2]))
+  assert.ok(floors.size > 1, 'without players, powerups distribute across the stack')
+})
+
 test('patch is the only weighted kind, and lift sits at one', () => {
   assert.equal(POWERUP_WEIGHTS.patch, 3)
   assert.equal(Object.hasOwn(POWERUP_WEIGHTS, 'lift'), false)

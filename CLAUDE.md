@@ -179,6 +179,11 @@ is nothing to lock. `BOARD_DIR` says where they live (`./data` in dev,
   punishes the descent the whole design is built around. `pickWave` falls
   back to the whole stack when no floor holds a living player, or the
   collapse would stall between rounds.
+- **Blockout 3D spawns powerups only on floors with living players.**
+  `spawnPowerup` restricts candidate tiles to occupied floors (`state.players.filter(p => p.playing && p.alive).map(p => p.z)`)
+  so collectibles spawn directly on the platforms players are fighting on
+  rather than accumulating on abandoned floors above or below. When no players
+  are alive, it falls back to any solid tile in the stack.
 - **Blockout 3D draws one `InstancedMesh` per floor, not one per stack.**
   `InstancedMesh` has no per-instance opacity — `instanceColor` is RGB only —
   so fading the floors above the player needs a material per floor. Five draw
