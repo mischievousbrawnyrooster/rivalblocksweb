@@ -74,15 +74,25 @@ export function makeScene(canvas, { size, floors }) {
   scene.add(key)
 
   const count = size * size * floors
+  const perFloor = size * size
 
-  // One InstancedMesh for every tile in the stack. 845 draw calls would be
-  // absurd; one is not.
+  // One InstancedMesh per floor rather than one for the whole stack.
+  // InstancedMesh has no per-instance opacity — instanceColor is RGB only — so
+  // fading the floors above the player needs a material per floor. Five draw
+  // calls, not one, and still not the 845 that drawing tiles individually
+  // would cost.
   const tileGeo = new THREE.BoxGeometry(TILE * 0.94, 0.35, TILE * 0.94)
-  const tileMat = new THREE.MeshLambertMaterial({ transparent: true })
-  const tiles = new THREE.InstancedMesh(tileGeo, tileMat, count)
-  tiles.instanceMatrix.setUsage(THREE.DynamicDrawUsage)
-  tiles.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(count * 3), 3)
-  scene.add(tiles)
+  const tileMats = []
+  const tiles = []
+  for (let z = 0; z < floors; z++) {
+    const mat = new THREE.MeshLambertMaterial({ transparent: true, depthWrite: true })
+    const mesh = new THREE.InstancedMesh(tileGeo, mat, perFloor)
+    mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage)
+    mesh.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(perFloor * 3), 3)
+    tileMats.push(mat)
+    tiles.push(mesh)
+    scene.add(mesh)
+  }
 
   // A flagged tile grows a post as well as changing colour. Colour alone is not
   // a status signal anywhere in this project (WCAG 1.4.1), and in three
@@ -177,40 +187,61 @@ export function makeScene(canvas, { size, floors }) {
       const soon = new Set(view.soon ?? [])
       const reinforced = new Set(view.reinforced ?? [])
       let posted = 0
-      for (let i = 0; i < count; i++) {
-        const ch = view.tiles[i]
-        const z = Math.floor(i / (size * size))
-        if ((ch !== SOLID && ch !== WARN) || z > view.bottom) {
-          tiles.setMatrixAt(i, hidden)
-          continue
-        }
-        const x = i % size
-        const y = Math.floor(i / size) % size
-        const lift = ch === WARN ? -WARN_DROP : soon.has(i) ? SOON_RISE : 0
-        m4.makeTranslation(x + 0.5, worldY(z) + lift, y + 0.5)
-        // Plated: a visibly thicker slab rather than a colour change (see
-        // PLATE_SCALE_Y). Composed after the translation, so the tile scales
-        // about its own centre and still lands at (x, z, y).
-        if (reinforced.has(i)) m4.multiply(scaleM.makeScale(1, PLATE_SCALE_Y, 1))
-        tiles.setMatrixAt(i, m4)
+      for (let z = 0; z < floors; z++) {
+        const mesh = tiles[z]
+        for (let n = 0; n < perFloor; n++) {
+          const i = z * perFloor + n // stack index, for the tile string
+          const ch = view.tiles[i]
+          if ((ch !== SOLID && ch !== WARN) || z > view.bottom) {
+            mesh.setMatrixAt(n, hidden)
+            continue
+          }
+          const x = n % size
+          const y = Math.floor(n / size)
+          const lift = ch === WARN ? -WARN_DROP : soon.has(i) ? SOON_RISE : 0
+          m4.makeTranslation(x + 0.5, worldY(z) + lift, y + 0.5)
+          // Plated: a visibly thicker slab rather than a colour change (see
+          // PLATE_SCALE_Y). Composed after the translation, so the tile scales
+          // about its own centre and still lands at (x, z, y).
+          if (reinforced.has(i)) m4.multiply(scaleM.makeScale(1, PLATE_SCALE_Y, 1))
+          mesh.setMatrixAt(n, m4)
 
-        col.copy(ch === WARN ? warnCol : solidCol)
-        // Depth cue: floors below yours darken with distance.
-        const away = Math.abs(z - viewZ)
-        col.multiplyScalar(away === 0 ? 1 : Math.max(0.28, 1 - away * 0.26))
-        tiles.setColorAt(i, col)
+          col.copy(ch === WARN ? warnCol : solidCol)
+          // Depth cue: floors below yours darken with distance.
+          const away = Math.abs(z - viewZ)
+          col.multiplyScalar(away === 0 ? 1 : Math.max(0.28, 1 - away * 0.26))
+          mesh.setColorAt(n, col)
 
-        if (ch === WARN && posted < count) {
-          m4.makeTranslation(x + 0.5, worldY(z) + 0.5, y + 0.5)
-          posts.setMatrixAt(posted++, m4)
+          if (ch === WARN && posted < count) {
+            m4.makeTranslation(x + 0.5, worldY(z) + 0.5, y + 0.5)
+            posts.setMatrixAt(posted++, m4)
+          }
         }
+        mesh.instanceMatrix.needsUpdate = true
+        mesh.instanceColor.needsUpdate = true
       }
       for (let i = posted; i < count; i++) posts.setMatrixAt(i, hidden)
-      tiles.instanceMatrix.needsUpdate = true
-      tiles.instanceColor.needsUpdate = true
       posts.instanceMatrix.needsUpdate = true
       posts.count = count
-      tiles.count = count
+
+      for (let z = 0; z < floors; z++) {
+        const mat = tileMats[z]
+        const above = viewZ - z // positive when this floor is above the player
+        if (above > 0) {
+          // See-through, so the camera behind the player is not looking at the
+          // underside of a slab — and so a body about to drop on them is still
+          // visible up there.
+          mat.opacity = Math.max(0.06, 0.26 - (above - 1) * 0.08)
+          mat.depthWrite = false
+          // Furthest above draws first: back to front for a camera that always
+          // sits at or above the player.
+          tiles[z].renderOrder = 1 + z
+        } else {
+          mat.opacity = 1
+          mat.depthWrite = true
+          tiles[z].renderOrder = 0
+        }
+      }
 
       let n = 0
       for (const key of Object.keys(view.powerups ?? {})) {
@@ -284,10 +315,10 @@ export function makeScene(canvas, { size, floors }) {
       postGeo.dispose()
       pickGeo.dispose()
       bodyGeo.dispose()
-      tiles.dispose()
+      for (const mesh of tiles) mesh.dispose()
       posts.dispose()
       picks.dispose()
-      tileMat.dispose()
+      for (const mat of tileMats) mat.dispose()
       postMat.dispose()
       pickMat.dispose()
       for (const mesh of bodies.values()) mesh.material.dispose()
