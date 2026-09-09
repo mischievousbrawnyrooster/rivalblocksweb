@@ -21,14 +21,13 @@ const KEYS = {
 
 // Render this far behind the server, so there is always a frame on each side of
 // the render clock to sit between. One tick plus a little slack.
-const DELAY_MS = 100
-const SEND_MS = 50
+const DELAY_MS = 60
+const SEND_MS = 16
 
 // Pre-connection placeholders only. The real numbers ride in every snapshot
 // once one arrives; these just keep the lobby screen from showing blanks.
 const DEFAULT_SIZE = 13
 const DEFAULT_FLOORS = 5
-const DEFAULT_TARGET = 3
 const DEFAULT_MIN = 2
 
 // One icon per slot, eight silhouettes nothing like each other — this is what
@@ -71,7 +70,7 @@ function statusLine(game, myId) {
   }
   if (game.phase === 'countdown') return `Round starts in ${game.secs}.`
   if (game.phase === 'over') {
-    const what = game.final ? 'takes the match' : 'takes the round'
+    const what = 'takes the match'
     return game.winner
       ? `${game.winner} ${what}. Next round in ${game.secs}.`
       : `Nobody survived that one. Next round in ${game.secs}.`
@@ -92,11 +91,26 @@ export default function Blockout3D() {
   const camRef = useRef(makeCamera())
   const heldRef = useRef(new Set())
   const [joined, setJoined] = useState(false)
+  const [isLocked, setIsLocked] = useState(false)
   const [name, setName] = useState('')
   const [hud, setHud] = useState(null)
   const [lostConnection, setLostConnection] = useState(false)
   const meRef = useRef(0)
   const everJoinedRef = useRef(false)
+
+  const requestLock = useCallback(() => {
+    if (canvasRef.current && document.pointerLockElement !== canvasRef.current) {
+      canvasRef.current.requestPointerLock()
+    }
+  }, [])
+
+  useEffect(() => {
+    const onLockChange = () => {
+      setIsLocked(document.pointerLockElement === canvasRef.current)
+    }
+    document.addEventListener('pointerlockchange', onLockChange)
+    return () => document.removeEventListener('pointerlockchange', onLockChange)
+  }, [])
 
   // --- socket ------------------------------------------------------------
   const join = useCallback((who) => {
@@ -140,7 +154,7 @@ export default function Blockout3D() {
     if (!joined) return undefined
     const down = (e) => {
       if (e.code === 'Space') {
-        wsRef.current?.send(JSON.stringify({ t: 'stomp' }))
+        wsRef.current?.send(JSON.stringify({ t: 'jump' }))
         e.preventDefault()
         return
       }
@@ -220,34 +234,16 @@ export default function Blockout3D() {
     window.addEventListener('resize', fit)
     raf = requestAnimationFrame(frame)
 
-    let dragging = false
-    let lx = 0
-    let ly = 0
-    const el = canvasRef.current
-    const md = (e) => {
-      dragging = true
-      lx = e.clientX
-      ly = e.clientY
-    }
     const mm = (e) => {
-      if (!dragging) return
-      orbit(camRef.current, e.clientX - lx, e.clientY - ly)
-      lx = e.clientX
-      ly = e.clientY
+      if (document.pointerLockElement !== canvasRef.current) return
+      orbit(camRef.current, e.movementX, e.movementY)
     }
-    const mu = () => {
-      dragging = false
-    }
-    el.addEventListener('pointerdown', md)
-    window.addEventListener('pointermove', mm)
-    window.addEventListener('pointerup', mu)
+    window.addEventListener('mousemove', mm)
 
     return () => {
       cancelAnimationFrame(raf)
       window.removeEventListener('resize', fit)
-      el.removeEventListener('pointerdown', md)
-      window.removeEventListener('pointermove', mm)
-      window.removeEventListener('pointerup', mu)
+      window.removeEventListener('mousemove', mm)
       scene.dispose()
     }
     // hud.size and hud.floors never change for a connection; the scene is built
@@ -381,12 +377,20 @@ export default function Blockout3D() {
 
       <div className="mt-8 grid gap-8 md:grid-cols-[1fr_14rem]">
         <div>
-          <canvas
-            ref={canvasRef}
-            role="img"
-            aria-label={`Blockout Royale 3D stack, ${hud?.size ?? DEFAULT_SIZE} by ${hud?.size ?? DEFAULT_SIZE} tiles, ${hud?.floors ?? DEFAULT_FLOORS} floors. ${statusLine(hud, meRef.current)}`}
-            className="w-full cursor-grab border border-line bg-bg active:cursor-grabbing"
-          />
+          <div className="relative">
+            <canvas
+              ref={canvasRef}
+              onClick={requestLock}
+              role="img"
+              aria-label={`Blockout Royale 3D stack, ${hud?.size ?? DEFAULT_SIZE} by ${hud?.size ?? DEFAULT_SIZE} tiles, ${hud?.floors ?? DEFAULT_FLOORS} floors. ${statusLine(hud, meRef.current)}`}
+              className="w-full cursor-pointer border border-line bg-bg"
+            />
+            {!isLocked && joined && (
+              <div className="pointer-events-none absolute bottom-4 left-1/2 -translate-x-1/2 bg-bg/80 px-3 py-1 text-xs text-muted border border-line">
+                Click arena to control camera. Press Esc to release mouse.
+              </div>
+            )}
+          </div>
 
           <div className="mt-3 grid gap-px border border-line bg-line sm:grid-cols-5">
             <div className="bg-bg p-3">
@@ -414,10 +418,10 @@ export default function Blockout3D() {
             </div>
 
             <div className="bg-bg p-3">
-              <p className="rule-label">Stomp</p>
-              <p className="mt-2 text-sm">{me?.stomping ? 'Winding up' : 'Ready'}</p>
+              <p className="rule-label">Jump</p>
+              <p className="mt-2 text-sm">{me?.jumping ? 'Airborne' : 'Ready'}</p>
               <p className="mt-1 text-xs text-muted">
-                {me?.stomping ? 'Committing to a drop.' : 'Space breaks the floor.'}
+                {me?.jumping ? 'Leaping across.' : 'Space leaps 1-tile gaps.'}
               </p>
             </div>
 
@@ -446,10 +450,8 @@ export default function Blockout3D() {
 
             <div className="bg-bg p-3">
               <p className="rule-label">Score</p>
-              <p className="mt-2 text-sm">
-                {me?.wins ?? 0} of {hud?.target ?? DEFAULT_TARGET}
-              </p>
-              <p className="mt-1 text-xs text-muted">Rounds to take the match.</p>
+              <p className="mt-2 text-sm">{me?.wins ?? 0} wins</p>
+              <p className="mt-1 text-xs text-muted">Matches won this session.</p>
             </div>
           </div>
         </div>
@@ -457,7 +459,7 @@ export default function Blockout3D() {
         <div>
           <div className="flex items-baseline justify-between">
             <p className="rule-label">Scoreboard</p>
-            <p className="rule-label">Rounds</p>
+            <p className="rule-label">Wins</p>
           </div>
           <ul className="mt-3 space-y-2">
             {board.map((p) => (
@@ -477,7 +479,7 @@ export default function Blockout3D() {
                 {p.id === meRef.current && <span className="rule-label shrink-0">you</span>}
                 <span className="ml-auto font-mono text-xs tabular-nums">
                   {p.wins}
-                  <span className="sr-only"> rounds won</span>
+                  <span className="sr-only"> matches won</span>
                 </span>
               </li>
             ))}
@@ -508,7 +510,7 @@ export default function Blockout3D() {
               <dd className="font-mono text-xs">WASD</dd>
             </div>
             <div className="flex justify-between gap-3">
-              <dt>Stomp</dt>
+              <dt>Jump</dt>
               <dd className="font-mono text-xs">space</dd>
             </div>
             <div className="flex justify-between gap-3">
@@ -517,7 +519,7 @@ export default function Blockout3D() {
             </div>
             <div className="flex justify-between gap-3">
               <dt>Orbit camera</dt>
-              <dd className="font-mono text-xs">drag</dd>
+              <dd className="font-mono text-xs">mouse</dd>
             </div>
           </dl>
         </div>
@@ -548,7 +550,7 @@ export default function Blockout3D() {
               <p className="rule-label">Match complete</p>
               <h2 className="display mt-2 text-5xl sm:text-6xl">You win</h2>
               <p className="mt-4 text-muted">
-                {me?.wins} rounds taken · next match in {hud?.secs}
+                {me?.wins} {me?.wins === 1 ? 'match' : 'matches'} taken · next match in {hud?.secs}
               </p>
             </div>
           </div>
