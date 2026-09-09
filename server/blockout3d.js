@@ -14,7 +14,7 @@ export const TOTAL = SIZE * SIZE * FLOORS
 
 // Matches Blastworks. Continuous movement needs a tick this fast; the grid-step
 // games get away with 100ms because a step is atomic.
-export const TICK_MS = 33
+export const TICK_MS = 16
 
 export const SPEED_BASE = 4.4 // tiles/second on the ground
 export const AIR_SPEED = 2.6 // steering authority mid-drop
@@ -52,8 +52,9 @@ export const VOID_FIRST_MS = 60000
 export const VOID_EVERY_MS = 35000
 export const VOID_WARN_MS = 8000
 
-export const STOMP_COOLDOWN_MS = 6000
-export const STOMP_WINDUP_MS = 350
+export const JUMP_DURATION_MS = 420
+export const JUMP_COOLDOWN_MS = 750
+export const JUMP_SPEED_BOOST = 1.25
 
 export const BLINK_TILES = 3
 export const FORESIGHT_MS = 6000
@@ -61,7 +62,7 @@ export const FORESIGHT_MS = 6000
 export const COUNTDOWN_MS = 3000
 export const OVER_MS = 5000
 export const MIN_PLAYERS = 2
-export const ROUND_TARGET = 3
+export const ROUND_TARGET = 1
 
 export const POWERUP_EVERY_MS = 1600
 export const POWERUP_MAX = 12
@@ -194,8 +195,8 @@ function seat(state, name, bot) {
     dashUntil: 0,
     hoverUntil: 0,
     seeingUntil: 0,
-    stompAt: 0,
-    stompReadyAt: 0,
+    jumpUntil: 0,
+    jumpReadyAt: 0,
     thinkAt: 0,
   }
   state.players.push(player)
@@ -410,8 +411,8 @@ export function startRound(state, rng = Math.random) {
     p.face = [1, 0]
     p.fallUntil = 0
     p.fallBy = 0
-    p.stompAt = 0
-    p.stompReadyAt = 0
+    p.jumpUntil = 0
+    p.jumpReadyAt = 0
     p.z = 0
     if (p.playing) {
       // Centre of the tile: positions are continuous, tiles are not.
@@ -463,9 +464,11 @@ export function stepPlayers(state, dt) {
     if (!p.playing || !p.alive) continue
     const [dx, dy] = p.dir
     if (dx === 0 && dy === 0) continue
-    const speed = p.fallUntil
-      ? AIR_SPEED
-      : SPEED_BASE * (state.now < p.dashUntil ? DASH_MULT : 1)
+    const speed =
+      (p.fallUntil
+        ? AIR_SPEED
+        : SPEED_BASE * (state.now < p.dashUntil ? DASH_MULT : 1)) *
+      (state.now < p.jumpUntil ? JUMP_SPEED_BOOST : 1)
     // Clamped to the grid rather than to the arena: the arena edge is carved
     // `gone`, so walking off it is a fall and needs no rule of its own.
     p.x = Math.max(0, Math.min(EDGE, p.x + dx * speed * secs))
@@ -512,9 +515,8 @@ export function eliminate(state, p, by) {
 export function startFall(state, p, by = 0) {
   if (!p.playing || !p.alive || p.fallUntil) return
   // Hover is the one thing in the game that pauses its central cost. Guarding
-  // here rather than at each call site covers a hole, a stomp underfoot, a
-  // collapsing tile and a shove in one line, because all four drop you through
-  // this function.
+  // here rather than at each call site covers a hole, a collapsing tile and a
+  // shove in one line, because all drop you through this function.
   if (state.now < p.hoverUntil) return
   if (p.shielded) {
     p.shielded = false
@@ -535,7 +537,7 @@ export function startFall(state, p, by = 0) {
  *
  * A landing that arrives on top of somebody drives them down as well, and the
  * credit travels with it: whoever started the chain owns every elimination it
- * causes. That is what makes a stomp into a hole above a rival a play rather
+ * causes. That is what makes a drop into a hole above a rival a play rather
  * than an accident.
  *
  * A drop that begins in the same pass as a landing is a chain and keeps its
@@ -572,7 +574,8 @@ export function resolveFalls(state) {
       }
     }
 
-    if (!p.fallUntil && state.tiles[tileUnder(state, p)] === 'gone') {
+    const jumping = state.now < p.jumpUntil
+    if (!jumping && !p.fallUntil && state.tiles[tileUnder(state, p)] === 'gone') {
       // A warned tile is still floor. Only a hole drops you.
       startFall(state, p, landed ? p.fallBy : 0)
     }
@@ -580,39 +583,16 @@ export function resolveFalls(state) {
 }
 
 /**
- * Winds up a stomp. Returns false, silently, if there is nothing to break or
- * the boots are not ready.
- *
- * The windup is the telegraph. Resolving on the keypress made a stomp
- * unreactable, which would waste the whole reason bodies move continuously.
+ * Initiates a jump. Returns false, silently, if already airborne, cooling down, or falling.
  */
-export function stomp(state, id) {
+export function jump(state, id) {
   if (state.phase !== 'playing') return false
   const p = state.players.find((q) => q.id === id)
   if (!p || !p.playing || !p.alive || p.fallUntil) return false
-  if (p.stompAt || state.now < p.stompReadyAt) return false
-  if (state.tiles[tileUnder(state, p)] === 'gone') return false
-  p.stompAt = state.now + STOMP_WINDUP_MS
-  p.stompReadyAt = state.now + STOMP_WINDUP_MS + STOMP_COOLDOWN_MS
+  if (state.now < p.jumpUntil || state.now < p.jumpReadyAt) return false
+  p.jumpUntil = state.now + JUMP_DURATION_MS
+  p.jumpReadyAt = state.now + JUMP_COOLDOWN_MS
   return true
-}
-
-/** Lands the stomps that are due. */
-export function resolveStomps(state) {
-  for (const p of state.players) {
-    if (!p.stompAt || state.now < p.stompAt) continue
-    p.stompAt = 0
-    if (!p.playing || !p.alive || p.fallUntil) continue
-    const i = tileUnder(state, p)
-    if (state.tiles[i] === 'gone') continue
-    state.tiles[i] = 'gone'
-    delete state.powerups[i]
-    // Anyone else over it goes down too, and it is the stomper's doing.
-    for (const o of state.players) {
-      if (o === p || !o.playing || !o.alive || o.fallUntil) continue
-      if (o.z === p.z && tileUnder(state, o) === i) startFall(state, o, p.id)
-    }
-  }
 }
 
 export const POWERUP_KINDS = [
@@ -803,7 +783,7 @@ function lift(state, p) {
 function shoveRivals(state, p) {
   let any = false
   for (const o of state.players) {
-    // Same skip list as swap and resolveStomps: a body mid-drop is not
+    // Same skip list as swap: a body mid-drop is not
     // standing anywhere, so there is nowhere for a shove to drive it from —
     // without this it got teleported sideways in the air, and startFall's
     // early return (already falling) silently ate the credit.
@@ -1243,7 +1223,6 @@ export function tick(state, dt, rng = Math.random) {
   }
   while (state.now >= state.voidAt) consumeFloor(state)
 
-  resolveStomps(state)
   resolveWarnings(state)
   resolveFalls(state)
   pickUp(state)
@@ -1312,7 +1291,10 @@ export function snapshot(state, viewerId = null) {
       dashing: state.now < p.dashUntil,
       hovering: state.now < p.hoverUntil,
       seeing: state.now < p.seeingUntil,
-      stomping: p.stompAt > 0,
+      jumping: state.now < p.jumpUntil,
+      jumpProgress: p.jumpUntil && state.now < p.jumpUntil
+        ? Math.max(0, Math.min(1, 1 - (p.jumpUntil - state.now) / JUMP_DURATION_MS))
+        : 0,
     })),
   }
 }

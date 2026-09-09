@@ -12,7 +12,7 @@ import {
   addPlayer,
   removePlayer,
   input,
-  stomp,
+  jump,
   wantBots,
   usePowerup,
   startRound,
@@ -44,7 +44,7 @@ match.board = keep.top()
 /**
  * Everyone this round should be credited to, as it ended. Bots excluded.
  *
- * Unlike flat Blockout, this game has real kills — a stomp, a sinkhole and a
+ * Unlike flat Blockout, this game has real kills — a shove, a sinkhole and a
  * landing all have an author — so the board gets a K/D worth reading.
  */
 const played = () =>
@@ -97,8 +97,8 @@ wss.on('connection', (ws) => {
       ws.send(JSON.stringify({ t: 'welcome', id: player.id, size: SIZE, floors: FLOORS }))
     } else if (msg?.t === 'input' && player) {
       input(match, player.id, msg.dir)
-    } else if (msg?.t === 'stomp' && player) {
-      stomp(match, player.id)
+    } else if (msg?.t === 'jump' && player) {
+      jump(match, player.id)
     } else if (msg?.t === 'ready' && player) {
       wantBots(match)
     } else if (msg?.t === 'use' && player) {

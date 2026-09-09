@@ -41,10 +41,11 @@ import {
   voidWarning,
   VOID_WARN_MS,
   VOID_EVERY_MS,
-  stomp,
-  resolveStomps,
-  STOMP_WINDUP_MS,
-  STOMP_COOLDOWN_MS,
+  jump,
+  JUMP_DURATION_MS,
+  JUMP_COOLDOWN_MS,
+  JUMP_SPEED_BOOST,
+  eliminate,
   POWERUP_KINDS,
   POWERUP_WEIGHTS,
   POWERUP_MAX,
@@ -135,14 +136,28 @@ test('capacity is derived from the spawn list', () => {
   assert.equal(MAX_PLAYERS, SPAWNS.length)
 })
 
+function make() {
+  return createMatch()
+}
+
 /**
  * A started round with n players. rng 0 picks ARENAS[0] === 'square' for every
  * floor, so the stack is full and spawns land on their exact corners. Timers
  * are frozen; tests place tiles and powerups by hand, never at random.
  */
-function playing(n) {
-  const m = createMatch()
-  for (let i = 0; i < n; i++) addPlayer(m, `p${i}`)
+function playing(mOrN, maybeN) {
+  let m
+  let n
+  if (typeof mOrN === 'object' && mOrN !== null) {
+    m = mOrN
+    n = maybeN ?? 2
+  } else {
+    m = createMatch()
+    n = mOrN
+  }
+  if (m.players.length === 0) {
+    for (let i = 0; i < n; i++) addPlayer(m, `p${i}`)
+  }
   startRound(m, () => 0)
   m.nextCollapseAt = Infinity
   m.nextPowerupAt = Infinity
@@ -681,61 +696,43 @@ test('with one floor left the void stands down entirely', () => {
   assert.equal(voidWarning(m), false)
 })
 
-test('a stomp winds up before it breaks anything', () => {
-  const m = playing(2)
+test('a jump initiates an airborne state and cooldown', () => {
+  const m = make(2)
+  playing(m, 2)
   const p = m.players[0]
-  const i = tileUnder(m, p)
-  assert.equal(stomp(m, p.id), true)
-  resolveStomps(m)
-  assert.equal(m.tiles[i], 'solid', 'nothing has happened yet')
-  m.now += STOMP_WINDUP_MS
-  resolveStomps(m)
-  assert.equal(m.tiles[i], 'gone')
+  assert.equal(jump(m, p.id), true)
+  assert.equal(p.jumpUntil > m.now, true)
+  assert.equal(p.jumpReadyAt > m.now, true)
+  // Cannot jump again while airborne or cooling down
+  assert.equal(jump(m, p.id), false)
 })
 
-test('a stomp cannot be spammed', () => {
-  const m = playing(2)
+test('a jump ignores holes while airborne and clears 1-tile gaps', () => {
+  const m = make(2)
+  playing(m, 2)
   const p = m.players[0]
-  assert.equal(stomp(m, p.id), true)
-  m.now += STOMP_WINDUP_MS
-  resolveStomps(m)
-  // Step off the hole this stomp just made and onto standing ground, so the
-  // cooldown is the only thing left that could refuse the next one. Without
-  // this the test passes on the over-a-hole guard and never exercises the
-  // cooldown at all.
-  p.x += 1
-  assert.equal(m.tiles[tileUnder(m, p)], 'solid', 'back on floor')
-  assert.equal(stomp(m, p.id), false, 'still cooling down')
-  m.now += STOMP_COOLDOWN_MS
-  assert.equal(stomp(m, p.id), true)
-})
+  // Place player at (1.5, 1.5) on floor 0
+  p.x = 1.5
+  p.y = 1.5
+  p.z = 0
+  // Dig a hole directly ahead at (2, 1)
+  const holeIdx = idx(2, 1, 0)
+  m.tiles[holeIdx] = 'gone'
 
-test('a stomp takes anyone else over that tile down as well, and credits it', () => {
-  const m = playing(2)
-  const [a, b] = m.players
-  b.x = a.x
-  b.y = a.y
-  b.z = a.z
-  stomp(m, a.id)
-  m.now += STOMP_WINDUP_MS
-  resolveStomps(m)
+  // Jump forward towards the hole
+  p.dir = [1, 0]
+  p.face = [1, 0]
+  assert.equal(jump(m, p.id), true)
+
+  // Step into the hole while jump is active
+  p.x = 2.5
   resolveFalls(m)
-  assert.ok(b.fallUntil > m.now)
-  assert.equal(b.fallBy, a.id)
-})
+  assert.equal(p.fallUntil, 0, 'did not fall while jumping')
 
-test('a stomp mid-drop is refused', () => {
-  const m = playing(2)
-  const p = m.players[0]
-  p.fallUntil = m.now + 1000
-  assert.equal(stomp(m, p.id), false)
-})
-
-test('stomping over a hole is refused rather than wasted', () => {
-  const m = playing(2)
-  const p = m.players[0]
-  m.tiles[tileUnder(m, p)] = 'gone'
-  assert.equal(stomp(m, p.id), false)
+  // Advance time past jump duration while still over hole
+  m.now += JUMP_DURATION_MS + 10
+  resolveFalls(m)
+  assert.equal(p.fallUntil > 0, true, 'fell after jump ended on hole')
 })
 
 test('the kit is the flat game plus lift, and every kind is in the bag', () => {
@@ -1191,31 +1188,15 @@ test('the last one still in the stack takes the round', () => {
   assert.equal(m.players[0].wins, 1)
 })
 
-test('a match is over when somebody reaches the round target', () => {
-  const m = playing(2)
-  m.players[0].wins = ROUND_TARGET - 1
-  m.players[1].alive = false
-  tick(m, TICK_MS)
-  assert.equal(m.final, true)
-})
-
-test('a finished match resets the running total, a finished round does not', () => {
-  const m = playing(2)
-  m.players[1].alive = false
-  tick(m, TICK_MS)
-  assert.equal(m.final, false)
-  tick(m, OVER_MS)
-  assert.equal(m.players[0].wins, 1, 'a round win carries')
-
-  // One win short of the target: the next round taken pushes the match itself
-  // to a close, and that is the case the running total does not survive.
-  m.players[0].wins = ROUND_TARGET - 1
-  tick(m, COUNTDOWN_MS, () => 0)
-  m.players[1].alive = false
-  tick(m, TICK_MS)
-  assert.equal(m.final, true)
-  tick(m, OVER_MS)
-  assert.equal(m.players[0].wins, 0, 'a finished match resets the running total')
+test('a match concludes after 1 round win', () => {
+  const m = make(2)
+  playing(m, 2)
+  const [a, b] = m.players
+  eliminate(m, b, a.id)
+  tick(m, 1)
+  assert.equal(m.phase, 'over')
+  assert.equal(m.final, true, 'match is final on first round win')
+  assert.equal(a.wins, 1)
 })
 
 test('the snapshot carries tiles as a string of the right length', () => {
