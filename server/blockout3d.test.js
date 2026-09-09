@@ -48,6 +48,7 @@ import {
   POWERUP_KINDS,
   POWERUP_WEIGHTS,
   POWERUP_MAX,
+  POWERUP_FLOOR_MAX,
   spawnPowerup,
   pickUp,
   BLINK_TILES,
@@ -946,6 +947,29 @@ test('moving a player to another floor allows powerups to spawn on that floor to
   assert.ok(floors.has(0), 'floor 0 has a player')
   assert.ok(floors.has(2), 'floor 2 has a player')
   assert.ok(!floors.has(1) && !floors.has(3) && !floors.has(4), 'unoccupied floors have no powerups')
+})
+
+test('players falling to a lower floor receive powerups on their new floor', () => {
+  const m = playing(2)
+  let n = 0
+  const rng = () => ((n++ * 0.37) % 1)
+  for (let k = 0; k < POWERUP_FLOOR_MAX; k++) spawnPowerup(m, rng)
+  const f0 = Object.keys(m.powerups).map((k) => xyz(Number(k))[2])
+  assert.ok(f0.every((z) => z === 0))
+
+  // Both players fall to floor 1
+  m.players[0].z = 1
+  m.players[1].z = 1
+  spawnPowerup(m, rng)
+
+  const floors = new Set(Object.keys(m.powerups).map((k) => xyz(Number(k))[2]))
+  assert.ok(floors.has(1), 'floor 1 receives powerups now that players are there')
+  assert.ok(!floors.has(0), 'abandoned floor 0 powerups are pruned')
+
+  // After a tick, floor 1 is promptly seeded with at least 3 powerups so players never land on an empty platform
+  tick(m, TICK_MS, rng)
+  const floor1Count = Object.keys(m.powerups).filter((k) => xyz(Number(k))[2] === 1).length
+  assert.ok(floor1Count >= 3, 'floor 1 automatically seeds at least 3 powerups on tick')
 })
 
 test('an empty match falls back to any solid tile for powerup spawning', () => {

@@ -237,35 +237,42 @@ export function createAstronaut(slot, slotColor) {
   const mat = new THREE.MeshLambertMaterial({ color: slotColor })
   const visorMat = new THREE.MeshLambertMaterial({ color: '#7ce8ff' })
 
+  // Torso group contains the capsule body, visor, and oxygen pack so they animate together
+  const torso = new THREE.Group()
+
   // Suit Body
   const bodyGeo = new THREE.CapsuleGeometry(0.24, 0.36, 8, 16)
   const body = new THREE.Mesh(bodyGeo, mat)
   body.position.y = 0.12
-  group.add(body)
+  torso.add(body)
 
   // Visor
   const visorGeo = new THREE.BoxGeometry(0.26, 0.16, 0.12)
   const visor = new THREE.Mesh(visorGeo, visorMat)
   visor.position.set(0, 0.18, 0.2)
-  group.add(visor)
+  torso.add(visor)
 
   // Oxygen Tank Backpack
   const packGeo = new THREE.BoxGeometry(0.24, 0.32, 0.12)
   const pack = new THREE.Mesh(packGeo, mat)
   pack.position.set(0, 0.12, -0.2)
-  group.add(pack)
+  torso.add(pack)
 
-  // Left & Right Boots
+  group.add(torso)
+
+  // Left & Right Boots (translated so pivot is at hip joint for natural leg swing)
   const bootGeo = new THREE.CylinderGeometry(0.07, 0.08, 0.16, 8)
+  bootGeo.translate(0, -0.08, 0)
+
   const leftBoot = new THREE.Mesh(bootGeo, mat)
-  leftBoot.position.set(-0.11, -0.14, 0)
+  leftBoot.position.set(-0.11, -0.06, 0)
   group.add(leftBoot)
 
   const rightBoot = new THREE.Mesh(bootGeo, mat)
-  rightBoot.position.set(0.11, -0.14, 0)
+  rightBoot.position.set(0.11, -0.06, 0)
   group.add(rightBoot)
 
-  group.userData = { body, visor, pack, leftBoot, rightBoot, mat, visorMat, slot }
+  group.userData = { torso, body, visor, pack, leftBoot, rightBoot, mat, visorMat, slot, runCycle: 0 }
   return group
 }
 
@@ -469,15 +476,14 @@ export function makeScene(canvas, { size, floors }) {
         const mat = tileMats[z]
         const above = viewZ - z // positive when this floor is above the player
         if (above > 0) {
-          // See-through, so the camera behind the player is not looking at the
-          // underside of a slab — and so a body about to drop on them is still
-          // visible up there.
+          mat.transparent = true
           mat.opacity = Math.max(0.06, 0.26 - (above - 1) * 0.08)
           mat.depthWrite = false
           // Furthest above draws first: back to front for a camera that always
           // sits at or above the player.
           tiles[z].renderOrder = 1 + z
         } else {
+          mat.transparent = false
           mat.opacity = 1
           mat.depthWrite = true
           tiles[z].renderOrder = 0
@@ -517,10 +523,12 @@ export function makeScene(canvas, { size, floors }) {
         if (!spr) {
           spr = new THREE.Sprite(mat)
           spr.scale.set(0.65, 0.65, 1)
+          spr.renderOrder = 21
           pickSprites.push(spr)
           scene.add(spr)
         } else {
           spr.material = mat
+          spr.renderOrder = 21
           spr.visible = true
         }
         spr.position.set(px, py + 0.62, pz)
@@ -529,6 +537,8 @@ export function makeScene(canvas, { size, floors }) {
       }
       pickCores.count = n
       pickRings.count = n
+      pickCores.renderOrder = 20
+      pickRings.renderOrder = 20
       pickCores.instanceMatrix.needsUpdate = true
       pickRings.instanceMatrix.needsUpdate = true
 
@@ -572,15 +582,74 @@ export function makeScene(canvas, { size, floors }) {
         mesh.position.set(p.x, worldY(p.z, p.fall) + 0.52 + jumpArc, p.y)
         mesh.visible = true
 
+        let isMoving = false
         if (mesh.userData.lastX !== undefined) {
           const dx = p.x - mesh.userData.lastX
           const dy = p.y - mesh.userData.lastY
           if (dx * dx + dy * dy > 0.0001) {
             mesh.rotation.y = Math.atan2(dx, dy)
+            isMoving = true
           }
         }
         mesh.userData.lastX = p.x
         mesh.userData.lastY = p.y
+
+        const torso = mesh.userData.torso
+        const leftBoot = mesh.userData.leftBoot
+        const rightBoot = mesh.userData.rightBoot
+
+        if (torso && leftBoot && rightBoot) {
+          if (p.jumping) {
+            const jp = p.jumpProgress ?? 0
+            // Airborne leg tuck
+            leftBoot.rotation.x = -0.42
+            rightBoot.rotation.x = -0.42
+            leftBoot.position.y = -0.02
+            rightBoot.position.y = -0.02
+
+            // Air pitch: tilt back on ascent, tilt forward on descent
+            const airPitch = (0.5 - jp) * 0.45
+            torso.rotation.x = -airPitch
+            torso.rotation.z = 0
+
+            // Squash & stretch along jump curve
+            if (jp < 0.65) {
+              const s = Math.sin((jp / 0.65) * Math.PI) * 0.22
+              torso.scale.set(1 - s * 0.4, 1 + s, 1 - s * 0.4)
+            } else {
+              const s = Math.sin(((jp - 0.65) / 0.35) * Math.PI) * 0.16
+              torso.scale.set(1 + s, 1 - s * 0.5, 1 + s)
+            }
+          } else if (isMoving) {
+            mesh.userData.runCycle = (mesh.userData.runCycle ?? 0) + 0.32
+            const rc = mesh.userData.runCycle
+
+            // Alternating leg swing
+            leftBoot.rotation.x = Math.sin(rc) * 0.65
+            rightBoot.rotation.x = -Math.sin(rc) * 0.65
+
+            // Lift swinging boot slightly off the floor
+            leftBoot.position.y = -0.06 + Math.max(0, Math.sin(rc)) * 0.05
+            rightBoot.position.y = -0.06 + Math.max(0, -Math.sin(rc)) * 0.05
+
+            // Torso waddle (Among Us bean sway), forward lean, and bounce
+            torso.rotation.x = 0.15
+            torso.rotation.z = Math.sin(rc) * 0.09
+            torso.position.y = Math.abs(Math.sin(rc)) * 0.03
+            torso.scale.set(1, 1, 1)
+          } else {
+            // Idle decay back to neutral stance
+            leftBoot.rotation.x *= 0.65
+            rightBoot.rotation.x *= 0.65
+            leftBoot.position.y = -0.06 + (leftBoot.position.y - (-0.06)) * 0.65
+            rightBoot.position.y = -0.06 + (rightBoot.position.y - (-0.06)) * 0.65
+
+            torso.rotation.x *= 0.65
+            torso.rotation.z *= 0.65
+            torso.position.y *= 0.65
+            torso.scale.set(1, 1, 1)
+          }
+        }
 
         // A wind-up is a shape change, not a tint.
         mesh.scale.setScalar(p.stomping ? 1.25 : 1)

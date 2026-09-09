@@ -64,8 +64,9 @@ export const OVER_MS = 5000
 export const MIN_PLAYERS = 2
 export const ROUND_TARGET = 1
 
-export const POWERUP_EVERY_MS = 800
+export const POWERUP_EVERY_MS = 400
 export const POWERUP_MAX = 20
+export const POWERUP_FLOOR_MAX = 8
 
 export const BOT_FILL_TO = 5
 export const BOT_REACT_MS = 260
@@ -992,22 +993,70 @@ export function resolveWarnings(state) {
 }
 
 /**
+ * Prunes powerups on abandoned floors where no living players reside.
+ */
+function prunePowerups(state) {
+  const occupied = new Set(
+    state.players.filter((p) => p.playing && p.alive).map((p) => p.z),
+  )
+  if (occupied.size === 0) return
+  for (const key of Object.keys(state.powerups)) {
+    const z = (Number(key) / (SIZE * SIZE)) | 0
+    if (!occupied.has(z)) delete state.powerups[key]
+  }
+}
+
+/**
  * Places a powerup on a surviving solid tile on a floor with a living player.
  *
  * Restricting powerups to occupied floors ensures pickups are reachable on
  * the active platform rather than accumulating on abandoned floors.
+ * Unoccupied floors have their powerups pruned so lower levels always get
+ * their full quota of powerups.
  * An empty stack falls back to every solid tile so seeding works before
  * players are seated.
  */
 function spawnPowerup(state, rng) {
-  if (Object.keys(state.powerups).length >= POWERUP_MAX) return
+  prunePowerups(state)
   const occupied = new Set(
     state.players.filter((p) => p.playing && p.alive).map((p) => p.z),
   )
+  if (occupied.size === 0) {
+    if (Object.keys(state.powerups).length >= POWERUP_MAX) return
+    const free = []
+    for (let i = 0; i < TOTAL; i++) {
+      if (state.tiles[i] !== 'solid') continue
+      if (Object.hasOwn(state.powerups, i)) continue
+      free.push(i)
+    }
+    if (free.length === 0) return
+    const i = free[Math.floor(rng() * free.length)]
+    state.powerups[i] = POWERUP_BAG[Math.floor(rng() * POWERUP_BAG.length)]
+    return
+  }
+
+  // Find occupied floors that haven't reached POWERUP_FLOOR_MAX
+  const eligible = [...occupied].filter((z) => {
+    const count = Object.keys(state.powerups).filter(
+      (k) => ((Number(k) / (SIZE * SIZE)) | 0) === z,
+    ).length
+    return count < POWERUP_FLOOR_MAX
+  })
+  if (eligible.length === 0) return
+
+  // Prioritize occupied floor with fewest powerups
+  eligible.sort((a, b) => {
+    const ca = Object.keys(state.powerups).filter((k) => ((Number(k) / (SIZE * SIZE)) | 0) === a).length
+    const cb = Object.keys(state.powerups).filter((k) => ((Number(k) / (SIZE * SIZE)) | 0) === b).length
+    return ca - cb
+  })
+  const targetFloor = eligible[0]
+
+  const base = targetFloor * SIZE * SIZE
   const free = []
-  for (let i = 0; i < TOTAL; i++) {
+  for (let n = 0; n < SIZE * SIZE; n++) {
+    const i = base + n
     if (state.tiles[i] !== 'solid') continue
-    if (occupied.size > 0 && !occupied.has((i / (SIZE * SIZE)) | 0)) continue
     if (Object.hasOwn(state.powerups, i)) continue
     if (state.players.some((p) => p.playing && p.alive && tileUnder(state, p) === i)) continue
     free.push(i)
@@ -1017,7 +1066,7 @@ function spawnPowerup(state, rng) {
   state.powerups[i] = POWERUP_BAG[Math.floor(rng() * POWERUP_BAG.length)]
 }
 
-export { spawnPowerup }
+export { spawnPowerup, prunePowerups }
 
 /**
  * A step towards the nearest tile on this floor that satisfies `want`, over
@@ -1234,6 +1283,22 @@ export function tick(state, dt, rng = Math.random) {
     state.nextPowerupAt += POWERUP_EVERY_MS
   }
   while (state.now >= state.voidAt) consumeFloor(state)
+
+  // Ensure occupied floors are promptly seeded with powerups so players never land on an empty platform
+  const occupied = new Set(
+    state.players.filter((p) => p.playing && p.alive).map((p) => p.z),
+  )
+  for (const z of occupied) {
+    let count = Object.keys(state.powerups).filter(
+      (k) => ((Number(k) / (SIZE * SIZE)) | 0) === z,
+    ).length
+    while (count < 3) {
+      const before = Object.keys(state.powerups).length
+      spawnPowerup(state, rng)
+      if (Object.keys(state.powerups).length === before) break
+      count++
+    }
+  }
 
   resolveWarnings(state)
   resolveFalls(state)
