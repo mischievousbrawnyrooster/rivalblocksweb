@@ -8,6 +8,13 @@
  * author. Predicting your own input ahead of the server is what creates desync,
  * and nothing here does that.
  *
+ * One player may optionally be exempted from the replay delay via liveId. When
+ * the camera is attached to a local body, holding it back makes the whole world
+ * feel like it lags behind the mouse. Drawing that player at the newest position
+ * the server has already sent eliminates this lag. It is still not prediction:
+ * nothing simulates ahead of the server, the client merely declines to hold a
+ * received position back by three frames.
+ *
  * Only positions are blended. Tiles, phase, the board and everything else come
  * from the newer frame untouched: a half-collapsed tile is not a thing, and a
  * blended leaderboard would be nonsense.
@@ -30,7 +37,7 @@ export function makeBuffer(delayMs) {
       while (frames.length > 8) frames.shift()
     },
 
-    sample(now) {
+    sample(now, liveId = null) {
       if (frames.length < 2) return null
       const t = now - delayMs
 
@@ -51,6 +58,12 @@ export function makeBuffer(delayMs) {
       return {
         ...newer.snap,
         players: (newer.snap.players ?? []).map((p) => {
+          // The player this client is following is drawn where the server last
+          // put them, not three frames back. With the camera attached to that
+          // body, holding it back is felt as the whole world lagging the mouse.
+          // Still not prediction: this is a position the server has already
+          // sent, just not delayed.
+          if (p.id === liveId) return p
           const a = was.get(p.id)
           // Somebody who was not there a frame ago is drawn where they are.
           // Changing floors is taken whole rather than blended: a body halfway

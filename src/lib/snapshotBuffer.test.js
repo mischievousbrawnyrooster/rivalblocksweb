@@ -49,3 +49,25 @@ test('an old frame is dropped rather than kept forever', () => {
   for (let n = 0; n < 200; n++) b.push({ players: [] }, n * 33)
   assert.ok(b.size() <= 8, `held ${b.size()} frames`)
 })
+
+test('the live player comes from the newest frame, everyone else is smoothed', () => {
+  const b = makeBuffer(100)
+  b.push({ players: [{ id: 1, x: 0, y: 0, z: 0, fall: 0 }, { id: 2, x: 0, y: 0, z: 0, fall: 0 }] }, 0)
+  b.push({ players: [{ id: 1, x: 2, y: 0, z: 0, fall: 0 }, { id: 2, x: 2, y: 0, z: 0, fall: 0 }] }, 100)
+  const s = b.sample(150, 1)
+  const live = s.players.find((p) => p.id === 1)
+  const other = s.players.find((p) => p.id === 2)
+  assert.equal(live.x, 2, 'the live player is where the server last put them')
+  assert.ok(Math.abs(other.x - 1) < 1e-6, 'everyone else is still halfway')
+})
+
+test('an unknown or absent live id changes nothing', () => {
+  const b = makeBuffer(100)
+  b.push({ players: [{ id: 1, x: 0, y: 0, z: 0, fall: 0 }] }, 0)
+  b.push({ players: [{ id: 1, x: 2, y: 0, z: 0, fall: 0 }] }, 100)
+  const none = b.sample(150)
+  const wrong = b.sample(150, 99)
+  assert.ok(Math.abs(none.players[0].x - 1) < 1e-6)
+  assert.deepEqual(wrong.players, none.players)
+})
+
