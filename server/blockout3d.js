@@ -64,9 +64,16 @@ export const OVER_MS = 5000
 export const MIN_PLAYERS = 2
 export const ROUND_TARGET = 1
 
-export const POWERUP_EVERY_MS = 1600
+// A floor holds at most POWERUP_FLOOR_MAX at once, which is what actually
+// bounds the supply: the players are only ever on one or two floors, and
+// POWERUP_MAX is the ceiling for the whole stack. POWERUP_FLOOR_SEED is the
+// smaller promise that a floor somebody lands on is never bare. Seed, then let
+// the timer grow it, so a floor climbs to its cap over about ten seconds rather
+// than being full the instant anyone arrives.
+export const POWERUP_EVERY_MS = 4500
 export const POWERUP_MAX = 12
-export const POWERUP_FLOOR_MAX = 8
+export const POWERUP_FLOOR_MAX = 3
+export const POWERUP_FLOOR_SEED = 1
 
 export const BOT_FILL_TO = 5
 export const BOT_REACT_MS = 260
@@ -1352,7 +1359,8 @@ export function tick(state, dt, rng = Math.random) {
   }
   while (state.now >= state.voidAt) consumeFloor(state)
 
-  // Ensure occupied floors are promptly seeded with powerups so players never land on an empty platform
+  // A floor somebody is standing on is never bare. Only seeded, not filled:
+  // POWERUP_EVERY_MS is what grows it to POWERUP_FLOOR_MAX from there.
   const occupied = new Set(
     state.players.filter((p) => p.playing && p.alive).map((p) => p.z),
   )
@@ -1360,7 +1368,7 @@ export function tick(state, dt, rng = Math.random) {
     let count = Object.keys(state.powerups).filter(
       (k) => ((Number(k) / (SIZE * SIZE)) | 0) === z,
     ).length
-    while (count < 3) {
+    while (count < POWERUP_FLOOR_SEED) {
       const before = Object.keys(state.powerups).length
       spawnPowerup(state, rng)
       if (Object.keys(state.powerups).length === before) break

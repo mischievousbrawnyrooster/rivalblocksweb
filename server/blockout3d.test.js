@@ -49,6 +49,7 @@ import {
   POWERUP_WEIGHTS,
   POWERUP_MAX,
   POWERUP_FLOOR_MAX,
+  POWERUP_FLOOR_SEED,
   spawnPowerup,
   pickUp,
   BLINK_TILES,
@@ -926,6 +927,14 @@ test('a pickup never lands in a hole, on a player, or past the cap', () => {
     assert.equal(m.tiles[Number(key)], 'solid')
     for (const p of m.players) assert.notEqual(tileUnder(m, p), Number(key))
   }
+  const perFloor = {}
+  for (const key of Object.keys(m.powerups)) {
+    const z = xyz(Number(key))[2]
+    perFloor[z] = (perFloor[z] ?? 0) + 1
+  }
+  for (const [z, n] of Object.entries(perFloor)) {
+    assert.ok(n <= POWERUP_FLOOR_MAX, `floor ${z} holds ${n}, past the per-floor cap`)
+  }
 })
 
 test('powerups spawn only on floors with living players', () => {
@@ -953,23 +962,25 @@ test('players falling to a lower floor receive powerups on their new floor', () 
   const m = playing(2)
   let n = 0
   const rng = () => ((n++ * 0.37) % 1)
-  for (let k = 0; k < POWERUP_FLOOR_MAX; k++) spawnPowerup(m, rng)
+  for (let k = 0; k < POWERUP_FLOOR_MAX * 2; k++) spawnPowerup(m, rng)
   const f0 = Object.keys(m.powerups).map((k) => xyz(Number(k))[2])
+  assert.equal(f0.length, POWERUP_FLOOR_MAX, 'the floor fills to its cap and stops')
   assert.ok(f0.every((z) => z === 0))
 
-  // Both players fall to floor 1
+  // Both players fall to floor 1. The next tick alone has to notice: the
+  // powerup timer is frozen here, so a seeded floor 1 can only come from the
+  // seeding pass.
   m.players[0].z = 1
   m.players[1].z = 1
-  spawnPowerup(m, rng)
+  tick(m, TICK_MS, rng)
 
   const floors = new Set(Object.keys(m.powerups).map((k) => xyz(Number(k))[2]))
   assert.ok(floors.has(1), 'floor 1 receives powerups now that players are there')
   assert.ok(!floors.has(0), 'abandoned floor 0 powerups are pruned')
 
-  // After a tick, floor 1 is promptly seeded with at least 3 powerups so players never land on an empty platform
-  tick(m, TICK_MS, rng)
   const floor1Count = Object.keys(m.powerups).filter((k) => xyz(Number(k))[2] === 1).length
-  assert.ok(floor1Count >= 3, 'floor 1 automatically seeds at least 3 powerups on tick')
+  assert.ok(floor1Count >= POWERUP_FLOOR_SEED, 'nobody lands on a bare floor')
+  assert.ok(floor1Count <= POWERUP_FLOOR_MAX, 'and a landing does not fill it either')
 })
 
 test('an empty match falls back to any solid tile for powerup spawning', () => {
