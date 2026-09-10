@@ -139,11 +139,15 @@ is nothing to lock. `BOARD_DIR` says where they live (`./data` in dev,
   server sets `handleProtocols`, so `ws` echoes the first name offered and the
   handshake completes either way. It exists for the capture: Wireshark keys its
   `ws.protocol` dissector table on the negotiated string, and
-  `deploy/rivalblocks.lua` registers against exactly these four. Rename one and
-  the game silently reverts to an unnamed `WebSocket` row in every capture,
-  with no error anywhere to say why. Both halves move together.
-  The dissector only ever learns the name from the handshake, so a capture
-  started mid-session shows nothing named however correct the code is.
+  `deploy/rivalblocks.lua` registers against exactly these four. Rename one
+  without renaming it there and nothing errors anywhere; the game just stops
+  being named. Both halves move together.
+  The name is only ever stated in the handshake, so it cannot name a capture
+  that missed it or one taken before this existed. That is what the dissector's
+  heuristic is for: it claims our JSON on ports 8081-8085 instead. The obvious
+  route for that, Wireshark's `ws.port` table, was measured doing nothing —
+  text frames are routed by the `websocket.text_type` preference, not by port,
+  so only a heuristic sees them.
 
 - **Tests reference constants, never literals.** `SIZE`, `MAX_PLAYERS`, `COLLAPSE_COUNT` are tunable precisely because no test hardcodes `15` or `8`. Preserve this.
 - **The test helper `playing(n)` passes `() => 0` as rng** to force `ARENAS[0] === 'square'`, and freezes `nextCollapseAt`/`nextPowerupAt` at `Infinity`. Randomness in tests goes through an injected rng, never `Math.random`.

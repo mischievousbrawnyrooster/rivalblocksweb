@@ -10,26 +10,36 @@
 -- Then Analyze > Reload Lua Plugins, or just restart Wireshark.
 -- One-off, no install:  tshark -X lua_script:deploy/rivalblocks.lua -i <if>
 --
--- This hangs off the WebSocket subprotocol each client announces in its
--- handshake (see the `new WebSocket(url, '<name>.v1')` calls in src/pages).
--- Wireshark keys its `ws.protocol` dissector table on that negotiated string,
--- which has one consequence worth knowing before you blame the plugin:
+-- A game is recognised two ways, and either one alone is enough:
 --
---   THE CAPTURE MUST INCLUDE THE HTTP HANDSHAKE.
+--   1. By name. Each client announces a WebSocket subprotocol in its handshake
+--      (the `new WebSocket(url, '<name>.v1')` calls in src/pages), and
+--      Wireshark keys its `ws.protocol` table on that negotiated string. This
+--      one needs the handshake in the capture: the name is stated once, in the
+--      Sec-WebSocket-Protocol header exchange, and never repeated. It also
+--      needs a client new enough to send it.
 --
--- The subprotocol is only ever stated once, in the Sec-WebSocket-Protocol
--- header exchange. Start the capture before the browser connects. Attach to a
--- session already in progress and Wireshark never learns the name, so the rows
--- stay labelled WebSocket and none of the filters below match anything.
+--   2. By port, through a heuristic. Each match server owns one, so a frame on
+--      8081..8085 that looks like our JSON is claimed with no handshake and no
+--      client support at all. This is what reads captures taken before any of
+--      this existed.
+--
+-- Which means a capture missing the handshake, or taken against an older
+-- build, still comes out named -- as long as it was taken where the port is
+-- the real one. Behind nginx every game shares port 80, so capture the
+-- loopback hop between the proxy and the match server, not the public one.
 --
 -- Frames are readable because the protocol is deliberately plain ws:// with
 -- perMessageDeflate off. See the deployment section of CLAUDE.md.
 
+-- `ports` drives the heuristic at the bottom, which is what names a capture the
+-- subprotocol cannot: one recorded before the clients announced a name, or one
+-- that missed the handshake.
 local games = {
-  { key = 'blockout.v1',   id = 'blockout',   title = 'Blockout Royale',    col = 'BLOCKOUT' },
-  { key = 'fracture.v1',   id = 'fracture',   title = 'Fracture Line',      col = 'FRACTURE' },
-  { key = 'blastworks.v1', id = 'blastworks', title = 'Blastworks',         col = 'BLASTWORKS' },
-  { key = 'blockout3d.v1', id = 'blockout3d', title = 'Blockout Royale 3D', col = 'BLOCKOUT3D' },
+  { key = 'blockout.v1',   id = 'blockout',   title = 'Blockout Royale',    col = 'BLOCKOUT',   ports = { 8081 } },
+  { key = 'fracture.v1',   id = 'fracture',   title = 'Fracture Line',      col = 'FRACTURE',   ports = { 8082 } },
+  { key = 'blastworks.v1', id = 'blastworks', title = 'Blastworks',         col = 'BLASTWORKS', ports = { 8083, 8084 } },
+  { key = 'blockout3d.v1', id = 'blockout3d', title = 'Blockout Royale 3D', col = 'BLOCKOUT3D', ports = { 8085 } },
 }
 
 -- Every field is declared for every game rather than only the ones that game
@@ -138,6 +148,24 @@ local function build(game)
   end
 
   DissectorTable.get('ws.protocol'):add(game.key, proto)
+
+  -- The `ws.port` table looks like the obvious fallback here and is not one:
+  -- these are text frames, and Wireshark routes text by the
+  -- websocket.text_type preference rather than by port. Registering against
+  -- ws.port was measured doing nothing at all. Heuristics *are* consulted for
+  -- text, so that is what carries a capture with no subprotocol in it.
+  local ours = {}
+  for _, port in ipairs(game.ports) do ours[port] = true end
+
+  proto:register_heuristic('ws', function(buf, pinfo, tree)
+    if not (ours[pinfo.src_port] or ours[pinfo.dst_port]) then return false end
+    local len = buf:len()
+    if len < 6 then return false end
+    local ok, head = pcall(function() return buf(0, math.min(len, 24)):string() end)
+    if not ok or not head or not head:match('^%s*{%s*"t"%s*:') then return false end
+    proto.dissector(buf, pinfo, tree)
+    return true
+  end)
 end
 
 for _, game in ipairs(games) do build(game) end
