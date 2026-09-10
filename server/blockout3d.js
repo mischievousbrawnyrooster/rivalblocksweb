@@ -9,7 +9,7 @@
 // pure geometry is cheaper than destabilising that to share them.
 
 export const SIZE = 13
-export const FLOORS = 5
+export const FLOORS = 8
 export const TOTAL = SIZE * SIZE * FLOORS
 
 // Matches Blastworks. Continuous movement needs a tick this fast; the grid-step
@@ -49,7 +49,12 @@ export const COLLAPSE_FASTEST_MS = 260
 export const WARNING_MS = 1500
 
 export const VOID_FIRST_MS = 60000
-export const VOID_EVERY_MS = 35000
+// Paired with FLOORS, not chosen alone. The void eats every floor but 0, so a
+// match's ceiling is VOID_FIRST_MS + (FLOORS - 1) * VOID_EVERY_MS. At five
+// floors and 35s that was 200s; at eight and 20s it is 200s again. Raise
+// FLOORS without lowering this and the extra decks are paid for in match
+// length, which is the thing ROUND_TARGET was cut to 1 to fix.
+export const VOID_EVERY_MS = 20000
 export const VOID_WARN_MS = 8000
 
 export const JUMP_DURATION_MS = 420
@@ -275,7 +280,25 @@ const DIRS = [
 // already gone. Nothing downstream needs to know — holes are holes, whether the
 // collapse made them or the generator did.
 // `square` is first so a fixed rng of 0 gives the plain stack under test.
-export const ARENAS = ['square', 'disc', 'diamond', 'cross', 'ring', 'scatter']
+// 'square' must stay first: the test helper passes `() => 0` as rng precisely
+// to pin every floor to ARENAS[0], and a full board is what those tests place
+// tiles onto by hand.
+//
+// A shape only has to be connected. keepLargestRegion deletes everything
+// outside the biggest region, so a design that fragments does not produce
+// islands -- it produces one island and a lot of deleted floor.
+export const ARENAS = [
+  'square',
+  'disc',
+  'diamond',
+  'cross',
+  'ring',
+  'scatter',
+  'pillars',
+  'hourglass',
+  'lanes',
+  'spokes',
+]
 
 /** Carves one floor into shape. */
 function carve(state, z, arena, rng) {
@@ -292,6 +315,24 @@ function carve(state, z, arena, rng) {
       else if (arena === 'cross') solid = Math.abs(dx) <= c / 2.5 || Math.abs(dy) <= c / 2.5
       else if (arena === 'ring') solid = dist <= r - 0.5 && dist >= r / 2.6
       else if (arena === 'scatter') solid = rng() > 0.12
+      // Regular holes in an otherwise full floor. The holes never touch, so
+      // the floor around them is one region by construction.
+      else if (arena === 'pillars') solid = !(x % 3 === 1 && y % 3 === 1)
+      // Two wide ends joined by a three-tile waist. Everything funnels through
+      // the middle, which is where the shoves happen.
+      else if (arena === 'hourglass') solid = Math.abs(dx) <= 1.5 + Math.abs(dy)
+      // Horizontal strips cut by three channels, with the outer columns left
+      // solid so the lanes still meet at the rim.
+      else if (arena === 'lanes') solid = y % 4 !== 2 || Math.abs(dx) >= c - 1
+      // A hub with eight arms. Everything meets in the middle, so it is
+      // connected however thin the arms get.
+      else if (arena === 'spokes') {
+        solid =
+          dist <= 2.2 ||
+          Math.abs(dx) <= 1 ||
+          Math.abs(dy) <= 1 ||
+          Math.abs(Math.abs(dx) - Math.abs(dy)) <= 1.2
+      }
       if (!solid) state.tiles[idx(x, y, z)] = 'gone'
     }
   }

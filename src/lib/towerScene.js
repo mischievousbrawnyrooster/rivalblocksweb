@@ -744,9 +744,15 @@ export function makeScene(canvas, { size, floors }) {
   // Where the camera looks when there is nobody to follow: the lobby, a
   // spectator past capacity, or after elimination. Without this the camera
   // ends up at the origin staring into the void.
+  // Pulled back far enough to frame whichever is bigger, the board or the
+  // stack. Distance used to be a function of `size` alone, which was fine
+  // while five floors were shorter than the board is wide and stopped being
+  // fine the moment they were not.
+  const stackH = FLOOR_GAP * (floors - 1)
+  const reach = Math.max(size * 1.7, stackH * 1.15)
   const overview = {
-    target: [size / 2, (-FLOOR_GAP * (floors - 1)) / 2, size / 2],
-    position: [size / 2 + size * 1.7, size * 1.7, size / 2 + size * 1.7],
+    target: [size / 2, -stackH / 2, size / 2],
+    position: [size / 2 + reach, Math.max(size * 1.7, stackH * 0.8), size / 2 + reach],
   }
 
   scene.add(new THREE.AmbientLight(0xffffff, 0.55))

@@ -27,7 +27,7 @@ const SEND_MS = 16
 // Pre-connection placeholders only. The real numbers ride in every snapshot
 // once one arrives; these just keep the lobby screen from showing blanks.
 const DEFAULT_SIZE = 13
-const DEFAULT_FLOORS = 5
+const DEFAULT_FLOORS = 8
 const DEFAULT_MIN = 2
 
 // One icon per slot, eight silhouettes nothing like each other — this is what
@@ -293,7 +293,7 @@ export default function Blockout3D() {
         <p className="rule-label">Blockout Royale 3D</p>
         <h1 className="display mt-2 text-4xl sm:text-5xl">Blockout Royale 3D</h1>
         <p className="mt-5 leading-relaxed text-muted">
-          Five floors, stacked. Waves flag tiles a beat before they drop, and
+          Eight floors, stacked. Waves flag tiles a beat before they drop, and
           the bottom floor gives way to the void the longer a round runs.
           Stomp one out from under a rival, or just be the last stack
           standing when the floor runs out.

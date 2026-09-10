@@ -1390,3 +1390,99 @@ test('a whole round runs to a winner without anything going NaN', () => {
     assert.ok(Number.isFinite(p.x) && Number.isFinite(p.y) && Number.isInteger(p.z))
   }
 })
+
+// --- arena shapes -------------------------------------------------------
+//
+// Every shape has to survive keepLargestRegion with enough floor left to seat
+// a full round. A shape that fragments does not produce islands, it produces
+// one island and a lot of deleted floor, and the failure is silent: the match
+// still starts, on a quarter of a board.
+
+/** Every floor pinned to one named shape. */
+const onlyArena = (name) => {
+  const at = ARENAS.indexOf(name)
+  assert.notEqual(at, -1, `${name} is not in ARENAS`)
+  return () => (at + 0.5) / ARENAS.length
+}
+
+/** Solid tiles of floor 0, and how many separate regions they form. */
+function regionsOnFloor0(m) {
+  const solid = []
+  for (let n = 0; n < SIZE * SIZE; n++) if (m.tiles[n] === 'solid') solid.push(n)
+  const seen = new Set()
+  let regions = 0
+  for (const start of solid) {
+    if (seen.has(start)) continue
+    regions++
+    const queue = [start]
+    seen.add(start)
+    for (let head = 0; head < queue.length; head++) {
+      const [x, y] = xyz(queue[head])
+      for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+        const nx = x + dx
+        const ny = y + dy
+        if (nx < 0 || ny < 0 || nx >= SIZE || ny >= SIZE) continue
+        const j = idx(nx, ny, 0)
+        if (m.tiles[j] !== 'solid' || seen.has(j)) continue
+        seen.add(j)
+        queue.push(j)
+      }
+    }
+  }
+  return { count: solid.length, regions }
+}
+
+for (const shape of ['pillars', 'hourglass', 'lanes', 'spokes']) {
+  test(`${shape} carves a connected floor with room for a full round`, () => {
+    const m = createMatch()
+    for (let i = 0; i < MAX_PLAYERS; i++) addPlayer(m, `p${i}`)
+    startRound(m, onlyArena(shape))
+
+    assert.ok(
+      m.arenas.every((a) => a === shape),
+      `every floor should be ${shape}, got ${[...new Set(m.arenas)].join(', ')}`,
+    )
+
+    const { count, regions } = regionsOnFloor0(m)
+
+    // Without this a misspelt shape name falls through carve's if-chain to
+    // solid = true, produces a full square board, and every other assertion
+    // here passes on it.
+    assert.ok(count < SIZE * SIZE, `${shape} carved nothing; it is a full board`)
+    assert.ok(count > 0, `${shape} carved everything away`)
+    assert.equal(regions, 1, `${shape} left ${regions} regions after keepLargestRegion`)
+    assert.ok(
+      count >= MAX_PLAYERS,
+      `${shape} left ${count} tiles, too few to seat ${MAX_PLAYERS}`,
+    )
+  })
+
+  test(`${shape} seats every player on solid ground, no two on one tile`, () => {
+    const m = createMatch()
+    for (let i = 0; i < MAX_PLAYERS; i++) addPlayer(m, `p${i}`)
+    startRound(m, onlyArena(shape))
+
+    const seats = new Set()
+    for (const p of m.players.filter((q) => q.playing)) {
+      const i = idx(Math.floor(p.x), Math.floor(p.y), 0)
+      assert.equal(m.tiles[i], 'solid', `${p.name} spawned in a hole on ${shape}`)
+      assert.ok(!seats.has(i), `${p.name} shares a tile on ${shape}`)
+      seats.add(i)
+    }
+    assert.equal(seats.size, MAX_PLAYERS)
+  })
+}
+
+test('the void takes exactly FLOORS - 1 floors, and never floor 0', () => {
+  // The pairing between FLOORS and VOID_EVERY_MS is only meaningful if this
+  // holds: a match's ceiling is VOID_FIRST_MS + (FLOORS - 1) * VOID_EVERY_MS.
+  const m = playing(2)
+  let eaten = 0
+  for (let n = 0; n < FLOORS * 2; n++) {
+    const before = m.bottom
+    consumeFloor(m)
+    if (m.bottom < before) eaten++
+  }
+  assert.equal(eaten, FLOORS - 1, 'the void stops at floor 0')
+  assert.equal(m.bottom, 0)
+})

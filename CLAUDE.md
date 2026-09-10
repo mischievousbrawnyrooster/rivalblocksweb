@@ -136,10 +136,14 @@ is nothing to lock. `BOARD_DIR` says where they live (`./data` in dev,
 - **Blockout 3D: there is one `--deck-N` token per floor, and the count is not
   checked.** `towerScene.js` reads `--deck-${z}` for every `z < FLOORS` and
   falls back to `--tile` when the token is missing. Raise `FLOORS` without
-  adding a token and the new deck silently wears the ground floor's grey, which
-  looks deliberate and is not. `--deck-0` is `--tile`'s value on purpose: the
-  ground floor is where every match ends, so it stays the neutral the tints
-  above are judged against.
+  adding a token and the new deck silently wears deck 0's grey, which looks
+  deliberate and is not. Eight floors, eight tokens today.
+  `--deck-0` is `--tile`'s value on purpose, and **deck 0 is the top of the
+  stack, not the ground**: players spawn there, falling takes you to higher
+  `z`, and `consumeFloor` climbs from `FLOORS - 1` and stops before 0. Deck 0
+  is therefore the deck every match ends on, which is what makes it the neutral
+  the others are judged against. The ramp warms downward, so a tint carries
+  proximity to the void as well as identity.
 - **Blockout 3D: a tile's colour is decided in `src/lib/tileTint.js`, never in
   the renderer.** A tile is routinely in several states at once — `anchor`
   exists to plate a tile the wave is already coming for — so `tileRole` ranks
@@ -235,6 +239,17 @@ is nothing to lock. `BOARD_DIR` says where they live (`./data` in dev,
   pure and tested precisely because it failed silently: at yaw 0 it returns the
   input unchanged, so the wrong version looks correct until you notice the
   camera never starts at zero.
+- **Blockout 3D: `FLOORS` and `VOID_EVERY_MS` are one setting in two places.**
+  The void eats every deck but 0, so a match's ceiling is
+  `VOID_FIRST_MS + (FLOORS - 1) * VOID_EVERY_MS` — 200s at five floors and 35s,
+  200s again at eight floors and 20s. Raise `FLOORS` alone and the extra decks
+  are paid for in match length, the failure `ROUND_TARGET = 1` exists to fix.
+  `COLLAPSE_EVERY_MS` is **not** part of this pair: it is tuned against how
+  fast deck 0 erodes, and deck 0 is the deck the void never reaches.
+- **Blockout 3D: `FLOORS` must stay below `ARENAS.length`.** A test walks a
+  rising rng through the arena list to prove floors do not all share one shape.
+  Once `FLOORS` reaches `ARENAS.length` that counter wraps and the test starts
+  passing for the wrong reason. Eight floors against ten shapes today.
 - **Blockout 3D matches are single-round (`ROUND_TARGET = 1`) and advance at 60 FPS (`TICK_MS = 16`).**
   Multi-round targets caused long matches across five floors. With `ROUND_TARGET = 1`,
   the first round win triggers `state.final = true` and concludes the match. Both

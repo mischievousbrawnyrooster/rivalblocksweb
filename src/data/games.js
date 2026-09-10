@@ -191,7 +191,7 @@ export const games = [
     slug: 'blockout-royale-3d',
     playPath: '/play/blockout-royale-3d',
     playBlurb:
-      'Five floors stacked on a shrinking board. Tiles flash before they ' +
+      'Eight floors stacked on a shrinking board. Tiles flash before they ' +
       'drop, and floor by floor the void eats the stack from beneath you. ' +
       'Land on someone from above, stomp one through, or watch the floor ' +
       'take the rest.',
@@ -204,12 +204,12 @@ export const games = [
     platforms: ['PC'],
     art: { variant: 'cavern', seed: 903 },
     blurb:
-      'Blockout Royale, stacked five floors deep. Waves still flag a tile a ' +
+      'Blockout Royale, stacked eight floors deep. Waves still flag a tile a ' +
       'beat before it drops. Now falling through one costs a floor, not the ' +
       'round, and the void is closing in from underneath the whole time.',
     features: [
       {
-        title: 'Five floors, one stack',
+        title: 'Eight floors, one stack',
         body:
           'Walk off the edge of a floor and the drop takes you to the one ' +
           'below it. The round does not end there. It gets harder.',
@@ -227,10 +227,11 @@ export const games = [
           'above and they go down with you.',
       },
       {
-        title: 'Six boards, five floors deep',
+        title: 'Ten boards, eight floors deep',
         body:
-          'Square, disc, diamond, cross, ring, scatter. Every floor draws its ' +
-          'own, so no two drops land the same.',
+          'Square, disc, diamond, cross, ring, scatter, pillars, hourglass, ' +
+          'lanes, spokes. Every floor draws its own, so no two drops land ' +
+          'the same.',
       },
       {
         title: 'A fuller kit',

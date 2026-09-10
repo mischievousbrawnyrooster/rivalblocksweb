@@ -52,17 +52,26 @@
   --tile: #5c5c68;
   --hole: #08080a;
 
-  /* Blockout Royale 3D only. One tint per deck of the stack, because a player
-     looking down through the transparent floors above has no other way to tell
-     which deck they are reading. --deck-0 is --tile unchanged: the ground
-     floor is the one the game always ends on, so it stays the neutral the rest
-     are judged against, and the tints warm as they climb toward the deck the
-     collapse reaches first. */
+  /* Blockout Royale 3D only. One tint per deck, because the decks above a
+     player are drawn semi-transparent and tint is the only thing that says
+     which one is being looked through.
+
+     Deck 0 is the TOP of the stack, not the ground: players spawn there, they
+     fall to higher z, and the void climbs from deck FLOORS-1 and stops before
+     0. So deck 0 is the deck every match ends on, which is why it keeps
+     --tile's exact value and stays the neutral the others are judged against.
+     The ramp then warms on the way DOWN, toward the deck the void takes first.
+     Warmth is proximity to the void, so the tint carries danger as well as
+     identity. One per floor is required — see CLAUDE.md, a missing --deck-N
+     falls back to --tile and looks deliberate. */
   --deck-0: #5c5c68;
   --deck-1: #4a6b70;
   --deck-2: #4a5580;
   --deck-3: #5f4a80;
   --deck-4: #7a4a6b;
+  --deck-5: #8a4a5a;
+  --deck-6: #944a4e;
+  --deck-7: #9c4f42;
 
   /* Two more tile states, kept beside --warn rather than borrowed from the
      player hues above (a piece must never wear a tile's colour). --soon is the
