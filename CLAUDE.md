@@ -133,6 +133,22 @@ is nothing to lock. `BOARD_DIR` says where they live (`./data` in dev,
 - **A damaged board file must never stop a match server.** `load` returns an
   empty board on every failure. Losing a leaderboard is a nuisance; a match
   server that will not boot is an outage.
+- **Blockout 3D: there is one `--deck-N` token per floor, and the count is not
+  checked.** `towerScene.js` reads `--deck-${z}` for every `z < FLOORS` and
+  falls back to `--tile` when the token is missing. Raise `FLOORS` without
+  adding a token and the new deck silently wears the ground floor's grey, which
+  looks deliberate and is not. `--deck-0` is `--tile`'s value on purpose: the
+  ground floor is where every match ends, so it stays the neutral the tints
+  above are judged against.
+- **Blockout 3D: a tile's colour is decided in `src/lib/tileTint.js`, never in
+  the renderer.** A tile is routinely in several states at once — `anchor`
+  exists to plate a tile the wave is already coming for — so `tileRole` ranks
+  them (`warn` > `soon` > `plate` > `deck`) and `towerScene.js` only resolves
+  the winning role to a colour. The state that loses the surface does **not**
+  lose its signal: every state also has structure (sink, rise, thickness) and
+  its own marker mesh, drawn regardless of which role won the tint. Moving the
+  precedence into the render loop would put it out of reach of a test.
+
 - **Each game announces a WebSocket subprotocol, and the name is load-bearing.**
   `new WebSocket(url, 'blockout.v1' | 'fracture.v1' | 'blastworks.v1' |
   'blockout3d.v1')` in the four pages. Nothing in the app reads it back — no

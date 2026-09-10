@@ -52,6 +52,26 @@
   --tile: #5c5c68;
   --hole: #08080a;
 
+  /* Blockout Royale 3D only. One tint per deck of the stack, because a player
+     looking down through the transparent floors above has no other way to tell
+     which deck they are reading. --deck-0 is --tile unchanged: the ground
+     floor is the one the game always ends on, so it stays the neutral the rest
+     are judged against, and the tints warm as they climb toward the deck the
+     collapse reaches first. */
+  --deck-0: #5c5c68;
+  --deck-1: #4a6b70;
+  --deck-2: #4a5580;
+  --deck-3: #5f4a80;
+  --deck-4: #7a4a6b;
+
+  /* Two more tile states, kept beside --warn rather than borrowed from the
+     player hues above (a piece must never wear a tile's colour). --soon is the
+     foresight pickup's own cyan, so the item and what it reveals match. --plate
+     is deliberately the brightest thing on the board: armour should read as
+     armour from three decks away. */
+  --soon: #22d3ee;
+  --plate: #dbe4f0;
+
   /* Light in dark mode, so the piece letter (text-bg) reads dark on top.
      Eight distinct hues, none of them amber — that belongs to warning tiles. */
   --player-1: #ff8a3d;

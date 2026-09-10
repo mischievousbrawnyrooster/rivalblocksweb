@@ -5,6 +5,7 @@
 // BoxGeometry, flat materials and two lights. Nothing here loads anything.
 
 import * as THREE from 'three'
+import { tileRole, tileShade } from './tileTint.js'
 
 const SOLID = '.'
 const WARN = '!'
@@ -790,6 +791,43 @@ export function makeScene(canvas, { size, floors }) {
   posts.frustumCulled = false
   scene.add(posts)
 
+  // The same trick again for the other two states. A glyph cannot go on the
+  // tile face itself: all 169 tiles of a deck share one InstancedMesh and one
+  // material, so a per-tile decal would need a texture atlas and a custom
+  // shader. A second instanced mesh of little marker solids costs one draw
+  // call each and needs neither.
+  //
+  // Both are emissive, because these two states are read at a distance and
+  // across the transparent decks overhead, where a Lambert surface facing away
+  // from the light goes flat.
+
+  // Foreseen: a cone pointing down at the tile that is about to go. Rotated on
+  // its side in the geometry so no per-instance rotation is needed.
+  const soonGeo = new THREE.ConeGeometry(0.22, 0.42, 4)
+  soonGeo.rotateX(Math.PI)
+  const soonMat = new THREE.MeshLambertMaterial({
+    color: token('--soon', '#22d3ee'),
+    emissive: token('--soon', '#22d3ee'),
+    emissiveIntensity: 0.55,
+  })
+  const soonMarks = new THREE.InstancedMesh(soonGeo, soonMat, count)
+  soonMarks.instanceMatrix.setUsage(THREE.DynamicDrawUsage)
+  soonMarks.frustumCulled = false
+  scene.add(soonMarks)
+
+  // Plated: a flat ring lying on the tile, reading as a bolted-down collar.
+  const plateGeo = new THREE.TorusGeometry(0.32, 0.05, 6, 16)
+  plateGeo.rotateX(Math.PI / 2)
+  const plateMat = new THREE.MeshLambertMaterial({
+    color: token('--plate', '#dbe4f0'),
+    emissive: token('--plate', '#dbe4f0'),
+    emissiveIntensity: 0.35,
+  })
+  const plateMarks = new THREE.InstancedMesh(plateGeo, plateMat, count)
+  plateMarks.instanceMatrix.setUsage(THREE.DynamicDrawUsage)
+  plateMarks.frustumCulled = false
+  scene.add(plateMarks)
+
   const pickCoreGeo = new THREE.IcosahedronGeometry(0.46, 0)
   const pickRingGeo = new THREE.TorusGeometry(0.68, 0.08, 8, 24)
   const coreTex = makeCoreTexture()
@@ -853,8 +891,17 @@ export function makeScene(canvas, { size, floors }) {
 
   // Resolved once here, not per frame: these only change on a theme flip,
   // and update() runs sixty times a second.
-  const solidCol = new THREE.Color(token('--tile', '#3a3a42'))
   const warnCol = new THREE.Color(token('--warn', '#e8a33d'))
+  const soonCol = new THREE.Color(token('--soon', '#22d3ee'))
+  const plateCol = new THREE.Color(token('--plate', '#dbe4f0'))
+
+  // One per deck. `--deck-0` is `--tile`, so a stack that somehow lost the new
+  // tokens still draws exactly as it did before rather than turning black.
+  const deckCols = []
+  for (let z = 0; z < floors; z++) {
+    deckCols.push(new THREE.Color(token(`--deck-${z}`, token('--tile', '#3a3a42'))))
+  }
+  const roleCol = { warn: warnCol, soon: soonCol, plate: plateCol }
 
   // Takes a slot (0-based, the player's index in the current player list —
   // the same convention Play.jsx and Blastworks.jsx key their pieces by, and
@@ -869,9 +916,17 @@ export function makeScene(canvas, { size, floors }) {
   // does not.
   const retheme = () => {
     scene.background.set(token('--bg', '#16161a'))
-    solidCol.set(token('--tile', '#3a3a42'))
     warnCol.set(token('--warn', '#e8a33d'))
+    soonCol.set(token('--soon', '#22d3ee'))
+    plateCol.set(token('--plate', '#dbe4f0'))
+    for (let z = 0; z < floors; z++) {
+      deckCols[z].set(token(`--deck-${z}`, token('--tile', '#3a3a42')))
+    }
     postMat.color.set(token('--warn', '#e8a33d'))
+    soonMat.color.set(token('--soon', '#22d3ee'))
+    soonMat.emissive.set(token('--soon', '#22d3ee'))
+    plateMat.color.set(token('--plate', '#dbe4f0'))
+    plateMat.emissive.set(token('--plate', '#dbe4f0'))
     for (const mesh of bodies.values()) {
       mesh.userData.mat.color.set(playerColor(mesh.userData.slot ?? 0))
     }
@@ -909,6 +964,8 @@ export function makeScene(canvas, { size, floors }) {
       const soon = new Set(view.soon ?? [])
       const reinforced = new Set(view.reinforced ?? [])
       let posted = 0
+      let soonMarked = 0
+      let plateMarked = 0
       for (let z = 0; z < floors; z++) {
         const mesh = tiles[z]
         for (let n = 0; n < perFloor; n++) {
@@ -920,29 +977,56 @@ export function makeScene(canvas, { size, floors }) {
           }
           const x = n % size
           const y = Math.floor(n / size)
-          const lift = ch === WARN ? -WARN_DROP : soon.has(i) ? SOON_RISE : 0
+          const warned = ch === WARN
+          const foreseen = soon.has(i)
+          const plated = reinforced.has(i)
+
+          const lift = warned ? -WARN_DROP : foreseen ? SOON_RISE : 0
           m4.makeTranslation(x + 0.5, worldY(z) + lift, y + 0.5)
           // Plated: a visibly thicker slab rather than a colour change (see
           // PLATE_SCALE_Y). Composed after the translation, so the tile scales
           // about its own centre and still lands at (x, z, y).
-          if (reinforced.has(i)) m4.multiply(scaleM.makeScale(1, PLATE_SCALE_Y, 1))
+          if (plated) m4.multiply(scaleM.makeScale(1, PLATE_SCALE_Y, 1))
           mesh.setMatrixAt(n, m4)
 
-          col.copy(ch === WARN ? warnCol : solidCol)
+          // Which state the surface wears when a tile is in several at once is
+          // decided in tileTint.js, not here — see the precedence there.
+          const role = tileRole({ warned, foreseen, plated })
+          col.copy(roleCol[role] ?? deckCols[z])
+          // Grain, so a deck is a surface rather than one flat sheet. Only on
+          // plain deck tiles: a state tint is a signal and must not wobble.
+          if (role === 'deck') col.multiplyScalar(tileShade(i))
           // Depth cue: floors below yours darken with distance.
           const away = Math.abs(z - viewZ)
           col.multiplyScalar(away === 0 ? 1 : Math.max(0.28, 1 - away * 0.26))
           mesh.setColorAt(n, col)
 
-          if (ch === WARN && posted < count) {
+          // Markers ride above the tile, and each state gets its own regardless
+          // of which one won the surface — that is what stops a plated tile
+          // going unreadable the moment the wave flags it.
+          if (warned && posted < count) {
             m4.makeTranslation(x + 0.5, worldY(z) + 0.5, y + 0.5)
             posts.setMatrixAt(posted++, m4)
+          }
+          if (foreseen && soonMarked < count) {
+            m4.makeTranslation(x + 0.5, worldY(z) + lift + 0.62, y + 0.5)
+            soonMarks.setMatrixAt(soonMarked++, m4)
+          }
+          if (plated && plateMarked < count) {
+            // Sits on the raised face of the thickened slab, not inside it.
+            const top = 0.18 * PLATE_SCALE_Y
+            m4.makeTranslation(x + 0.5, worldY(z) + lift + top, y + 0.5)
+            plateMarks.setMatrixAt(plateMarked++, m4)
           }
         }
         mesh.instanceMatrix.needsUpdate = true
         mesh.instanceColor.needsUpdate = true
       }
       for (let i = posted; i < count; i++) posts.setMatrixAt(i, hidden)
+      for (let i = soonMarked; i < count; i++) soonMarks.setMatrixAt(i, hidden)
+      for (let i = plateMarked; i < count; i++) plateMarks.setMatrixAt(i, hidden)
+      soonMarks.instanceMatrix.needsUpdate = true
+      plateMarks.instanceMatrix.needsUpdate = true
       posts.instanceMatrix.needsUpdate = true
       posts.count = count
 
@@ -1201,14 +1285,20 @@ export function makeScene(canvas, { size, floors }) {
       renderer.dispose()
       tileGeo.dispose()
       postGeo.dispose()
+      soonGeo.dispose()
+      plateGeo.dispose()
       pickCoreGeo.dispose()
       pickRingGeo.dispose()
       for (const mesh of tiles) mesh.dispose()
       posts.dispose()
+      soonMarks.dispose()
+      plateMarks.dispose()
       pickCores.dispose()
       pickRings.dispose()
       for (const mat of tileMats) mat.dispose()
       postMat.dispose()
+      soonMat.dispose()
+      plateMat.dispose()
       pickMat.dispose()
       ringMat.dispose()
       coreTex.dispose()
