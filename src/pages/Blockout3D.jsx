@@ -240,10 +240,18 @@ export default function Blockout3D() {
     }
     window.addEventListener('mousemove', mm)
 
+    const click = (e) => {
+      if (document.pointerLockElement !== canvasRef.current) return
+      if (e.button !== 0) return // left button only
+      wsRef.current?.send(JSON.stringify({ t: 'click' }))
+    }
+    window.addEventListener('mousedown', click)
+
     return () => {
       cancelAnimationFrame(raf)
       window.removeEventListener('resize', fit)
       window.removeEventListener('mousemove', mm)
+      window.removeEventListener('mousedown', click)
       scene.dispose()
     }
     // hud.size and hud.floors never change for a connection; the scene is built
@@ -516,6 +524,10 @@ export default function Blockout3D() {
             <div className="flex justify-between gap-3">
               <dt>Use held item</dt>
               <dd className="font-mono text-xs">E</dd>
+            </div>
+            <div className="flex justify-between gap-3">
+              <dt>Use item / dash</dt>
+              <dd className="font-mono text-xs">left click</dd>
             </div>
             <div className="flex justify-between gap-3">
               <dt>Orbit camera</dt>

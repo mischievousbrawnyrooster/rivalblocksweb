@@ -818,7 +818,7 @@ export function makeScene(canvas, { size, floors }) {
   for (const kind of Object.keys(POWERUP_THEMES)) {
     const tex = makeItemTexture(kind)
     itemTex.set(kind, tex)
-    itemMat.set(kind, new THREE.SpriteMaterial({ map: tex, transparent: true, depthTest: true }))
+    itemMat.set(kind, new THREE.SpriteMaterial({ map: tex, transparent: true, depthTest: true, depthWrite: false }))
   }
   const pickSprites = []
 
@@ -829,6 +829,20 @@ export function makeScene(canvas, { size, floors }) {
   // takes that slot — never rebuilt per player and never per frame.
   const iconTex = PIECE_ICON.map(makeIconTexture)
   const iconMat = iconTex.map((map) => new THREE.SpriteMaterial({ map, transparent: true }))
+
+  // Jetpack flame: a warm orange glow sprite shown under hovering players
+  const flameCanvas = document.createElement('canvas')
+  flameCanvas.width = flameCanvas.height = 64
+  const fg = flameCanvas.getContext('2d')
+  const flameGrad = fg.createRadialGradient(32, 32, 2, 32, 32, 28)
+  flameGrad.addColorStop(0, 'rgba(255, 200, 50, 0.9)')
+  flameGrad.addColorStop(0.5, 'rgba(255, 120, 20, 0.6)')
+  flameGrad.addColorStop(1, 'rgba(255, 60, 10, 0)')
+  fg.fillStyle = flameGrad
+  fg.fillRect(0, 0, 64, 64)
+  const flameTex = new THREE.CanvasTexture(flameCanvas)
+  const flameMat = new THREE.SpriteMaterial({ map: flameTex, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending })
+  const flames = new Map() // playerId -> Sprite
 
   const m4 = new THREE.Matrix4()
   const scaleM = new THREE.Matrix4()
@@ -935,19 +949,34 @@ export function makeScene(canvas, { size, floors }) {
       for (let z = 0; z < floors; z++) {
         const mat = tileMats[z]
         const above = viewZ - z // positive when this floor is above the player
+        const wasClear = mat.transparent
         if (above > 0) {
           mat.transparent = true
-          mat.opacity = Math.max(0.06, 0.26 - (above - 1) * 0.08)
+          // Translucent, not invisible. This ramp answers two questions at
+          // once, and the old one only answered the first: the camera has to
+          // see the player through these floors, AND the player has to be able
+          // to tell whether there is anything overhead to climb to. Bottoming
+          // out at 0.06 made the floor above unreadable, which matters now
+          // that a hover can carry you up into it.
+          mat.opacity = Math.max(0.16, 0.42 - (above - 1) * 0.09)
           mat.depthWrite = false
-          // Furthest above draws first: back to front for a camera that always
-          // sits at or above the player.
-          tiles[z].renderOrder = 1 + z
+          // Back to front, for a camera that sits above the player: the floor
+          // furthest from it is the one nearest the player, so it draws first
+          // and the topmost slab draws last. The previous order was reversed,
+          // which is what makes transparent floors flicker against each other
+          // as the camera turns.
+          tiles[z].renderOrder = above
         } else {
           mat.transparent = false
           mat.opacity = 1
           mat.depthWrite = true
           tiles[z].renderOrder = 0
         }
+        // three.js bakes `transparent` into the material's compiled program, so
+        // flipping it at runtime without this leaves the material drawing under
+        // the old one. Only on a change: an unconditional needsUpdate would
+        // recompile five shaders every frame.
+        if (mat.transparent !== wasClear) mat.needsUpdate = true
       }
 
       const tSec = performance.now() * 0.001
@@ -1052,6 +1081,23 @@ export function makeScene(canvas, { size, floors }) {
         mesh.position.set(p.x, worldY(p.z, p.fall) + 0.52 + jumpArc, p.y)
         mesh.visible = true
 
+        // Jetpack flame effect
+        let flame = flames.get(p.id)
+        if (p.hovering) {
+          if (!flame) {
+            flame = new THREE.Sprite(flameMat)
+            flame.scale.set(0.7, 0.9, 1)
+            flames.set(p.id, flame)
+            scene.add(flame)
+          }
+          const flicker = 0.7 + Math.sin(performance.now() * 0.012 + p.id) * 0.3
+          flame.scale.set(0.5 + flicker * 0.3, 0.6 + flicker * 0.4, 1)
+          flame.position.set(p.x, worldY(p.z, p.fall) - 0.1, p.y)
+          flame.visible = true
+        } else if (flame) {
+          flame.visible = false
+        }
+
         let isMoving = false
         if (mesh.userData.lastX !== undefined) {
           const dx = p.x - mesh.userData.lastX
@@ -1069,7 +1115,17 @@ export function makeScene(canvas, { size, floors }) {
         const rightBoot = mesh.userData.rightBoot
 
         if (torso && leftBoot && rightBoot) {
-          if (p.jumping) {
+          if (p.fall > 0 && !p.jumping) {
+            // Falling animation: legs dangling, slight tumble
+            const fallT = p.fall // 0..1 progress through the drop
+            leftBoot.rotation.x = -0.3 - fallT * 0.4
+            rightBoot.rotation.x = 0.2 + fallT * 0.3
+            leftBoot.position.y = -0.06
+            rightBoot.position.y = -0.06
+            torso.rotation.x = fallT * 0.35
+            torso.rotation.z = Math.sin(fallT * Math.PI * 2) * 0.15
+            torso.scale.set(1, 1, 1)
+          } else if (p.jumping) {
             const jp = p.jumpProgress ?? 0
             // Airborne leg tuck
             leftBoot.rotation.x = -0.42
@@ -1130,6 +1186,8 @@ export function makeScene(canvas, { size, floors }) {
         if (seen.has(id)) continue
         mesh.visible = false
         labels.get(id).visible = false
+        const fl = flames.get(id)
+        if (fl) fl.visible = false
       }
 
       const shot = pose ?? overview
@@ -1173,6 +1231,9 @@ export function makeScene(canvas, { size, floors }) {
       }
       for (const mat of itemMat.values()) mat.dispose()
       for (const tex of itemTex.values()) tex.dispose()
+      flameMat.dispose()
+      flameTex.dispose()
+      for (const spr of flames.values()) scene.remove(spr)
       tileTex.dispose()
     },
   }
