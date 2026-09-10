@@ -163,7 +163,10 @@ export default function Blastworks() {
   const connect = useCallback(
     (playerName, pick) => {
       const scheme = window.location.protocol === 'https:' ? 'wss' : 'ws'
-      const ws = new WebSocket(`${scheme}://${window.location.host}${pick.path}`)
+      // 'blastworks.v1' is the WebSocket subprotocol. It names this game in a
+      // packet capture; see deploy/rivalblocks.lua. Both modes share it: the
+      // port already tells last man standing and deathmatch apart.
+      const ws = new WebSocket(`${scheme}://${window.location.host}${pick.path}`, 'blastworks.v1')
       wsRef.current = ws
       setStatus('connecting')
 

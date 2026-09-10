@@ -134,7 +134,9 @@ export default function Play() {
 
   const connect = useCallback((playerName) => {
     const scheme = window.location.protocol === 'https:' ? 'wss' : 'ws'
-    const ws = new WebSocket(`${scheme}://${window.location.host}/ws`)
+    // 'blockout.v1' is the WebSocket subprotocol. It names this game in a
+    // packet capture; see deploy/rivalblocks.lua.
+    const ws = new WebSocket(`${scheme}://${window.location.host}/ws`, 'blockout.v1')
     wsRef.current = ws
     setStatus('connecting')
 

@@ -121,7 +121,9 @@ export default function Blockout3D() {
     camRef.current = makeCamera()
     setLostConnection(false)
     const proto = location.protocol === 'https:' ? 'wss:' : 'ws:'
-    const ws = new WebSocket(`${proto}//${location.host}/blockout3d-ws`)
+    // 'blockout3d.v1' is the WebSocket subprotocol. It names this game in a
+    // packet capture; see deploy/rivalblocks.lua.
+    const ws = new WebSocket(`${proto}//${location.host}/blockout3d-ws`, 'blockout3d.v1')
     wsRef.current = ws
     ws.onopen = () => ws.send(JSON.stringify({ t: 'join', name: who }))
     ws.onmessage = (e) => {
