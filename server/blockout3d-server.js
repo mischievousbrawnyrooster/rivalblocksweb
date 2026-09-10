@@ -142,4 +142,20 @@ setInterval(() => {
   }
 }, TICK_MS)
 
+// A heap watch, because this process once grew to four gigabytes and aborted
+// and none of the obvious suspects reproduced it: the rules module is flat over
+// thousands of ticks, an idle server is flat, and a client with its socket
+// paused for half a minute moved the needle by a third of a megabyte.
+//
+// So rather than guess, it says where it went. If the heap climbs, the two
+// counts beside it say whether sockets or players are what is accumulating.
+// Cheap enough to leave running: one line every half minute.
+setInterval(() => {
+  const mb = (process.memoryUsage().heapUsed / 1048576).toFixed(1)
+  console.log(
+    `[watch] heap ${mb} MB  sockets ${wss.clients.size}  players ${match.players.length}` +
+      `  phase ${match.phase}`,
+  )
+}, 30000).unref()
+
 console.log(`Blockout Royale 3D match server on ws://${HOST}:${PORT}`)
