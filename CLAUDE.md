@@ -143,11 +143,17 @@ is nothing to lock. `BOARD_DIR` says where they live (`./data` in dev,
   without renaming it there and nothing errors anywhere; the game just stops
   being named. Both halves move together.
   The name is only ever stated in the handshake, so it cannot name a capture
-  that missed it or one taken before this existed. That is what the dissector's
-  heuristic is for: it claims our JSON on ports 8081-8085 instead. The obvious
-  route for that, Wireshark's `ws.port` table, was measured doing nothing —
-  text frames are routed by the `websocket.text_type` preference, not by port,
-  so only a heuristic sees them.
+  that missed it or one taken before this existed. Two fallbacks cover that,
+  both heuristics: the path in the upgrade request (`/ws`, `/fracture-ws`,
+  `/blast-ws`, `/blast-dm-ws`, `/blockout3d-ws`), remembered per TCP stream,
+  and failing that our JSON shape on ports 8081-8085. **The path is the only
+  one of the three that survives a proxy** — captured at the browser every game
+  shares one port, 5173 in dev and 80 deployed, so a capture taken there is
+  named by its paths or not at all. Adding a sixth proxy path means adding it
+  to the dissector too.
+  The obvious route for the port fallback, Wireshark's `ws.port` table, was
+  measured doing nothing: text frames are routed by the `websocket.text_type`
+  preference, not by port, so only a heuristic ever sees them.
 
 - **Tests reference constants, never literals.** `SIZE`, `MAX_PLAYERS`, `COLLAPSE_COUNT` are tunable precisely because no test hardcodes `15` or `8`. Preserve this.
 - **The test helper `playing(n)` passes `() => 0` as rng** to force `ARENAS[0] === 'square'`, and freezes `nextCollapseAt`/`nextPowerupAt` at `Infinity`. Randomness in tests goes through an injected rng, never `Math.random`.

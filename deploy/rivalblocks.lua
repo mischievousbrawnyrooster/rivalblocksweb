@@ -10,7 +10,7 @@
 -- Then Analyze > Reload Lua Plugins, or just restart Wireshark.
 -- One-off, no install:  tshark -X lua_script:deploy/rivalblocks.lua -i <if>
 --
--- A game is recognised two ways, and either one alone is enough:
+-- A game is recognised three ways, and any one alone is enough:
 --
 --   1. By name. Each client announces a WebSocket subprotocol in its handshake
 --      (the `new WebSocket(url, '<name>.v1')` calls in src/pages), and
@@ -19,22 +19,23 @@
 --      Sec-WebSocket-Protocol header exchange, and never repeated. It also
 --      needs a client new enough to send it.
 --
---   2. By port, through a heuristic. Each match server owns one, so a frame on
---      8081..8085 that looks like our JSON is claimed with no handshake and no
---      client support at all. This is what reads captures taken before any of
---      this existed.
+--   2. By the path in the upgrade request -- /ws, /fracture-ws, /blast-ws,
+--      /blast-dm-ws, /blockout3d-ws. Needs the handshake in the capture but
+--      nothing whatsoever from the client, so it reads captures taken before
+--      any of this existed. It is also the only signal that survives a proxy:
+--      capture at the browser and every game shares one port, 5173 in dev and
+--      80 deployed, but the path still differs.
 --
--- Which means a capture missing the handshake, or taken against an older
--- build, still comes out named -- as long as it was taken where the port is
--- the real one. Behind nginx every game shares port 80, so capture the
--- loopback hop between the proxy and the match server, not the public one.
+--   3. By port. A frame on 8081..8085 that looks like our JSON is claimed
+--      without a handshake at all, which is what reads a capture started in
+--      the middle of a session. Only true on the loopback hop to the match
+--      server, where the ports are the real ones.
 --
 -- Frames are readable because the protocol is deliberately plain ws:// with
 -- perMessageDeflate off. See the deployment section of CLAUDE.md.
 
--- `ports` drives the heuristic at the bottom, which is what names a capture the
--- subprotocol cannot: one recorded before the clients announced a name, or one
--- that missed the handshake.
+-- `ports` is route 3: the loopback hop to a match server, where each game has
+-- a port of its own.
 local games = {
   { key = 'blockout.v1',   id = 'blockout',   title = 'Blockout Royale',    col = 'BLOCKOUT',   ports = { 8081 } },
   { key = 'fracture.v1',   id = 'fracture',   title = 'Fracture Line',      col = 'FRACTURE',   ports = { 8082 } },
@@ -68,6 +69,48 @@ local inputs = {
 }
 
 local admin = { admin=1, kick=1, restart=1, botsonly=1, bots=1, arena=1 }
+
+-- The third way a game gets recognised, and the only one that survives a
+-- proxy. Capture at the browser rather than on the match server's loopback and
+-- every game arrives on one port -- 5173 in dev, 80 deployed -- so the port
+-- says nothing. The path in the upgrade request still does. It is also the one
+-- signal an old client emits without knowing it exists.
+local by_path = {
+  ['/ws']            = 'blockout',
+  ['/fracture-ws']   = 'fracture',
+  ['/blast-ws']      = 'blastworks',
+  ['/blast-dm-ws']   = 'blastworks',
+  ['/blockout3d-ws'] = 'blockout3d',
+}
+
+local f_stream = Field.new('tcp.stream')
+local f_uri = Field.new('http.request.uri')
+
+-- tcp.stream -> game id, learned from the handshake and used by every data
+-- frame after it on that connection.
+local owner = {}
+
+-- A postdissector, because the handshake is HTTP and the heuristics below only
+-- ever see WebSocket frames. It runs on every frame, so it does as little as
+-- possible: first pass only, and nothing at all unless the frame is a request
+-- for one of our paths.
+local watcher = Proto('rivalblocks', 'RivalBlocks handshake watcher')
+
+function watcher.dissector(buf, pinfo, tree)
+  if pinfo.visited then return end
+  local uri = f_uri()
+  if not uri then return end
+  local game = by_path[tostring(uri.value)]
+  if not game then return end
+  local stream = f_stream()
+  if stream then owner[stream.value] = game end
+end
+
+-- Wireshark calls this when a capture is loaded. Without it, streams learned
+-- from the last file would name streams in the next one.
+function watcher.init() owner = {} end
+
+register_postdissector(watcher)
 
 -- Replies, so that a frame coming the other way is labelled as one rather than
 -- reported as an input nobody handles. `admin` is deliberately absent: it is
@@ -158,7 +201,17 @@ local function build(game)
   for _, port in ipairs(game.ports) do ours[port] = true end
 
   proto:register_heuristic('ws', function(buf, pinfo, tree)
-    if not (ours[pinfo.src_port] or ours[pinfo.dst_port]) then return false end
+    -- The handshake wins where we saw one, since it is right even through a
+    -- proxy. Where we did not, the port is the fallback: a capture that starts
+    -- mid-session has no handshake to read.
+    local stream = f_stream()
+    local named = stream and owner[stream.value]
+    if named then
+      if named ~= game.id then return false end
+    elseif not (ours[pinfo.src_port] or ours[pinfo.dst_port]) then
+      return false
+    end
+
     local len = buf:len()
     if len < 6 then return false end
     local ok, head = pcall(function() return buf(0, math.min(len, 24)):string() end)
