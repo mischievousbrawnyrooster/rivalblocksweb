@@ -34,7 +34,7 @@ export default function About() {
 
   return (
     <>
-      <header className="blueprint border-b border-line">
+      <header className="blueprint blueprint-drift border-b border-line">
         <div className="mx-auto grid max-w-6xl items-center gap-12 px-5 py-16 lg:grid-cols-2">
           <div>
             <p className="rule-label">Studio</p>
@@ -66,7 +66,7 @@ export default function About() {
         </div>
       </header>
 
-      <section className="mx-auto max-w-6xl px-5 py-20">
+      <section className="reveal mx-auto max-w-6xl px-5 py-20">
         <p className="rule-label">What we hold to</p>
         <h2 className="display mt-2 text-3xl sm:text-4xl">Values</h2>
         <div className="mt-10 grid gap-6 md:grid-cols-2">
@@ -79,7 +79,7 @@ export default function About() {
         </div>
       </section>
 
-      <section className="border-y border-line bg-surface">
+      <section className="reveal border-y border-line bg-surface">
         <div className="mx-auto max-w-6xl px-5 py-20">
           <p className="rule-label">How we are organised</p>
           <h2 className="display mt-2 text-3xl sm:text-4xl">Four teams</h2>
@@ -97,7 +97,7 @@ export default function About() {
         </div>
       </section>
 
-      <section id="careers" className="mx-auto max-w-3xl scroll-mt-24 px-5 py-20 text-center">
+      <section id="careers" className="reveal mx-auto max-w-3xl scroll-mt-24 px-5 py-20 text-center">
         <p className="rule-label">Careers</p>
         <h2 className="display mt-2 text-3xl sm:text-4xl">We hire slowly</h2>
         <p className="mx-auto mt-5 max-w-xl leading-relaxed text-muted">

@@ -5,7 +5,7 @@ export default function GameCard({ game }) {
   const tone = game.statusTone === 'live' ? 'text-live' : 'text-warn'
 
   return (
-    <article className="group border border-line bg-surface transition-colors hover:border-flare">
+    <article className="group border border-line bg-surface transition-[transform,border-color,box-shadow] duration-300 hover:-translate-y-1 hover:border-flare hover:shadow-lg hover:shadow-flare/5">
       <Link to={`/games/${game.slug}`} className="block">
         <div className="relative aspect-16/10 overflow-hidden border-b border-line bg-bg">
           {game.coverImage ? (

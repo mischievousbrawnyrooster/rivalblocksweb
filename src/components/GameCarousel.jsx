@@ -22,11 +22,11 @@ export default function GameCarousel({ games }) {
     return () => clearInterval(id)
   }, [held, games.length])
 
-  const tone = game?.statusTone === 'live' ? 'text-live' : 'text-warn'
+  const tone = game.statusTone === 'live' ? 'text-live' : 'text-warn'
 
   return (
     <section
-      className="blueprint relative border-b border-line overflow-hidden"
+      className="blueprint blueprint-drift relative border-b border-line overflow-hidden"
       aria-roledescription="carousel"
       aria-label="Our games"
       onMouseEnter={() => setHold(true)}
@@ -40,14 +40,25 @@ export default function GameCarousel({ games }) {
           className="flex transition-transform duration-700 ease-[cubic-bezier(0.16,1,0.3,1)] motion-reduce:transition-none"
           style={{ transform: `translateX(-${at * 100}%)` }}
         >
-          {games.map((g, i) => (
-            <div key={g.slug} className="w-full shrink-0">
+          {games.map((g, i) => {
+            const live = i === at
+            // The sliding track needs every slide in the DOM, which means three
+            // of them are sitting off to the side at any moment. `inert` is the
+            // one attribute that deals with both consequences: their links stop
+            // being tabbable and their text stops reaching a screen reader.
+            // Without it you can tab into a game that is not on screen.
+            const Heading = live ? 'h1' : 'p'
+            return (
+            <div key={g.slug} className="w-full shrink-0" inert={!live} aria-hidden={!live}>
               <div className="mx-auto grid max-w-6xl items-center gap-12 px-5 pt-16 pb-8 lg:grid-cols-2 lg:pt-24 lg:pb-12">
                 <div>
                   <p className="inline-block bg-flare px-2.5 py-1 text-[0.6875rem] font-bold uppercase tracking-[0.14em] text-on-flare">
                     {g.status}
                   </p>
-                  <h1 className="display mt-5 text-5xl sm:text-6xl lg:text-7xl">{g.title}</h1>
+                  {/* Only the slide on screen is the page's h1. The other three
+                      carry the same styling as a paragraph, or the page claims
+                      four titles. */}
+                  <Heading className="display mt-5 text-5xl sm:text-6xl lg:text-7xl">{g.title}</Heading>
                   <p className="mt-3 text-lg text-flare">{g.tagline}</p>
                   <p className="mt-5 border-l-2 border-flare pl-4 leading-relaxed text-muted">
                     {g.blurb}
@@ -91,13 +102,14 @@ export default function GameCarousel({ games }) {
                 </div>
               </div>
             </div>
-          ))}
+            )
+          })}
         </div>
       </div>
 
       {/* Screen Reader Announcement */}
       <p ref={liveRef} aria-live="polite" className="sr-only">
-        {game?.title}, {game?.genre}
+        {game.title}, {game.genre}
       </p>
 
       {/* Stationary Bottom Controls */}
@@ -136,7 +148,7 @@ export default function GameCarousel({ games }) {
           </button>
           <span className={`ml-auto text-[0.6875rem] uppercase tracking-[0.16em] ${tone}`}>
             <span aria-hidden="true">● </span>
-            {game?.genre}
+            {game.genre}
           </span>
         </div>
       </div>

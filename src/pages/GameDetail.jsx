@@ -53,7 +53,7 @@ export default function GameDetail() {
   return (
     <>
       {/* ---------- Hero ---------- */}
-      <section className="blueprint border-b border-line">
+      <section className="blueprint blueprint-drift border-b border-line">
         <div className="mx-auto grid max-w-6xl items-center gap-12 px-5 py-16 lg:grid-cols-2">
           <div>
             <Link
@@ -132,7 +132,7 @@ export default function GameDetail() {
       </section>
 
       {/* ---------- Features ---------- */}
-      <section className="mx-auto max-w-6xl px-5 py-20">
+      <section className="reveal mx-auto max-w-6xl px-5 py-20">
         <p className="rule-label">What makes it</p>
         <h2 className="display mt-2 text-3xl sm:text-4xl">Features</h2>
 
@@ -153,7 +153,7 @@ export default function GameDetail() {
 
       {/* ---------- Leaderboard ---------- */}
       {mine.length > 0 && (
-        <section className="border-t border-line">
+        <section className="reveal border-t border-line">
           <div className="mx-auto max-w-6xl px-5 py-20">
             <div className="flex flex-wrap items-baseline justify-between gap-4">
               <div>
@@ -187,7 +187,7 @@ export default function GameDetail() {
       )}
 
       {/* ---------- Gallery ---------- */}
-      <section className="border-y border-line bg-surface">
+      <section className="reveal border-y border-line bg-surface">
         <div className="mx-auto max-w-6xl px-5 py-20">
           <p className="rule-label">Screenshots</p>
           <h2 className="display mt-2 text-3xl sm:text-4xl">In motion</h2>
@@ -226,7 +226,7 @@ export default function GameDetail() {
       </section>
 
       {/* ---------- Server note ---------- */}
-      <section className="mx-auto max-w-3xl px-5 py-20 text-center">
+      <section className="reveal mx-auto max-w-3xl px-5 py-20 text-center">
         <p className="rule-label">On our servers</p>
         <p className="display mt-4 text-2xl leading-snug sm:text-3xl">
           {game.serverNote}
@@ -240,7 +240,7 @@ export default function GameDetail() {
       </section>
 
       {/* ---------- Signup ---------- */}
-      <section className="border-t border-line">
+      <section className="reveal border-t border-line">
         <div className="mx-auto max-w-2xl px-5 py-16">
           <NewsletterForm />
         </div>

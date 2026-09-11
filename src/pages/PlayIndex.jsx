@@ -15,7 +15,7 @@ export default function PlayIndex() {
 
   return (
     <>
-      <header className="blueprint border-b border-line">
+      <header className="blueprint blueprint-drift border-b border-line">
         <div className="mx-auto max-w-6xl px-5 py-16">
           <p className="rule-label">Play</p>
           <h1 className="display mt-2 text-4xl sm:text-5xl">Play now</h1>
@@ -31,7 +31,7 @@ export default function PlayIndex() {
           {playable.map((game) => (
             <article
               key={game.slug}
-              className="group flex flex-col border border-line bg-surface transition-colors hover:border-flare"
+              className="group flex flex-col border border-line bg-surface transition-[transform,border-color,box-shadow] duration-300 hover:-translate-y-1 hover:border-flare hover:shadow-lg hover:shadow-flare/5"
             >
               <Link to={game.playPath} className="flex flex-1 flex-col">
                 <div className="relative aspect-16/10 overflow-hidden border-b border-line bg-bg">
@@ -73,7 +73,7 @@ export default function PlayIndex() {
           that, the roster fills itself.
         </p>
 
-        <section className="mt-16 border-t border-line pt-10">
+        <section className="reveal mt-16 border-t border-line pt-10">
           <div className="flex flex-wrap items-baseline justify-between gap-4">
             <h2 className="display text-2xl">Leaderboard across all four</h2>
             <Link

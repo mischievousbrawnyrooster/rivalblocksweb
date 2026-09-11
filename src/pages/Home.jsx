@@ -39,7 +39,7 @@ export default function Home() {
       </section>
 
       {/* ---------- Games ---------- */}
-      <section className="mx-auto max-w-6xl px-5 py-20">
+      <section className="reveal mx-auto max-w-6xl px-5 py-20">
         <div className="flex flex-wrap items-end gap-4 border-b border-line pb-5">
           <div>
             <p className="rule-label">Our games</p>
@@ -61,7 +61,7 @@ export default function Home() {
       </section>
 
       {/* ---------- Servers ---------- */}
-      <section className="border-y border-line bg-surface">
+      <section className="reveal border-y border-line bg-surface">
         <div className="mx-auto grid max-w-6xl gap-12 px-5 py-20 lg:grid-cols-2">
           <div>
             <p className="rule-label">Infrastructure</p>
@@ -104,7 +104,7 @@ export default function Home() {
       </section>
 
       {/* ---------- Signup ---------- */}
-      <section className="mx-auto max-w-2xl px-5 py-20 text-center">
+      <section className="reveal mx-auto max-w-2xl px-5 py-20 text-center">
         <h2 className="display text-3xl sm:text-4xl">Next season drops soon</h2>
         <p className="mx-auto mt-4 max-w-md leading-relaxed text-muted">
           Patch notes, playtest invites, and nothing else. We do not sell the

@@ -7,7 +7,7 @@ export default function Games() {
 
   return (
     <>
-      <header className="blueprint border-b border-line">
+      <header className="blueprint blueprint-drift border-b border-line">
         <div className="mx-auto max-w-6xl px-5 py-16">
           <p className="rule-label">Catalog</p>
           <h1 className="display mt-2 text-4xl sm:text-5xl">Games</h1>

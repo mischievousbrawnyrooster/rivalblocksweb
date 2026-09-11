@@ -211,3 +211,59 @@ body {
     display: none;
   }
 }
+
+/* Scroll-driven section reveals.
+   ---------------------------------------------------------------------------
+   The reduced-motion block above does NOT cover these, and the reason is worth
+   knowing before touching them: it works by forcing `animation-duration` to
+   almost nothing, and a scroll-driven animation ignores duration entirely --
+   its progress comes from scroll position, not from a clock. So an unguarded
+   reveal would still animate for someone who asked for less motion, and if the
+   timeline never advanced it would strand them on an invisible page.
+
+   Hence the two nested guards, and hence `opacity: 0` living ONLY inside both
+   of them. A browser with no `view()` support and a visitor who wants no motion
+   both get the content plainly visible, which is the failure mode you want.
+   Never hoist that `opacity: 0` out to `.reveal` itself. */
+@keyframes reveal-in {
+  from {
+    opacity: 0;
+    transform: translate3d(0, 18px, 0);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@supports (animation-timeline: view()) {
+  @media not (prefers-reduced-motion: reduce) {
+    .reveal {
+      opacity: 0;
+      animation-name: reveal-in;
+      animation-timing-function: ease-out;
+      animation-fill-mode: both;
+      animation-timeline: view();
+      /* Finishes well before the section is centred, so reading never waits on
+         the animation. */
+      animation-range: entry 15% entry 60%;
+    }
+  }
+}
+
+/* The blueprint grid, drifting one cell. Paired with `.blueprint`, never used
+   alone -- it animates a background the other class draws.
+
+   Deliberately not folded into `.blueprint` itself: that class is also on every
+   game card, and ten cards drifting at once reads as noise rather than life.
+   Hero and banner areas only. This one IS covered by the reduced-motion block
+   above, because it is driven by a clock rather than by scroll. */
+@keyframes blueprint-drift {
+  to {
+    background-position: 28px 28px;
+  }
+}
+
+.blueprint-drift {
+  animation: blueprint-drift 45s linear infinite;
+}

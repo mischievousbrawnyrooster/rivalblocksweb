@@ -10,7 +10,7 @@ export default function Servers() {
 
   return (
     <>
-      <header className="blueprint border-b border-line">
+      <header className="blueprint blueprint-drift border-b border-line">
         <div className="mx-auto max-w-6xl px-5 py-16">
           <p className="rule-label">Infrastructure</p>
           <h1 className="display mt-2 text-4xl sm:text-5xl">Server status</h1>
@@ -51,7 +51,7 @@ export default function Servers() {
               'A status page that is always green is a status page nobody trusts. Degraded regions are labelled degraded, with the cause, while we fix them.',
             ],
           ].map(([title, body]) => (
-            <section key={title}>
+            <section key={title} className="reveal">
               <h2 className="text-sm font-bold uppercase tracking-[0.08em]">{title}</h2>
               <p className="mt-3 text-sm leading-relaxed text-muted">{body}</p>
             </section>
