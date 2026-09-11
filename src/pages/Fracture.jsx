@@ -1257,11 +1257,19 @@ export default function Fracture() {
                   </button>
                 </div>
                 <div className="blueprint flex items-center gap-4 p-5">
-                  <BlockArt
-                    variant={ADS[ad.which].art.variant}
-                    seed={ADS[ad.which].art.seed}
-                    className="hidden h-24 w-24 shrink-0 sm:block"
-                  />
+                  {ADS[ad.which].coverImage ? (
+                    <img
+                      src={ADS[ad.which].coverImage}
+                      alt={ADS[ad.which].title}
+                      className="hidden h-24 w-24 shrink-0 object-cover border border-line sm:block"
+                    />
+                  ) : (
+                    <BlockArt
+                      variant={ADS[ad.which].art.variant}
+                      seed={ADS[ad.which].art.seed}
+                      className="hidden h-24 w-24 shrink-0 sm:block"
+                    />
+                  )}
                   <div className="min-w-0">
                     <p className="rule-label">Also from RivalBlocks</p>
                     <p className="display mt-1 text-2xl">{ADS[ad.which].title}</p>

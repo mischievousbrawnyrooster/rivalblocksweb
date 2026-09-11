@@ -111,11 +111,22 @@ export default function GameDetail() {
           </div>
 
           <div className="flex justify-center">
-            <BlockArt
-              variant={game.art.variant}
-              seed={game.art.seed}
-              className="w-full max-w-lg"
-            />
+            {game.coverImage ? (
+              <div className="relative w-full max-w-lg overflow-hidden border border-line bg-surface shadow-2xl">
+                <img
+                  src={game.coverImage}
+                  alt={`${game.title} visual`}
+                  className="h-auto w-full object-cover"
+                />
+                <div className="pointer-events-none absolute inset-0 border border-flare/20" />
+              </div>
+            ) : (
+              <BlockArt
+                variant={game.art.variant}
+                seed={game.art.seed}
+                className="w-full max-w-lg"
+              />
+            )}
           </div>
         </div>
       </section>
@@ -190,11 +201,19 @@ export default function GameDetail() {
                   className="group block w-full border border-line bg-bg text-left transition-colors hover:border-flare"
                 >
                   <span className="blueprint flex aspect-4/3 items-center justify-center overflow-hidden p-4">
-                    <BlockArt
-                      variant={game.art.variant}
-                      seed={s.seed}
-                      className="h-full w-full object-contain transition-transform duration-500 group-hover:scale-105"
-                    />
+                    {s.image ? (
+                      <img
+                        src={s.image}
+                        alt={s.caption}
+                        className="h-full w-full object-cover transition-transform duration-500 group-hover:scale-105"
+                      />
+                    ) : (
+                      <BlockArt
+                        variant={game.art.variant}
+                        seed={s.seed}
+                        className="h-full w-full object-contain transition-transform duration-500 group-hover:scale-105"
+                      />
+                    )}
                   </span>
                   <span className="block border-t border-line px-3 py-2.5 text-xs leading-relaxed text-muted">
                     {s.caption}

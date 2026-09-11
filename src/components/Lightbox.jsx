@@ -77,12 +77,20 @@ export default function Lightbox({ shots, index, variant, onClose, onNavigate })
         </div>
 
         <div className="blueprint flex aspect-16/10 items-center justify-center p-8">
-          <BlockArt
-            variant={variant}
-            seed={shot.seed}
-            title={shot.caption}
-            className="h-full w-full object-contain"
-          />
+          {shot.image ? (
+            <img
+              src={shot.image}
+              alt={shot.caption}
+              className="h-full w-full object-contain"
+            />
+          ) : (
+            <BlockArt
+              variant={variant}
+              seed={shot.seed}
+              title={shot.caption}
+              className="h-full w-full object-contain"
+            />
+          )}
         </div>
 
         <div className="flex items-center gap-4 border-t border-line px-4 py-3">

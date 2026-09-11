@@ -1,5 +1,4 @@
 import { Link } from 'react-router-dom'
-import BlockArt from '../components/BlockArt.jsx'
 import GameCard from '../components/GameCard.jsx'
 import GameCarousel from '../components/GameCarousel.jsx'
 import NewsletterForm from '../components/NewsletterForm.jsx'

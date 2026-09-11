@@ -276,7 +276,17 @@ is nothing to lock. `BOARD_DIR` says where they live (`./data` in dev,
 
 These are non-negotiable and predate the game:
 
-- **No image files.** All artwork is generated CSS, inline SVG (`BlockArt.jsx`), or procedural Three.js primitives (`towerScene.js`).
+- **The marketing pages carry key art; everything a game draws is still
+  procedural.** `public/art/*.jpg` holds one 1376x768 cover per game plus one
+  studio shot, referenced as `coverImage` in `src/data/games.js`. Every call
+  site guards it — `game.coverImage ? <img> : <BlockArt>` — so `BlockArt.jsx`
+  remains the fallback and is still the only artwork on `NotFound`, in the
+  `Lightbox`, and in the shot grid. **Nothing a canvas or WebGL surface draws
+  may load a file**: `towerScene.js`, `pickupArt.js`, `wallTiles.js` and
+  `fireTiles.js` generate every pixel they show, and a game that waited on an
+  image would stall its first frame. Commit art at web weight, not at whatever
+  a generator emits: the first five arrived near-lossless at ~1 MB each and
+  re-encoding at JPEG quality 82 cost nothing visible and saved 75%.
 - **Status is never communicated by colour alone** (WCAG 1.4.1). Warning tiles carry a glyph, holes differ structurally from solid tiles, players carry their initial.
 - **Player colour tokens (`--player-1..8`) are separate from status tokens** so a piece can never wear a tile's colour. Never reuse `--warn` for a player.
 - **Only existing `@theme` tokens** from `src/index.css`. No new tokens without reason, no `tailwind.config.js` (Tailwind v4 is CSS-first).

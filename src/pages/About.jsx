@@ -1,5 +1,4 @@
 import { Link } from 'react-router-dom'
-import BlockArt from '../components/BlockArt.jsx'
 import NewsletterForm from '../components/NewsletterForm.jsx'
 import { fleetStats } from '../data/servers.js'
 import { useTitle } from '../lib/useTitle.js'
@@ -55,7 +54,14 @@ export default function About() {
             </p>
           </div>
           <div className="flex justify-center">
-            <BlockArt variant="cavern" seed={2024} className="w-full max-w-md" />
+            <div className="relative w-full max-w-lg aspect-16/9 overflow-hidden border border-line bg-surface shadow-2xl transition-transform duration-500 hover:scale-[1.02]">
+              <img
+                src="/art/studio-operations.jpg"
+                alt="RivalBlocks studio engineering and operations center"
+                className="h-full w-full object-cover"
+              />
+              <div className="pointer-events-none absolute inset-0 border border-flare/20" />
+            </div>
           </div>
         </div>
       </header>

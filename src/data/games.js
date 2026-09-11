@@ -15,6 +15,7 @@ export const games = [
     statusTone: 'live',
     flagship: true,
     platforms: ['PC', 'PS5', 'Xbox Series X|S'],
+    coverImage: '/art/fracture-line.jpg',
     art: { variant: 'arena', seed: 1701 },
     blurb:
       'Every wall comes apart under fire, and every operator carries the charges ' +
@@ -81,6 +82,7 @@ export const games = [
     statusTone: 'live',
     flagship: false,
     platforms: ['PC', 'PS5', 'Xbox Series X|S', 'Switch 2'],
+    coverImage: '/art/blastworks.jpg',
     art: { variant: 'platforms', seed: 733 },
     blurb:
       'A working plant packed wall to wall with material. Charges throw a cross ' +
@@ -142,6 +144,7 @@ export const games = [
     statusTone: 'beta',
     flagship: false,
     platforms: ['PC', 'iOS', 'Android'],
+    coverImage: '/art/blockout-royale.jpg',
     art: { variant: 'platforms', seed: 512 },
     blurb:
       'A platform grid that is busy disappearing. Tiles flash a warning, then ' +
@@ -202,6 +205,7 @@ export const games = [
     statusTone: 'beta',
     flagship: false,
     platforms: ['PC'],
+    coverImage: '/art/blockout-royale-3d.jpg',
     art: { variant: 'cavern', seed: 903 },
     blurb:
       'Blockout Royale, stacked eight floors deep. Waves still flag a tile a ' +
