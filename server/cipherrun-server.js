@@ -7,6 +7,7 @@ import {
   make,
   join,
   leave,
+  castVote,
   processInput,
   tick,
   snapshot,
@@ -172,6 +173,8 @@ wss.on('connection', (ws) => {
       )
     } else if (msg?.t === 'input' && ws.player) {
       processInput(match, ws.player.id, msg)
+    } else if (msg?.t === 'vote' && ws.player) {
+      castVote(match, ws.player.id, msg.tier)
     } else if (msg?.t === 'avatar' && ws.player && typeof msg.avatar === 'number' && Number.isFinite(msg.avatar)) {
       ws.player.avatar = Math.floor(msg.avatar) % 6
     } else if (msg?.t === 'ready' && ws.player) {
