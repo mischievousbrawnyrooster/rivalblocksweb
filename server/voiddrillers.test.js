@@ -481,6 +481,7 @@ test('snapshot contains clean public state without leaking private match state',
   assert.equal(Array.isArray(snap.players), true)
   assert.equal(Array.isArray(snap.deltas), true)
   assert.equal(Array.isArray(snap.hazards), true)
+  assert.equal(Array.isArray(snap.board), true)
   assert.equal(snap.players.length, 1)
   assert.equal(snap.players[0].name, 'SnapTester')
 })

@@ -58,6 +58,15 @@ test('blockout3d has a board file of its own, with exactly one writer', () => {
   assert.equal(new Set(files).size, files.length, 'no two servers share a file')
 })
 
+test('voiddrillers has a board file of its own, with exactly one writer', () => {
+  const spec = boardFor('voiddrillers')
+  assert.ok(spec, 'the game is registered')
+  assert.equal(spec.file, 'board-voiddrillers.json')
+  assert.equal(spec.title, 'Void Drillers')
+  const files = BOARDS.map((b) => b.file)
+  assert.equal(new Set(files).size, files.length, 'no two servers share a file')
+})
+
 // --- merging -------------------------------------------------------------
 
 test('a first match puts everyone who played on the board', () => {

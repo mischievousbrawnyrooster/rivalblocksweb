@@ -69,7 +69,7 @@ The project contains a static marketing SPA and five authoritative multiplayer g
    - WebSockets enforce `maxPayload: 4096` to prevent oversized join frames from crashing the server process.
 
 5. **Concurrency Without Locks**:
-   - Four board files (`board-blockout.json`, `board-fracture.json`, `board-blastworks-lastman.json`, `board-blastworks-deathmatch.json`).
+   - Six board files (`board-blockout.json`, `board-blockout3d.json`, `board-fracture.json`, `board-blastworks-lastman.json`, `board-blastworks-deathmatch.json`, `board-voiddrillers.json`).
    - Exactly one process writes to each file.
    - `load()` in `board-store.js` safely catches all syntax errors and returns an empty board if the file is damaged.
 

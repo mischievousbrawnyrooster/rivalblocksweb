@@ -14,6 +14,8 @@ import {
   sanitizeName,
   TICK_MS,
 } from './voiddrillers.js'
+import { boardFor } from './board.js'
+import { keeper } from './board-store.js'
 
 const HOST = process.env.HOST || '127.0.0.1'
 const PORT = Number(process.env.PORT) || 8086
@@ -30,6 +32,18 @@ let overSince = 0
 
 // Map player ID -> WebSocket
 const sockets = new Map()
+
+const keep = keeper(boardFor('voiddrillers'))
+match.board = keep.top()
+
+const played = () =>
+  [...match.players.values()].map((p) => ({
+    name: p.name,
+    bot: false,
+    won: p.id === match.winner,
+    kills: 0,
+    deaths: p.alive ? 0 : 1,
+  }))
 
 // WebSocket server with maxPayload bound to 4096 bytes and cleartext perMessageDeflate disabled
 const wss = new WebSocketServer({
@@ -54,6 +68,7 @@ function restartMatch() {
   }
 
   match = make({ seed: Date.now() })
+  match.board = keep.top()
   sockets.clear()
 
   for (const { ws, id, name } of activeSockets) {
@@ -110,6 +125,7 @@ wss.on('connection', (ws) => {
       // If server was empty and in 'over' phase, fresh start for first joining player
       if (match.phase === 'over' && match.players.size === 0) {
         match = make({ seed: Date.now() })
+        match.board = keep.top()
         overSince = 0
       }
 
@@ -182,6 +198,10 @@ setInterval(() => {
   const dt = Math.min(now - last, TICK_MS * 5)
   last = now
   tick(match, dt)
+
+  if (keep.bank(match.phase === 'over', played)) {
+    match.board = keep.top()
+  }
 
   if (match.phase === 'over' && match.players.size > 0) {
     if (!overSince) {

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 import SidebarAd from '../components/SidebarAd.jsx'
 import BannerAd from '../components/BannerAd.jsx'
+import Leaderboard from '../components/Leaderboard.jsx'
 import { useTitle } from '../lib/useTitle.js'
 import { useFavicon } from '../lib/useFavicon.js'
 
@@ -1200,6 +1201,13 @@ export default function VoidDrillers() {
               })}
               {sortedPlayers.length === 0 && <li className="text-sm text-muted">Connecting...</li>}
             </ul>
+          </div>
+
+          <div>
+            <p className="rule-label">Leaderboard</p>
+            <div className="mt-2 border-t border-line pt-3">
+              <Leaderboard entries={hud?.board ?? []} you={me?.name ?? null} />
+            </div>
           </div>
 
           <div>

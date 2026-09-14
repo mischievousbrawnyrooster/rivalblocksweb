@@ -271,7 +271,8 @@ export function make(options = {}) {
     winner: null,
     winReason: null,
     deltas: [],
-    hazards: []
+    hazards: [],
+    board: options.board ?? []
   }
 }
 
@@ -657,6 +658,7 @@ export function snapshot(match) {
     winner: match.winner,
     players,
     deltas: match.deltas,
-    hazards
+    hazards,
+    board: match.board ?? []
   }
 }

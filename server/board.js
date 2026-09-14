@@ -30,6 +30,12 @@ export const BOARDS = [
     mode: 'deathmatch',
     title: 'Blastworks: Deathmatch',
   },
+  {
+    file: 'board-voiddrillers.json',
+    game: 'voiddrillers',
+    mode: null,
+    title: 'Void Drillers',
+  },
 ]
 
 // Enough names that nobody who plays regularly falls off, few enough that a

@@ -40,7 +40,7 @@ Two things that waste time if forgotten:
 
 Two things sharing one build:
 
-1. A **static marketing SPA** for a fictional game studio. `src/data/games.js` and `src/data/servers.js` are the CMS — all copy lives there. It fetches exactly one thing: `/board/*.json`, the standing leaderboard, which is five plain files written by the match servers and served straight off disk.
+1. A **static marketing SPA** for a fictional game studio. `src/data/games.js` and `src/data/servers.js` are the CMS — all copy lives there. It fetches exactly one thing: `/board/*.json`, the standing leaderboard, which is six plain files written by the match servers and served straight off disk.
 2. A **playable multiplayer game** at `/play`, the only part that touches a network.
 
 ## Game architecture
