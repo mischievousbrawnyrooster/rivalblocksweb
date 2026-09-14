@@ -208,53 +208,122 @@ export function make(options = {}) {
     }
   }
 
-  // Procedural Bedrock Obstacle Shelves
-  // Generates horizontal bedrock shelves across subterranean strata to prevent straight-down descent
-  let nextShelfY = 14 + Math.floor(rng() * 4)
-  let lastPattern = -1
+  // Track formation rows to avoid placing standalone bedrock in the path of complex formations
+  const formationRows = new Set()
+  const formationList = []
+  let nextFormationY = 14 + Math.floor(rng() * 4)
 
-  while (nextShelfY < VAULT_Y - 6) {
-    const shelfY = nextShelfY
-    // Pick a pattern different from previous shelf
-    // 0: Left-anchored (cols 1..W), right side open (at least 7 cols open)
-    // 1: Right-anchored (cols W..18), left side open (at least 7 cols open)
-    // 2: Center shelf (cols S..E), both sides open (at least 4 cols on left and right)
-    let pattern = Math.floor(rng() * 3)
-    if (pattern === lastPattern) {
-      pattern = (pattern + 1) % 3
+  while (nextFormationY < VAULT_Y - 8) {
+    const startY = nextFormationY
+    const pattern = Math.floor(rng() * 6)
+    formationList.push({ y: startY, pattern })
+    // Mark rows around the formation
+    for (let dy = -1; dy <= 4; dy++) {
+      formationRows.add(startY + dy)
     }
-    lastPattern = pattern
+    // Spacing between obstacle formations: 9 to 14 rows
+    nextFormationY += 9 + Math.floor(rng() * 6)
+  }
 
+  // 1. Standalone Bedrock Nodules ("generate by itself")
+  // Generates isolated solitary bedrock blocks in subterranean strata away from obstacle formations.
+  // Each solitary bedrock block sits naturally on its own in dirt/stone, requiring drillers to steer around it.
+  for (let y = 12; y < VAULT_Y - 4; y++) {
+    if (formationRows.has(y)) continue
+    // ~30% chance per row for an isolated standalone bedrock block
+    if (rng() < 0.30) {
+      const x = 3 + Math.floor(rng() * (WIDTH - 6)) // cols 3..16
+      const idx = y * WIDTH + x
+      grid[idx] = BLOCK_BEDROCK
+      hp[idx] = 255
+    }
+  }
+
+  // 2. Procedural Bedrock Formations (Multi-block, multi-row varied patterns)
+  const placeBedrock = (x, y) => {
+    if (x >= 1 && x < WIDTH - 1 && y >= 11 && y < VAULT_Y) {
+      const idx = y * WIDTH + x
+      grid[idx] = BLOCK_BEDROCK
+      hp[idx] = 255
+    }
+  }
+
+  for (const { y: startY, pattern } of formationList) {
     if (pattern === 0) {
-      // Left-anchored shelf: covers cols 1 to 8..11, leaving cols 9..18 or 12..18 open
-      const shelfWidth = 8 + Math.floor(rng() * 4)
-      for (let x = 1; x <= shelfWidth; x++) {
-        const idx = shelfY * WIDTH + x
-        grid[idx] = BLOCK_BEDROCK
-        hp[idx] = 255
+      // Pattern 0: Stepped / Terraced Cascade (Diagonal Staircase)
+      const goRight = rng() < 0.5
+      if (goRight) {
+        for (let x = 1; x <= 7; x++) placeBedrock(x, startY)
+        for (let x = 4; x <= 10; x++) placeBedrock(x, startY + 1)
+        for (let x = 7; x <= 13; x++) placeBedrock(x, startY + 2)
+      } else {
+        for (let x = 12; x <= 18; x++) placeBedrock(x, startY)
+        for (let x = 9; x <= 15; x++) placeBedrock(x, startY + 1)
+        for (let x = 6; x <= 12; x++) placeBedrock(x, startY + 2)
       }
     } else if (pattern === 1) {
-      // Right-anchored shelf: covers cols 8..11 to 18, leaving cols 1 to 7..10 open
-      const shelfWidth = 8 + Math.floor(rng() * 4)
-      const startX = (WIDTH - 1) - shelfWidth
-      for (let x = startX; x < WIDTH - 1; x++) {
-        const idx = shelfY * WIDTH + x
-        grid[idx] = BLOCK_BEDROCK
-        hp[idx] = 255
+      // Pattern 1: L-Hook / Overhanging Barrier (Shelf with vertical downward tooth)
+      const onLeft = rng() < 0.5
+      if (onLeft) {
+        for (let x = 1; x <= 10; x++) placeBedrock(x, startY)
+        placeBedrock(9, startY + 1)
+        placeBedrock(10, startY + 1)
+        placeBedrock(9, startY + 2)
+        placeBedrock(10, startY + 2)
+      } else {
+        for (let x = 9; x <= 18; x++) placeBedrock(x, startY)
+        placeBedrock(9, startY + 1)
+        placeBedrock(10, startY + 1)
+        placeBedrock(9, startY + 2)
+        placeBedrock(10, startY + 2)
+      }
+    } else if (pattern === 2) {
+      // Pattern 2: Freestanding Monolith / Island Boulder (Generates "by itself" in mid-shaft)
+      const startX = 6 + Math.floor(rng() * 2) // 6 or 7
+      const width = 6
+      const endX = startX + width - 1
+      for (let x = startX + 1; x <= endX - 1; x++) placeBedrock(x, startY)
+      for (let x = startX; x <= endX; x++) placeBedrock(x, startY + 1)
+      for (let x = startX + 1; x <= endX - 1; x++) placeBedrock(x, startY + 2)
+    } else if (pattern === 3) {
+      // Pattern 3: Thickened Jagged Shelf (Crenellated double-tier)
+      const onLeft = rng() < 0.5
+      const shelfW = 8 + Math.floor(rng() * 3) // 8..10
+      if (onLeft) {
+        for (let x = 1; x <= shelfW; x++) {
+          placeBedrock(x, startY)
+          if (x <= shelfW - 1 && (x % 2 === 0 || rng() < 0.6)) {
+            placeBedrock(x, startY + 1)
+          }
+        }
+      } else {
+        const startX = (WIDTH - 1) - shelfW
+        for (let x = startX; x < WIDTH - 1; x++) {
+          placeBedrock(x, startY)
+          if (x >= startX + 1 && (x % 2 === 1 || rng() < 0.6)) {
+            placeBedrock(x, startY + 1)
+          }
+        }
+      }
+    } else if (pattern === 4) {
+      // Pattern 4: Double Baffle / Chicane (Staggered upper & lower spurs)
+      const upperLeft = rng() < 0.5
+      if (upperLeft) {
+        for (let x = 1; x <= 10; x++) placeBedrock(x, startY)
+        for (let x = 9; x <= 18; x++) placeBedrock(x, startY + 2)
+      } else {
+        for (let x = 9; x <= 18; x++) placeBedrock(x, startY)
+        for (let x = 1; x <= 10; x++) placeBedrock(x, startY + 2)
       }
     } else {
-      // Center shelf: covers cols 5..6 to 12..14, leaving at least 4 cols open on each side
-      const startX = 5 + Math.floor(rng() * 2)
-      const endX = 12 + Math.floor(rng() * 3)
-      for (let x = startX; x <= endX; x++) {
-        const idx = shelfY * WIDTH + x
-        grid[idx] = BLOCK_BEDROCK
-        hp[idx] = 255
+      // Pattern 5: Dual Spires / Twin Pillars (Freestanding vertical columns with central gate)
+      for (let dy = 0; dy < 3; dy++) {
+        placeBedrock(4, startY + dy)
+        placeBedrock(5, startY + dy)
+        placeBedrock(14, startY + dy)
+        placeBedrock(15, startY + dy)
       }
     }
-
-    // Advance 9 to 14 rows for next shelf
-    nextShelfY += 9 + Math.floor(rng() * 6)
   }
 
   return {

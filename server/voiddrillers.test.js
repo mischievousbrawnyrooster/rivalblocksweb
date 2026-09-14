@@ -307,6 +307,96 @@ test('procedural bedrock obstacle shelves generate throughout shaft with bypass 
   assert.equal(shelfCount >= 10, true, 'shaft should contain at least 10 obstacle shelves across depth')
 })
 
+test('standalone bedrock blocks generate by themselves in the strata', () => {
+  const m = make({ seed: 77 })
+  let standaloneCount = 0
+
+  for (let y = 12; y < VAULT_Y - 4; y++) {
+    for (let x = 2; x < WIDTH - 2; x++) {
+      const idx = y * WIDTH + x
+      if (m.grid[idx] === BLOCK_BEDROCK) {
+        const left = m.grid[y * WIDTH + (x - 1)]
+        const right = m.grid[y * WIDTH + (x + 1)]
+        const above = m.grid[(y - 1) * WIDTH + x]
+        const below = m.grid[(y + 1) * WIDTH + x]
+        // If isolated from horizontal and vertical bedrock neighbors
+        if (left !== BLOCK_BEDROCK && right !== BLOCK_BEDROCK && above !== BLOCK_BEDROCK && below !== BLOCK_BEDROCK) {
+          standaloneCount++
+          assert.equal(m.hp[idx], 255, 'standalone bedrock has maximum hardness')
+        }
+      }
+    }
+  }
+
+  assert.equal(standaloneCount >= 3, true, 'shaft should contain solitary bedrock blocks generating by themselves')
+})
+
+test('procedural bedrock formations vary in patterns and span multiple rows', () => {
+  const m = make({ seed: 123 })
+  let multiRowClusterFound = false
+  let freestandingMonolithFound = false
+
+  for (let y = 14; y < VAULT_Y - 8; y++) {
+    // Check if 3 consecutive rows all contain internal bedrock
+    let threeConsecutive = true
+    for (let dy = 0; dy < 3; dy++) {
+      let rowBedrock = 0
+      for (let x = 1; x < WIDTH - 1; x++) {
+        if (m.grid[(y + dy) * WIDTH + x] === BLOCK_BEDROCK) rowBedrock++
+      }
+      if (rowBedrock < 2) {
+        threeConsecutive = false
+        break
+      }
+    }
+    if (threeConsecutive) {
+      multiRowClusterFound = true
+    }
+
+    // Check for freestanding monolith (bedrock in middle with open left and right flanks)
+    let leftFlankOpen = true
+    let rightFlankOpen = true
+    let centerHasBedrock = false
+
+    for (let x = 1; x <= 3; x++) {
+      if (m.grid[y * WIDTH + x] === BLOCK_BEDROCK) leftFlankOpen = false
+    }
+    for (let x = WIDTH - 4; x < WIDTH - 1; x++) {
+      if (m.grid[y * WIDTH + x] === BLOCK_BEDROCK) rightFlankOpen = false
+    }
+    for (let x = 6; x <= 13; x++) {
+      if (m.grid[y * WIDTH + x] === BLOCK_BEDROCK) centerHasBedrock = true
+    }
+
+    if (leftFlankOpen && rightFlankOpen && centerHasBedrock) {
+      freestandingMonolithFound = true
+    }
+  }
+
+  assert.equal(multiRowClusterFound, true, 'bedrock obstacles should span multi-row 2D formations')
+  assert.equal(freestandingMonolithFound, true, 'bedrock obstacles should include freestanding mid-shaft monoliths')
+})
+
+test('every row maintains at least 4 contiguous open columns across diverse seeds', () => {
+  const seeds = [1, 7, 42, 99, 12345, 999999]
+  for (const seed of seeds) {
+    const m = make({ seed })
+    for (let y = 11; y < VAULT_Y - 1; y++) {
+      let maxContiguousOpen = 0
+      let curOpen = 0
+      for (let x = 1; x < WIDTH - 1; x++) {
+        if (m.grid[y * WIDTH + x] !== BLOCK_BEDROCK) {
+          curOpen++
+          if (curOpen > maxContiguousOpen) maxContiguousOpen = curOpen
+        } else {
+          curOpen = 0
+        }
+      }
+      assert.equal(maxContiguousOpen >= 4, true, `seed ${seed} row y=${y} must maintain at least 4 open columns`)
+    }
+  }
+})
+
 test('internal bedrock obstacle shelves cannot be drilled', () => {
   const m = make({ seed: 42 })
   const p = join(m, { id: 'p1', name: 'Driller' })
