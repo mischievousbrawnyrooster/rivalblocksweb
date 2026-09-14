@@ -50,8 +50,12 @@ export const OVERHEAT_LOCKOUT_MS = 1800 // ms
 export const SUPER_DRILL_DURATION_MS = 5000 // ms (extended to 5s)
 
 
-export const GAS_HAZARD_RADIUS = 2.0
-export const GAS_HAZARD_TTL_MS = 4000
+export const GAS_HAZARD_RADIUS = 2.4
+export const GAS_HAZARD_TTL_MS = 3000
+export const GAS_KNOCKBACK_FORCE = 8.0 // blocks/sec knockback impulse
+export const GAS_HEAT_SURGE = 0.50 // instant heat burst on detonation
+export const GAS_FUEL_BURN = 0.25 // jetpack fuel burned by blast
+export const GAS_CLOUD_HEAT_RATE = 0.45 // heat accumulation per sec while inside cloud
 
 export const BLOCK_CHARS = ['A', 'D', 'S', 'B', 'G', 'C', 'V']
 export const CHAR_TO_BLOCK = {
@@ -434,6 +438,78 @@ export function touchesVault(grid, p) {
   return false
 }
 
+// --- Gas Pocket Detonation ------------------------------------------------
+function detonateGasPocket(match, bx, by) {
+  const idx = by * WIDTH + bx
+  match.grid[idx] = BLOCK_AIR
+  match.hp[idx] = 0
+  match.deltas.push({ i: idx, t: BLOCK_AIR })
+
+  const hx = bx + 0.5
+  const hy = by + 0.5
+  match.hazards.push({
+    x: hx,
+    y: hy,
+    r: GAS_HAZARD_RADIUS,
+    ttl: GAS_HAZARD_TTL_MS,
+  })
+
+  // Radial explosive shockwave, knockback, heat surge, and fuel scorch
+  for (const p of match.players.values()) {
+    if (!p.alive) continue
+    const pcx = p.x + 0.5
+    const pcy = p.y + 0.5
+    const dx = pcx - hx
+    const dy = pcy - hy
+    const dist = Math.hypot(dx, dy)
+    if (dist < GAS_HAZARD_RADIUS) {
+      const normX = dist > 0.05 ? dx / dist : 0
+      const normY = dist > 0.05 ? dy / dist : -1.0
+      const falloff = 1 - dist / GAS_HAZARD_RADIUS
+      const force = GAS_KNOCKBACK_FORCE * Math.max(0.4, falloff)
+
+      p.vx += normX * force
+      p.vy += normY * force
+      p.grounded = false
+
+      p.heat = Math.min(1.0, p.heat + GAS_HEAT_SURGE * falloff)
+      if (p.heat >= 1.0) {
+        p.heat = 1.0
+        p.overheated = true
+        p.overheatTimer = OVERHEAT_LOCKOUT_MS
+      }
+
+      p.fuel = Math.max(0, p.fuel - GAS_FUEL_BURN * falloff)
+    }
+  }
+
+  // Terrain blowout: explode adjacent dirt, and chain-detonate adjacent gas
+  const toChain = []
+  for (let dy = -1; dy <= 1; dy++) {
+    for (let dx = -1; dx <= 1; dx++) {
+      if (dx === 0 && dy === 0) continue
+      const nx = bx + dx
+      const ny = by + dy
+      if (nx < 1 || nx >= WIDTH - 1 || ny < 3 || ny >= VAULT_Y) continue
+      const nIdx = ny * WIDTH + nx
+      const neighbor = match.grid[nIdx]
+      if (neighbor === BLOCK_DIRT) {
+        match.grid[nIdx] = BLOCK_AIR
+        match.hp[nIdx] = 0
+        match.deltas.push({ i: nIdx, t: BLOCK_AIR })
+      } else if (neighbor === BLOCK_GAS) {
+        match.grid[nIdx] = BLOCK_AIR
+        match.hp[nIdx] = 0
+        toChain.push({ x: nx, y: ny })
+      }
+    }
+  }
+
+  for (const c of toChain) {
+    detonateGasPocket(match, c.x, c.y)
+  }
+}
+
 // --- Drilling Raycast -----------------------------------------------------
 function executeDrillPulse(match, p) {
   const cx = p.x + 0.5
@@ -466,21 +542,18 @@ function executeDrillPulse(match, p) {
 
       if (match.hp[idx] === 0) {
         const oldType = block
-        match.grid[idx] = BLOCK_AIR
-        match.deltas.push({ i: idx, t: BLOCK_AIR })
-
         if (oldType === BLOCK_GAS) {
-          match.hazards.push({
-            x: bx + 0.5,
-            y: by + 0.5,
-            r: GAS_HAZARD_RADIUS,
-            ttl: GAS_HAZARD_TTL_MS
-          })
-        } else if (oldType === BLOCK_GEODE) {
-          p.heat = 0
-          p.overheated = false
-          p.overheatTimer = 0
-          p.superDrillTimer = SUPER_DRILL_DURATION_MS
+          detonateGasPocket(match, bx, by)
+        } else {
+          match.grid[idx] = BLOCK_AIR
+          match.deltas.push({ i: idx, t: BLOCK_AIR })
+
+          if (oldType === BLOCK_GEODE) {
+            p.heat = 0
+            p.overheated = false
+            p.overheatTimer = 0
+            p.superDrillTimer = SUPER_DRILL_DURATION_MS
+          }
         }
       } else {
         match.deltas.push({ i: idx, t: block, hp: match.hp[idx] })
@@ -523,6 +596,18 @@ export function tick(match, dtMs) {
       continue
     }
 
+    // Hazard cloud interaction: thermal induction and turbulence
+    let inHazard = false
+    for (const h of match.hazards) {
+      const pcx = p.x + 0.5
+      const pcy = p.y + 0.5
+      const dist = Math.hypot(pcx - h.x, pcy - h.y)
+      if (dist <= h.r) {
+        inHazard = true
+        p.fuel = Math.max(0, p.fuel - 0.15 * dtSec)
+      }
+    }
+
     // Super drill timer
     if (p.superDrillTimer > 0) {
       p.superDrillTimer = Math.max(0, p.superDrillTimer - dtMs)
@@ -536,6 +621,14 @@ export function tick(match, dtMs) {
         p.overheated = false
         p.heat = 0
         p.overheatTimer = 0
+      }
+    } else if (inHazard) {
+      // Inside toxic gas hazard: drill core heats up continuously and cannot dissipate heat
+      p.heat = Math.min(1.0, p.heat + GAS_CLOUD_HEAT_RATE * dtSec)
+      if (p.heat >= 1.0) {
+        p.heat = 1.0
+        p.overheated = true
+        p.overheatTimer = OVERHEAT_LOCKOUT_MS
       }
     } else if (p.input.drill) {
       if (p.superDrillTimer === 0) {

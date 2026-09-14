@@ -38,7 +38,13 @@ import {
   DIRT_HP,
   STONE_HP,
   GAS_HP,
-  GEODE_HP
+  GEODE_HP,
+  GAS_HAZARD_RADIUS,
+  GAS_HAZARD_TTL_MS,
+  GAS_KNOCKBACK_FORCE,
+  GAS_HEAT_SURGE,
+  GAS_FUEL_BURN,
+  GAS_CLOUD_HEAT_RATE
 } from './voiddrillers.js'
 
 test('shaft generation initializes correct dimensions and boundary bedrock', () => {
@@ -184,6 +190,61 @@ test('destroying gas pocket generates expanding hazard', () => {
 
   assert.equal(m.grid[gasIdx], BLOCK_AIR, 'gas block popped into air')
   assert.equal(m.hazards.length > 0, true, 'expanding gas hazard created')
+})
+
+test('gas detonation knocks player back, surges heat, scorches fuel, and blows out adjacent dirt', () => {
+  const m = make({ seed: 889 })
+  const p = join(m, { id: 'p1', name: 'Blaster' })
+  p.x = 5.0
+  p.y = 10.0
+  p.heat = 0.0
+  p.fuel = 1.0
+
+  const gasIdx = 11 * WIDTH + 5
+  m.grid[gasIdx] = BLOCK_GAS
+  m.hp[gasIdx] = GAS_HP
+
+  // Place adjacent dirt block
+  const adjacentDirtIdx = 11 * WIDTH + 6
+  m.grid[adjacentDirtIdx] = BLOCK_DIRT
+  m.hp[adjacentDirtIdx] = DIRT_HP
+
+  setInput(m, 'p1', { dx: 0, thrust: false, drill: true, aim: Math.PI / 2 })
+  // Drill until detonation
+  for (let i = 0; i < 15; i++) tick(m, TICK_MS)
+
+  // Blast assertions
+  assert.equal(m.grid[gasIdx], BLOCK_AIR, 'gas block detonated')
+  assert.equal(m.grid[adjacentDirtIdx], BLOCK_AIR, 'adjacent dirt blown out by explosive shockwave')
+  assert.equal(p.heat > 0, true, 'gas blast surged player heat')
+  assert.equal(p.fuel < 1.0, true, 'gas blast scorched player jetpack fuel')
+  assert.equal(p.vy !== 0 || p.vx !== 0 || !p.grounded, true, 'gas blast imparted knockback impulse')
+})
+
+test('standing in gas hazard cloud induces heat and trips overheat', () => {
+  const m = make({ seed: 890 })
+  const p = join(m, { id: 'p1', name: 'GasStander' })
+  p.x = 5.0
+  p.y = 10.0
+  p.heat = 0.0
+
+  // Spawn an active hazard right on the player
+  m.hazards.push({
+    x: 5.5,
+    y: 10.5,
+    r: GAS_HAZARD_RADIUS,
+    ttl: GAS_HAZARD_TTL_MS
+  })
+
+  // Do not drill, just stand inside the toxic aerosol cloud
+  setInput(m, 'p1', { dx: 0, thrust: false, drill: false, aim: 0 })
+  for (let i = 0; i < 60; i++) tick(m, TICK_MS) // ~1 second
+
+  assert.equal(p.heat > 0, true, 'standing in hazard cloud induced heat')
+
+  // Continue standing until overheat breaker trips
+  for (let i = 0; i < 150; i++) tick(m, TICK_MS)
+  assert.equal(p.overheated, true, 'lingering in gas cloud tripped overheat lockout')
 })
 
 test('collecting geode clears heat and activates super drill', () => {

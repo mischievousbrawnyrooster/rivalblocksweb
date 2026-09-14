@@ -107,6 +107,7 @@ export default function VoidDrillers() {
   const lastSendTimeRef = useRef(0)
   const interpRef = useRef(new Map())
   const voidYRef = useRef(null)
+  const shakeRef = useRef(0)
 
   // Spawn procedural spark, flame, and dust particles
   const addParticle = useCallback((p) => {
@@ -117,14 +118,32 @@ export default function VoidDrillers() {
 
   const spawnBreakParticles = useCallback(
     (worldX, worldY, blockType) => {
+      if (blockType === BLOCK_GAS) {
+        shakeRef.current = Math.max(shakeRef.current, 12.0)
+        const colors = ['#ff6b1a', '#f59e0b', '#fbbf24', '#ef4444', '#78350f', '#451a03']
+        for (let i = 0; i < 28; i++) {
+          const angle = Math.random() * Math.PI * 2
+          const spd = 60 + Math.random() * 110
+          addParticle({
+            x: worldX,
+            y: worldY,
+            vx: Math.cos(angle) * spd,
+            vy: Math.sin(angle) * spd - 30,
+            color: colors[Math.floor(Math.random() * colors.length)],
+            size: 2.5 + Math.random() * 3.5,
+            alpha: 1,
+            life: 0.45 + Math.random() * 0.35,
+            maxLife: 0.8,
+          })
+        }
+        return
+      }
+
       let color = '#5a4738'
       let count = 6
       if (blockType === BLOCK_STONE) {
         color = '#64748b'
         count = 7
-      } else if (blockType === BLOCK_GAS) {
-        color = '#f59e0b'
-        count = 10
       } else if (blockType === BLOCK_GEODE) {
         color = '#22d3ee'
         count = 12
@@ -389,9 +408,22 @@ export default function VoidDrillers() {
 
       const toScreenY = (wy) => (wy - cameraY) * BLOCK_PX + CANVAS_HEIGHT * 0.38
 
+      // Screen Shake
+      const shake = shakeRef.current
+      let shakeX = 0
+      let shakeY = 0
+      if (shake > 0.05) {
+        shakeX = (Math.random() - 0.5) * shake
+        shakeY = (Math.random() - 0.5) * shake
+        shakeRef.current = Math.max(0, shake - dt * 25)
+      }
+
       // Clear Canvas
       ctx.fillStyle = '#0a0c10'
       ctx.fillRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT)
+
+      ctx.save()
+      ctx.translate(shakeX, shakeY)
 
       // 1. Render Shaft Blocks with Viewport Culling
       if (map && map.length >= TOTAL_BLOCKS) {
@@ -530,23 +562,35 @@ export default function VoidDrillers() {
 
       // 3. Render Toxic Gas Hazards
       if (snap?.hazards) {
+        const now = performance.now()
         for (const h of snap.hazards) {
           const hx = h.x * BLOCK_PX
           const hy = toScreenY(h.y)
           const hr = h.r * BLOCK_PX
+          const pulse = Math.sin(now * 0.007 + h.x * 3) * 4
 
-          const grad = ctx.createRadialGradient(hx, hy, hr * 0.1, hx, hy, hr)
-          grad.addColorStop(0, 'rgba(245, 158, 11, 0.45)')
-          grad.addColorStop(0.7, 'rgba(217, 119, 6, 0.22)')
+          const grad = ctx.createRadialGradient(hx, hy, hr * 0.1, hx, hy, hr + pulse)
+          grad.addColorStop(0, 'rgba(245, 158, 11, 0.60)')
+          grad.addColorStop(0.45, 'rgba(217, 119, 6, 0.35)')
+          grad.addColorStop(0.8, 'rgba(180, 83, 9, 0.15)')
           grad.addColorStop(1, 'rgba(180, 83, 9, 0)')
 
           ctx.fillStyle = grad
           ctx.beginPath()
-          ctx.arc(hx, hy, hr, 0, Math.PI * 2)
+          ctx.arc(hx, hy, hr + pulse, 0, Math.PI * 2)
           ctx.fill()
 
-          ctx.fillStyle = 'rgba(251, 191, 36, 0.7)'
-          ctx.font = 'bold 18px monospace'
+          // Dashed caution perimeter
+          ctx.strokeStyle = 'rgba(251, 191, 36, 0.65)'
+          ctx.lineWidth = 1.5
+          ctx.setLineDash([6, 4])
+          ctx.beginPath()
+          ctx.arc(hx, hy, hr + pulse, 0, Math.PI * 2)
+          ctx.stroke()
+          ctx.setLineDash([])
+
+          ctx.fillStyle = 'rgba(251, 191, 36, 0.9)'
+          ctx.font = 'bold 20px monospace'
           ctx.textAlign = 'center'
           ctx.textBaseline = 'middle'
           ctx.fillText('⊗', hx, hy)
@@ -782,6 +826,8 @@ export default function VoidDrillers() {
         }
       }
 
+      ctx.restore()
+
       // 7. Right-Edge Shaft Minimap Telemetry Strip
       const stripX = SHAFT_WIDTH_PX + 8
       const stripY = 12
@@ -898,14 +944,29 @@ export default function VoidDrillers() {
       const heat = me ? me.heat : 0
       const isOverheated = Boolean(me?.overheated)
       const isSuperDrill = Boolean(me?.superDrill)
+      const isGasPoisoned = Boolean(
+        me &&
+        snap?.hazards?.some((h) => {
+          const myPos = interpRef.current.get(me.id) ?? me
+          return Math.hypot(myPos.x + 0.5 - h.x, myPos.y + 0.5 - h.y) <= h.r
+        })
+      )
 
-      ctx.fillStyle = isOverheated ? '#ef4444' : isSuperDrill ? '#22d3ee' : '#94a3b8'
+      ctx.fillStyle = isOverheated
+        ? '#ef4444'
+        : isGasPoisoned
+          ? '#f59e0b'
+          : isSuperDrill
+            ? '#22d3ee'
+            : '#94a3b8'
       ctx.font = 'bold 10px monospace'
       const heatTitle = isOverheated
         ? 'HEAT: OVERHEATED (LOCKOUT)'
-        : isSuperDrill
-          ? 'HEAT: SUPER CHARGED'
-          : `HEAT: ${(heat * 100).toFixed(0)}%`
+        : isGasPoisoned
+          ? 'HEAT: TOXIC GAS INDUCTION!'
+          : isSuperDrill
+            ? 'HEAT: SUPER CHARGED'
+            : `HEAT: ${(heat * 100).toFixed(0)}%`
       ctx.fillText(heatTitle, hudX + 10, hudY + 54)
 
       // Segmented Heat Bar (10 segments)
