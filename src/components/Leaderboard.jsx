@@ -52,6 +52,7 @@ export default function Leaderboard({ entries = [], limit = TOP_N, you = null, f
   // never says anything with colour alone.
   const mine = (name) => you !== null && name === you
   const hasTimes = rows.some((p) => typeof p.fastestTime === 'number')
+  const hasWpm = rows.some((p) => typeof p.peakWpm === 'number')
 
   if (!full) {
     return (
@@ -74,6 +75,11 @@ export default function Leaderboard({ entries = [], limit = TOP_N, you = null, f
               {p.wins}
               <span className="sr-only"> {p.wins === 1 ? 'match won' : 'matches won'}</span>
             </span>
+            {hasWpm && (
+              <span className="w-14 shrink-0 text-right font-mono text-xs text-muted tabular-nums">
+                {typeof p.peakWpm === 'number' ? `${p.peakWpm.toFixed(1)} WPM` : ''}
+              </span>
+            )}
             {hasTimes && (
               <span className="w-12 shrink-0 text-right font-mono text-xs text-muted tabular-nums">
                 {typeof p.fastestTime === 'number' ? formatClearTime(p.fastestTime) : ''}
@@ -102,6 +108,11 @@ export default function Leaderboard({ entries = [], limit = TOP_N, you = null, f
             <th scope="col" className="rule-label py-2 pr-3 text-right">
               Won
             </th>
+            {hasWpm && (
+              <th scope="col" className="rule-label py-2 pr-3 text-right">
+                Peak WPM
+              </th>
+            )}
             {hasTimes && (
               <th scope="col" className="rule-label py-2 pr-3 text-right">
                 Fastest
@@ -137,6 +148,11 @@ export default function Leaderboard({ entries = [], limit = TOP_N, you = null, f
                 {mine(p.name) && <span className="sr-only">, you</span>}
               </td>
               <td className="py-2 pr-3 text-right font-mono">{p.wins}</td>
+              {hasWpm && (
+                <td className="py-2 pr-3 text-right font-mono text-muted tabular-nums">
+                  {typeof p.peakWpm === 'number' ? p.peakWpm.toFixed(1) : ''}
+                </td>
+              )}
               {hasTimes && (
                 <td className="py-2 pr-3 text-right font-mono text-muted tabular-nums">
                   {typeof p.fastestTime === 'number' ? formatClearTime(p.fastestTime) : ''}
