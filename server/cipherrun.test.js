@@ -21,15 +21,56 @@ import {
   snapshot,
 } from './cipherrun.js'
 
-test('PROTOCOLS contains 18 curated in-fiction breach protocols across 3 tiers', () => {
-  assert.equal(PROTOCOLS.length, 18)
+test('PROTOCOLS contains 151 curated in-fiction breach protocols across 3 tiers plus easter egg', () => {
+  assert.equal(PROTOCOLS.length, 151)
+
+  const shortTier = PROTOCOLS.filter((p) => p.tier === 1 && p.id <= 50)
+  const medTier = PROTOCOLS.filter((p) => p.tier === 2)
+  const longTier = PROTOCOLS.filter((p) => p.tier === 3)
+  const easterEgg = PROTOCOLS.find((p) => p.id === 151)
+
+  assert.equal(shortTier.length, 50, 'should have 50 Tier 1 Short protocols')
+  assert.equal(medTier.length, 50, 'should have 50 Tier 2 Medium protocols')
+  assert.equal(longTier.length, 50, 'should have 50 Tier 3 Long protocols')
+  assert.ok(easterEgg, 'Protocol 151 easter egg must exist')
+  assert.equal(easterEgg.category, 'easter_egg')
+
+  // Verify IDs are sequential 1..151
+  for (let i = 0; i < PROTOCOLS.length; i++) {
+    assert.equal(PROTOCOLS[i].id, i + 1, `Protocol at index ${i} must have id ${i + 1}`)
+  }
+
+  // Word count bounds: Short (15-25 words)
+  for (const p of shortTier) {
+    const wordCount = p.text.trim().split(/\s+/).length
+    assert.ok(wordCount >= 15 && wordCount <= 25, `Protocol ${p.id} word count ${wordCount} must be 15-25`)
+  }
+
+  // Word count bounds: Medium (40-60 words)
+  for (const p of medTier) {
+    const wordCount = p.text.trim().split(/\s+/).length
+    assert.ok(wordCount >= 40 && wordCount <= 60, `Protocol ${p.id} word count ${wordCount} must be 40-60`)
+  }
+
+  // Word count bounds: Long (85-125 words)
+  for (const p of longTier) {
+    const wordCount = p.text.trim().split(/\s+/).length
+    assert.ok(wordCount >= 85 && wordCount <= 125, `Protocol ${p.id} word count ${wordCount} must be 85-125`)
+  }
+
+  // Easter Egg repetition check
+  const occurrences = (easterEgg.text.match(/I LOVE RIVALBLOCKS\./g) || []).length
+  assert.equal(occurrences, 20, 'Easter Egg must contain I LOVE RIVALBLOCKS. exactly 20 times')
+
+  // Zero em dashes or double dashes in titles or texts
   for (const p of PROTOCOLS) {
-    assert.ok(typeof p.id === 'number')
-    assert.ok(typeof p.title === 'string' && p.title.length > 0)
-    assert.ok([1, 2, 3].includes(p.tier))
-    assert.ok(typeof p.text === 'string' && p.text.length >= 50)
+    assert.ok(!p.title.includes('—'), `Protocol ${p.id} title must not contain em dash`)
+    assert.ok(!p.title.includes('--'), `Protocol ${p.id} title must not contain double dash`)
+    assert.ok(!p.text.includes('—'), `Protocol ${p.id} text must not contain em dash`)
+    assert.ok(!p.text.includes('--'), `Protocol ${p.id} text must not contain double dash`)
   }
 })
+
 
 test('typing math calculates WPM, Raw WPM, and Accuracy to Monkeytype standard', () => {
   // 50 correct characters in 15 seconds (0.25 min) = (50 / 5) / 0.25 = 40 WPM
@@ -146,18 +187,19 @@ test('processInput Backspace rewinds cursor and clears errors', () => {
 })
 
 test('processInput Spacebar jumps to next word when errors exist', () => {
-  const m = make({ protocolId: 1 }) // First word is "Access" followed by space
+  const m = make({ protocolId: 1 })
+  const text = m.protocol.text
   const p = join(m, { name: 'Alice' })
   m.phase = 'racing'
 
-  // Type 'A', then mistake 'z'
-  processInput(m, p.id, { key: 'A', cursor: 0 })
-  processInput(m, p.id, { key: 'z', cursor: 1 })
+  // Type first character correctly, then mistake '§'
+  processInput(m, p.id, { key: text[0], cursor: 0 })
+  processInput(m, p.id, { key: '§', cursor: 1 })
   assert.equal(p.cursor, 1)
 
   // Pressing Space jumps to the next word boundary (after the first space)
   processInput(m, p.id, { key: ' ', cursor: 1 })
-  const nextWordIndex = m.protocol.text.indexOf(' ') + 1
+  const nextWordIndex = text.indexOf(' ') + 1
   assert.equal(p.cursor, nextWordIndex)
 })
 
