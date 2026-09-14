@@ -761,3 +761,87 @@ test('snapshot exposes bot tags and admin properties', () => {
   assert.equal(snap.players[0].deaths, 0)
 })
 
+test('match does not end when all bots die while human player is still alive', () => {
+  const m = make({ seed: 888 })
+  m.botFill = BOT_FILL_TO
+  wantBots(m)
+  const human = join(m, { name: 'HumanSurvivor' })
+  ensureBots(m)
+
+  assert.equal(m.players.size, BOT_FILL_TO)
+  const bots = [...m.players.values()].filter((p) => p.bot)
+  assert.equal(bots.length, BOT_FILL_TO - 1)
+
+  // Kill all the bots
+  for (const b of bots) {
+    b.alive = false
+  }
+
+  tick(m, TICK_MS)
+
+  // Match must NOT be over, human is still alive and digging
+  assert.equal(human.alive, true)
+  assert.equal(m.phase, 'playing', 'match remains active while human survives')
+  assert.equal(m.winner, null)
+
+  // Human reaches the extraction vault
+  human.y = VAULT_Y - 0.5
+  tick(m, TICK_MS)
+
+  assert.equal(m.phase, 'over', 'human reaching vault claims victory')
+  assert.equal(m.winner, human.id)
+  assert.equal(m.winReason, 'vault')
+})
+
+test('bot paths around bedrock obstacle to find open downward column', () => {
+  const m = make({ seed: 404 })
+  m.botsOnly = true
+  m.botFill = 1
+  const bot = join(m, { name: 'PathfinderBot', bot: true })
+  bot.x = 5.0
+  bot.y = 1.0 // standing on row 2
+  const groundRow = 2
+
+  // Place bedrock directly beneath bot at row 2 col 5
+  m.grid[groundRow * WIDTH + 5] = BLOCK_BEDROCK
+  m.hp[groundRow * WIDTH + 5] = 255
+
+  // Col 4 is also bedrock
+  m.grid[groundRow * WIDTH + 4] = BLOCK_BEDROCK
+  m.hp[groundRow * WIDTH + 4] = 255
+
+  // Col 6 has dirt (open downward path)
+  m.grid[groundRow * WIDTH + 6] = BLOCK_DIRT
+  m.hp[groundRow * WIDTH + 6] = DIRT_HP
+
+  tick(m, BOT_REACT_MS)
+
+  // Bot must detect obstacle and steer towards col 6 (dx > 0)
+  assert.equal(bot.input.dx > 0, true, 'bot steers towards open downward column')
+})
+
+test('bot excavates dirt and descends through strata', () => {
+  const m = make({ seed: 909 })
+  m.botsOnly = true
+  m.botFill = 1
+  const bot = join(m, { name: 'DeepDigger', bot: true })
+  bot.x = 5.0
+  bot.y = 1.0
+  const initialY = bot.y
+
+  // Put dirt underfoot at row 2 and row 3
+  m.grid[2 * WIDTH + 5] = BLOCK_DIRT
+  m.hp[2 * WIDTH + 5] = DIRT_HP
+  m.grid[3 * WIDTH + 5] = BLOCK_DIRT
+  m.hp[3 * WIDTH + 5] = DIRT_HP
+
+  // Advance simulation for 500ms
+  for (let t = 0; t < 500; t += TICK_MS) {
+    tick(m, TICK_MS)
+  }
+
+  assert.equal(m.grid[2 * WIDTH + 5], BLOCK_AIR, 'row 2 dirt was excavated')
+  assert.equal(bot.y > initialY, true, 'bot descended downwards')
+})
+
+

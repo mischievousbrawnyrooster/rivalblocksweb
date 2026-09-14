@@ -400,11 +400,12 @@ export function join(match, playerInfo = {}) {
 }
 
 export function leave(match, playerId) {
-  const hadMultiple = match.players.size > 1
+  const hadMultipleHumans = [...match.players.values()].filter(p => !p.bot).length > 1
+  const hadBots = [...match.players.values()].some(p => p.bot)
   match.players.delete(playerId)
   if (match.phase === 'playing' && match.players.size > 0) {
     const alive = [...match.players.values()].filter(p => p.alive)
-    if (alive.length === 1 && hadMultiple) {
+    if (!hadBots && hadMultipleHumans && alive.length === 1) {
       match.phase = 'over'
       match.winner = alive[0].id
       match.winReason = 'survival'
@@ -449,24 +450,62 @@ export function ensureBots(state) {
   }
 }
 
+function findBestDownwardColumn(match, bx, groundRow) {
+  let bestCol = bx
+  let bestDist = Infinity
+
+  for (let dist = 1; dist < WIDTH - 1; dist++) {
+    for (const dir of [-1, 1]) {
+      const col = bx + dir * dist
+      if (col < 1 || col >= WIDTH - 1) continue
+
+      const b0 = match.grid[groundRow * WIDTH + col]
+      if (b0 !== BLOCK_BEDROCK && b0 !== BLOCK_GAS) {
+        const b1 = groundRow + 1 < DEPTH ? match.grid[(groundRow + 1) * WIDTH + col] : BLOCK_VAULT
+        const deepClear = b1 !== BLOCK_BEDROCK && b1 !== BLOCK_GAS
+        const score = dist + (deepClear ? 0 : 4)
+        if (score < bestDist) {
+          bestDist = score
+          bestCol = col
+        }
+      }
+    }
+    if (bestDist < Infinity && dist >= bestDist + 2) break
+  }
+
+  return bestCol
+}
+
 export function driveBots(match, rng = Math.random) {
   if (match.phase !== 'playing') return
 
   for (const p of match.players.values()) {
     if (!p.bot || !p.alive) continue
     if (match.elapsed < (p.thinkAt || 0)) continue
-    p.thinkAt = match.elapsed + BOT_REACT_MS + Math.floor(rng() * 40)
+    p.thinkAt = match.elapsed + BOT_REACT_MS + Math.floor(rng() * 30)
 
     const cx = p.x + 0.5
+    const cy = p.y + 0.5
     const footY = p.y + 1.0
+    const torsoRow = Math.floor(cy)
+    const groundRow = Math.floor(footY + 0.05)
     const bx = Math.max(1, Math.min(WIDTH - 2, Math.floor(cx)))
-    const by = Math.floor(footY)
-    const underY = by + 1
+
+    // Anti-stuck tracker
+    if (p.lastX !== undefined && p.lastY !== undefined) {
+      if (Math.hypot(p.x - p.lastX, p.y - p.lastY) < 0.08) {
+        p.stuckTicks = (p.stuckTicks || 0) + 1
+      } else {
+        p.stuckTicks = 0
+      }
+    }
+    p.lastX = p.x
+    p.lastY = p.y
 
     // 1. Gas hazard evasion: steer away and thruster hop if inside or close to gas cloud
     let inGasHazard = false
     for (const h of match.hazards) {
-      if (Math.hypot(cx - h.x, p.y + 0.5 - h.y) < h.r + 1.2) {
+      if (Math.hypot(cx - h.x, cy - h.y) < h.r + 1.2) {
         inGasHazard = true
         p.input.dx = cx < h.x ? -1 : 1
         p.input.thrust = p.fuel > 0.25
@@ -477,7 +516,7 @@ export function driveBots(match, rng = Math.random) {
     if (inGasHazard) continue
 
     // 2. Vault approach: touch down to win
-    if (underY >= VAULT_Y) {
+    if (groundRow >= VAULT_Y) {
       p.input.aim = Math.PI / 2
       p.input.drill = false
       p.input.thrust = false
@@ -485,70 +524,81 @@ export function driveBots(match, rng = Math.random) {
       continue
     }
 
-    // 3. Subterranean navigation
-    const underBlock = match.grid[underY * WIDTH + bx]
+    // 3. Unstuck impulse: if stuck against a ledge, jump with thruster and angle drill
+    if ((p.stuckTicks || 0) >= 3) {
+      p.input.thrust = p.fuel > 0.15
+      const unstuckDir = p.slot % 2 === 0 ? -1 : 1
+      p.input.dx = unstuckDir
+      p.input.aim = unstuckDir > 0 ? 0.25 : Math.PI - 0.25
+      p.input.drill = !p.overheated && p.heat < 0.82
+      continue
+    }
 
-    if (underBlock === BLOCK_AIR) {
-      // Free fall downward
-      p.input.aim = Math.PI / 2
-      p.input.drill = false
-      p.input.dx = 0
-      p.input.thrust = p.vy > 11 && p.fuel > 0.3
-    } else if (
-      underBlock === BLOCK_DIRT ||
-      underBlock === BLOCK_STONE ||
-      underBlock === BLOCK_GEODE
+    const groundBlock = match.grid[groundRow * WIDTH + bx]
+
+    // 4. Downward excavation / descent
+    if (
+      groundBlock === BLOCK_DIRT ||
+      groundBlock === BLOCK_STONE ||
+      groundBlock === BLOCK_GEODE
     ) {
       // Destructible block underfoot: drill downward, manage heat
       p.input.aim = Math.PI / 2
       p.input.drill = !p.overheated && p.heat < 0.82
-      p.input.dx = 0
       p.input.thrust = false
-    } else if (underBlock === BLOCK_BEDROCK || underBlock === BLOCK_GAS) {
-      // Impassable bedrock or hazardous gas underfoot: steer around laterally
-      let leftDist = Infinity
-      for (let x = bx - 1; x >= 1; x--) {
-        const b = match.grid[underY * WIDTH + x]
-        if (b !== BLOCK_BEDROCK && b !== BLOCK_GAS) {
-          leftDist = bx - x
-          break
-        }
-      }
-      let rightDist = Infinity
-      for (let x = bx + 1; x <= WIDTH - 2; x++) {
-        const b = match.grid[underY * WIDTH + x]
-        if (b !== BLOCK_BEDROCK && b !== BLOCK_GAS) {
-          rightDist = x - bx
-          break
-        }
-      }
+      // Center driller on block column
+      const colCenter = bx + 0.5
+      const offset = colCenter - cx
+      p.input.dx = Math.abs(offset) > 0.18 ? Math.sign(offset) * 0.5 : 0
+    } else if (groundBlock === BLOCK_AIR) {
+      // Free fall downward
+      p.input.aim = Math.PI / 2
+      p.input.dx = 0
+      p.input.thrust = p.vy > 10 && p.fuel > 0.35
 
-      const steerDir =
-        leftDist < rightDist
-          ? -1
-          : rightDist < leftDist
-            ? 1
-            : p.slot % 2 === 0
-              ? -1
-              : 1
+      // Start drilling early if approaching solid block
+      const nextDown = groundRow + 1 < DEPTH ? match.grid[(groundRow + 1) * WIDTH + bx] : BLOCK_AIR
+      if (
+        nextDown === BLOCK_DIRT ||
+        nextDown === BLOCK_STONE ||
+        nextDown === BLOCK_GEODE
+      ) {
+        p.input.drill = !p.overheated && p.heat < 0.82
+      } else {
+        p.input.drill = false
+      }
+    } else if (groundBlock === BLOCK_BEDROCK || groundBlock === BLOCK_GAS) {
+      // Impassable bedrock or gas hazard underfoot: path horizontally to find open downward column
+      const targetCol = findBestDownwardColumn(match, bx, groundRow)
+      const steerDir = targetCol < bx ? -1 : (targetCol > bx ? 1 : (p.slot % 2 === 0 ? -1 : 1))
 
       p.input.dx = steerDir
 
       const sideCol = Math.max(0, Math.min(WIDTH - 1, bx + steerDir))
-      const sideBlock = match.grid[by * WIDTH + sideCol]
+      const torsoObstacle = match.grid[torsoRow * WIDTH + sideCol]
+      const footObstacle = match.grid[groundRow * WIDTH + sideCol]
 
       if (
-        sideBlock === BLOCK_DIRT ||
-        sideBlock === BLOCK_STONE ||
-        sideBlock === BLOCK_GEODE
+        torsoObstacle === BLOCK_DIRT ||
+        torsoObstacle === BLOCK_STONE ||
+        torsoObstacle === BLOCK_GEODE
       ) {
-        // Clear side obstruction
-        p.input.aim = steerDir > 0 ? 0.3 : Math.PI - 0.3
+        // Clear horizontal obstacle in path
+        p.input.aim = steerDir > 0 ? 0.15 : Math.PI - 0.15
         p.input.drill = !p.overheated && p.heat < 0.82
         p.input.thrust = false
-      } else if (sideBlock === BLOCK_BEDROCK || sideBlock === BLOCK_GAS) {
-        // Wall blocked by bedrock/gas: jump with jetpack
-        p.input.thrust = p.fuel > 0.2
+      } else if (
+        footObstacle === BLOCK_DIRT ||
+        footObstacle === BLOCK_STONE ||
+        footObstacle === BLOCK_GEODE
+      ) {
+        // Clear diagonal obstacle in path
+        p.input.aim = steerDir > 0 ? Math.PI / 4 : 3 * Math.PI / 4
+        p.input.drill = !p.overheated && p.heat < 0.82
+        p.input.thrust = false
+      } else if (torsoObstacle === BLOCK_BEDROCK || torsoObstacle === BLOCK_GAS) {
+        // Bedrock wall in front: jetpack hop over it
+        p.input.thrust = p.fuel > 0.15
         p.input.drill = false
       } else {
         p.input.drill = false
@@ -934,10 +984,11 @@ export function tick(match, dtMs = TICK_MS, rng = Math.random) {
 
     if (match.phase === 'playing') {
       const alive = [...match.players.values()].filter(p => p.alive)
+      const hasBots = [...match.players.values()].some(p => p.bot)
       if (alive.length === 0) {
         match.phase = 'over'
         match.winner = null
-      } else if (match.players.size > 1 && alive.length === 1) {
+      } else if (!hasBots && match.players.size > 1 && alive.length === 1) {
         match.phase = 'over'
         match.winner = alive[0].id
         match.winReason = 'survival'
