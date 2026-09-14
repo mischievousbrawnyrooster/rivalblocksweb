@@ -409,3 +409,32 @@ test('formatClearTime returns a dash for null or undefined', () => {
   assert.equal(formatClearTime(undefined), '—')
 })
 
+test('cipherrun board is registered in BOARDS', () => {
+  const spec = boardFor('cipherrun')
+  assert.ok(spec)
+  assert.equal(spec.file, 'board-cipherrun.json')
+  assert.equal(spec.game, 'cipherrun')
+})
+
+test('merge records peakWpm and computes running avgAcc for typing games', () => {
+  let b = emptyBoard('cipherrun')
+  b = merge(b, [person('ada', { won: true, wpm: 75.5, acc: 98.0 })], at)
+  const ada = b.players.find((p) => p.name === 'ada')
+  assert.equal(ada.peakWpm, 75.5)
+  assert.equal(ada.avgAcc, 98.0)
+
+  // Second match with lower WPM keeps peak WPM, updates avgAcc
+  b = merge(b, [person('ada', { won: false, wpm: 70.0, acc: 94.0 })], at + 1000)
+  const ada2 = b.players.find((p) => p.name === 'ada')
+  assert.equal(ada2.peakWpm, 75.5)
+  assert.equal(ada2.avgAcc, 96.0)
+})
+
+test('equal wins rank by peak WPM (higher is better)', () => {
+  const a = { name: 'ada', wins: 2, peakWpm: 85, kills: 0, deaths: 0 }
+  const b = { name: 'bob', wins: 2, peakWpm: 92, kills: 0, deaths: 0 }
+  const ranked = rank([a, b])
+  assert.equal(ranked[0].name, 'bob')
+  assert.equal(ranked[1].name, 'ada')
+})
+

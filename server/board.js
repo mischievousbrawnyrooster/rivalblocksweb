@@ -36,6 +36,12 @@ export const BOARDS = [
     mode: null,
     title: 'Void Drillers',
   },
+  {
+    file: 'board-cipherrun.json',
+    game: 'cipherrun',
+    mode: null,
+    title: 'Cipher Run',
+  },
 ]
 
 // Enough names that nobody who plays regularly falls off, few enough that a
@@ -53,7 +59,9 @@ const isRow = (r) =>
   !!r &&
   typeof r.name === 'string' &&
   ['wins', 'kills', 'deaths', 'matches', 'last'].every((k) => Number.isFinite(r[k])) &&
-  (r.fastestTime === undefined || r.fastestTime === null || Number.isFinite(r.fastestTime))
+  (r.fastestTime === undefined || r.fastestTime === null || Number.isFinite(r.fastestTime)) &&
+  (r.peakWpm === undefined || r.peakWpm === null || Number.isFinite(r.peakWpm)) &&
+  (r.avgAcc === undefined || r.avgAcc === null || Number.isFinite(r.avgAcc))
 
 /**
  * Whether something read off disk is a board.
@@ -82,10 +90,15 @@ function rowFor(players, name) {
   return row
 }
 
-/** Best first: wins, then fastest clear time, then kills, then fewest deaths, then name. */
+/** Best first: wins, then peak WPM, then fastest clear time, then kills, then fewest deaths, then name. */
 export const rank = (players) =>
   [...players].sort((a, b) => {
     if (b.wins !== a.wins) return b.wins - a.wins
+    // Highest peak WPM: higher is better, having one beats not having one.
+    const aWpm = typeof a.peakWpm === 'number'
+    const bWpm = typeof b.peakWpm === 'number'
+    if (aWpm && bWpm && a.peakWpm !== b.peakWpm) return b.peakWpm - a.peakWpm
+    if (aWpm !== bWpm) return aWpm ? -1 : 1
     // Fastest clear time: lower is better, having one beats not having one.
     const aHas = typeof a.fastestTime === 'number'
     const bHas = typeof b.fastestTime === 'number'
@@ -146,6 +159,16 @@ export function merge(board, results, at) {
       row.fastestTime =
         typeof row.fastestTime === 'number' ? Math.min(row.fastestTime, r.time) : r.time
     }
+
+    // Peak WPM and Average Accuracy for typing games
+    if (typeof r.wpm === 'number' && Number.isFinite(r.wpm) && r.wpm > 0) {
+      row.peakWpm = typeof row.peakWpm === 'number' ? Math.max(row.peakWpm, r.wpm) : r.wpm
+    }
+    if (typeof r.acc === 'number' && Number.isFinite(r.acc) && r.acc >= 0) {
+      row.avgAcc = typeof row.avgAcc === 'number'
+        ? Math.round(((row.avgAcc * (row.matches - 1) + r.acc) / row.matches) * 10) / 10
+        : r.acc
+    }
   }
 
   // Ranked before the cap, so what falls off the end is the bottom of the
@@ -169,6 +192,14 @@ export function combine(boards) {
       if (typeof p.fastestTime === 'number') {
         row.fastestTime =
           typeof row.fastestTime === 'number' ? Math.min(row.fastestTime, p.fastestTime) : p.fastestTime
+      }
+      if (typeof p.peakWpm === 'number') {
+        row.peakWpm =
+          typeof row.peakWpm === 'number' ? Math.max(row.peakWpm, p.peakWpm) : p.peakWpm
+      }
+      if (typeof p.avgAcc === 'number') {
+        row.avgAcc =
+          typeof row.avgAcc === 'number' ? Math.max(row.avgAcc, p.avgAcc) : p.avgAcc
       }
     }
   }
