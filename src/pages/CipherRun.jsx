@@ -112,6 +112,7 @@ export default function CipherRun() {
   // Local typing buffer
   const [cursor, setCursor] = useState(0)
   const [charStates, setCharStates] = useState([]) // Array of 'correct' | 'error' | 'pending'
+  const [typedChars, setTypedChars] = useState({}) // { [index]: string } for mistyped character rendering
   const [dashTimer, setDashTimer] = useState(0)
   const [glitchActive, setGlitchActive] = useState(false)
 
@@ -153,6 +154,7 @@ export default function CipherRun() {
   useEffect(() => {
     if (protocol?.text) {
       setCharStates(new Array(protocol.text.length).fill('pending'))
+      setTypedChars({})
       setCursor(0)
     }
   }, [protocol])
@@ -198,6 +200,7 @@ export default function CipherRun() {
             protocolRef.current = msg.protocol
             setProtocol(msg.protocol)
             setCharStates(new Array(msg.protocol.text.length).fill('pending'))
+            setTypedChars({})
             setCursor(0)
           }
           setHasJoined(true)
@@ -216,6 +219,7 @@ export default function CipherRun() {
             setProtocol(fullProto)
             if (fullProto.text) {
               setCharStates(new Array(fullProto.text.length).fill('pending'))
+              setTypedChars({})
               setCursor(0)
             }
           }
@@ -287,33 +291,45 @@ export default function CipherRun() {
             next[nextCursor] = 'pending'
             return next
           })
+          setTypedChars((prev) => {
+            const next = { ...prev }
+            delete next[nextCursor]
+            return next
+          })
           ws.send(JSON.stringify({ t: 'input', key: 'Backspace', cursor: nextCursor }))
         }
         return
       }
 
       // Spacebar Word Jump when skipping mistyped words
-      if (key === ' ' && charStates[cursor] === 'error') {
-        e.preventDefault()
-        const nextSpace = text.indexOf(' ', cursor)
-        if (nextSpace !== -1) {
-          const target = nextSpace + 1
-          setCursor(target)
-          setCharStates((prev) => {
-            const next = [...prev]
-            for (let i = cursor; i < target; i++) {
-              if (next[i] === 'pending') next[i] = 'error'
-            }
-            return next
-          })
-          ws.send(JSON.stringify({ t: 'input', key: ' ', cursor: target }))
-          return
+      if (key === ' ') {
+        const wordStart = Math.max(0, text.lastIndexOf(' ', cursor - 1) + 1)
+        const hasWordErrors = charStates.slice(wordStart, cursor).some((s) => s === 'error')
+
+        if (hasWordErrors) {
+          e.preventDefault()
+          const nextSpace = text.indexOf(' ', cursor)
+          if (nextSpace !== -1) {
+            const target = nextSpace + 1
+            setCursor(target)
+            setCharStates((prev) => {
+              const next = [...prev]
+              for (let i = cursor; i < target; i++) {
+                if (next[i] === 'pending') next[i] = 'error'
+              }
+              return next
+            })
+            ws.send(JSON.stringify({ t: 'input', key: ' ', cursor: target }))
+            return
+          }
         }
       }
 
       // Printable single characters
       if (key.length === 1 && !e.ctrlKey && !e.altKey && !e.metaKey) {
         e.preventDefault()
+        if (cursor >= text.length) return
+
         const expected = text[cursor]
         const isMatch = key === expected
 
@@ -323,10 +339,15 @@ export default function CipherRun() {
           return next
         })
 
-        if (isMatch) {
-          const nextCursor = cursor + 1
-          setCursor(nextCursor)
+        setTypedChars((prev) => ({
+          ...prev,
+          [cursor]: key,
+        }))
 
+        const nextCursor = cursor + 1
+        setCursor(nextCursor)
+
+        if (isMatch) {
           // Trigger dash boost on word boundaries
           if (expected === ' ' || nextCursor >= text.length) {
             setDashTimer(Date.now() + 320)
@@ -344,7 +365,7 @@ export default function CipherRun() {
         ws.send(JSON.stringify({ t: 'input', key, cursor }))
       }
     },
-    [protocol, cursor, snap?.phase, glitchActive, charStates, handleVote],
+    [protocol, cursor, snap?.phase, glitchActive, charStates, typedChars, handleVote],
   )
 
   // Attach global keyboard listener
@@ -858,7 +879,7 @@ export default function CipherRun() {
           {/* Monospace Character Buffer */}
           <div
             onClick={() => inputRef.current?.focus()}
-            className={`min-h-[160px] p-6 font-mono text-lg leading-relaxed tracking-wide select-none cursor-text ${
+            className={`min-h-[160px] p-6 font-mono text-lg leading-relaxed tracking-wide select-none cursor-text whitespace-pre-wrap ${
               snap?.easterEgg
                 ? 'bg-[#150a04] border-t border-flare/50 shadow-inner'
                 : 'bg-[#090d16]'
@@ -867,6 +888,7 @@ export default function CipherRun() {
             {protocol?.text?.split('').map((ch, idx) => {
               const state = charStates[idx]
               const isCursor = idx === cursor
+              const displayChar = typedChars[idx] !== undefined ? typedChars[idx] : ch
 
               if (state === 'correct') {
                 return (
@@ -877,8 +899,11 @@ export default function CipherRun() {
               }
               if (state === 'error') {
                 return (
-                  <span key={idx} className="bg-rose-950/80 text-rose-300 border-b-2 border-rose-500">
-                    {ch}
+                  <span
+                    key={idx}
+                    className="bg-rose-950/80 text-rose-300 border-b-2 border-rose-500 font-bold"
+                  >
+                    {displayChar === ' ' ? '␣' : displayChar}
                   </span>
                 )
               }

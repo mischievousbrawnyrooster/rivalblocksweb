@@ -1,4 +1,4 @@
-﻿// Pure authoritative rules engine for Cipher Run. Zero external imports, zero Node APIs,
+// Pure authoritative rules engine for Cipher Run. Zero external imports, zero Node APIs,
 // zero sockets, zero timers, zero I/O. Everything here is exercised by cipherrun.test.js.
 
 export const TICK_MS = 33 // ~30 Hz tick loop
@@ -127,6 +127,20 @@ export function getVoteTallies(match) {
 }
 
 export function resolveVote(match, rng = Math.random) {
+  for (const p of match.players.values()) {
+    p.cursor = 0
+    p.correctKeystrokes = 0
+    p.totalKeystrokes = 0
+    p.consecutiveErrors = 0
+    p.totalErrors = 0
+    p.lockoutUntil = 0
+    p.finished = false
+    p.finishTime = null
+    p.finalWpm = 0
+    p.finalAcc = 100
+    if (p.errors) p.errors.clear()
+  }
+
   // Easter Egg roll: 2% probability
   if (rng() < 0.02) {
     const egg = PROTOCOLS.find((p) => p.id === 151)
@@ -189,6 +203,7 @@ export function join(match, playerInfo = {}) {
     totalKeystrokes: 0,
     consecutiveErrors: 0,
     totalErrors: 0,
+    errors: new Set(),
     lockoutUntil: 0,
     finished: false,
     finishTime: null,
@@ -219,17 +234,27 @@ export function processInput(match, playerId, input = {}) {
   const text = match.protocol.text
   const key = String(input.key ?? '')
 
-  // 2. Backspace: Rewind cursor by 1
+  if (!p.errors) {
+    p.errors = new Set()
+  }
+
+  // 2. Backspace: Rewind cursor by 1 and clear error or correct state
   if (key === 'Backspace') {
     if (p.cursor > 0) {
-      p.cursor -= 1
-      p.consecutiveErrors = Math.max(0, p.consecutiveErrors - 1)
+      const targetPos = p.cursor - 1
+      p.cursor = targetPos
+      if (p.errors.has(targetPos)) {
+        p.errors.delete(targetPos)
+        p.consecutiveErrors = Math.max(0, p.consecutiveErrors - 1)
+      } else {
+        p.correctKeystrokes = Math.max(0, p.correctKeystrokes - 1)
+      }
     }
     return true
   }
 
   // 3. Spacebar Word Jump: If errors present within current word, skip to next word
-  if (key === ' ' && p.consecutiveErrors > 0) {
+  if (key === ' ' && (p.consecutiveErrors > 0 || p.errors.size > 0)) {
     const nextSpace = text.indexOf(' ', p.cursor)
     if (nextSpace !== -1) {
       const skippedCount = nextSpace + 1 - p.cursor
@@ -237,9 +262,15 @@ export function processInput(match, playerId, input = {}) {
       p.totalKeystrokes += skippedCount
       p.cursor = nextSpace + 1
       p.consecutiveErrors = 0
+      for (let i = 0; i <= nextSpace; i++) {
+        p.errors.delete(i)
+      }
       return true
     }
   }
+
+  // Do not accept keystrokes beyond text boundary
+  if (p.cursor >= text.length) return false
 
   // 4. Character Matching
   const expected = text[p.cursor]
@@ -248,10 +279,11 @@ export function processInput(match, playerId, input = {}) {
   if (key === expected) {
     p.correctKeystrokes += 1
     p.consecutiveErrors = 0
+    p.errors.delete(p.cursor)
     p.cursor += 1
 
-    // Check breach completion
-    if (p.cursor >= text.length) {
+    // Check breach completion (requires zero uncorrected errors)
+    if (p.cursor >= text.length && p.errors.size === 0) {
       p.finished = true
       p.finishTime = match.elapsed
       p.finalWpm = calculateWpm(p.correctKeystrokes, match.elapsed)
@@ -265,9 +297,11 @@ export function processInput(match, playerId, input = {}) {
     return true
   }
 
-  // Typo occurred
+  // Typo occurred: record error at current position and advance cursor
   p.totalErrors += 1
   p.consecutiveErrors += 1
+  p.errors.add(p.cursor)
+  p.cursor += 1
 
   // 5. Trigger Glitch Breaker on 3 consecutive errors
   if (p.consecutiveErrors >= CONSECUTIVE_ERROR_LIMIT) {

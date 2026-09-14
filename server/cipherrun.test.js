@@ -1,4 +1,4 @@
-﻿import test from 'node:test'
+import test from 'node:test'
 import assert from 'node:assert/strict'
 import {
   PROTOCOLS,
@@ -148,35 +148,48 @@ test('processInput matches characters and advances cursor', () => {
   assert.equal(p.consecutiveErrors, 0)
 })
 
-test('processInput handles typos, increments error counts, and triggers glitch lockout', () => {
+test('processInput handles typos, advances cursor, increments error counts, and triggers glitch lockout', () => {
   const m = make({ protocolId: 1 })
   const p = join(m, { name: 'Alice' })
   m.phase = 'racing'
 
-  // Typo 1
+  // Typo 1 advances cursor to 1 and records error
   processInput(m, p.id, { key: '§', cursor: 0 })
-  assert.equal(p.cursor, 0, 'cursor must not advance on typo without spacebar')
+  assert.equal(p.cursor, 1, 'cursor advances on typo')
   assert.equal(p.consecutiveErrors, 1)
   assert.equal(p.totalErrors, 1)
   assert.equal(p.lockoutUntil, 0)
 
-  // Typo 2
-  processInput(m, p.id, { key: '§', cursor: 0 })
+  // Typo 2 advances cursor to 2
+  processInput(m, p.id, { key: '§', cursor: 1 })
+  assert.equal(p.cursor, 2)
   assert.equal(p.consecutiveErrors, 2)
   assert.equal(p.lockoutUntil, 0)
 
-  // Typo 3: triggers Glitch Breaker Lockout
-  processInput(m, p.id, { key: '§', cursor: 0 })
+  // Typo 3 advances cursor to 3 and triggers Glitch Breaker Lockout
+  processInput(m, p.id, { key: '§', cursor: 2 })
+  assert.equal(p.cursor, 3)
   assert.equal(p.consecutiveErrors, CONSECUTIVE_ERROR_LIMIT)
   assert.ok(p.lockoutUntil > m.now)
 
   // Keystrokes rejected during lockout
-  const rejected = processInput(m, p.id, { key: m.protocol.text[0], cursor: 0 })
+  const rejected = processInput(m, p.id, { key: m.protocol.text[3], cursor: 3 })
   assert.equal(rejected, false)
-  assert.equal(p.cursor, 0)
+  assert.equal(p.cursor, 3)
 
   // Advance time past lockout
   m.now = p.lockoutUntil + 1
+
+  // Player must backspace to delete typos
+  processInput(m, p.id, { key: 'Backspace' })
+  assert.equal(p.cursor, 2)
+  processInput(m, p.id, { key: 'Backspace' })
+  assert.equal(p.cursor, 1)
+  processInput(m, p.id, { key: 'Backspace' })
+  assert.equal(p.cursor, 0)
+  assert.equal(p.consecutiveErrors, 0)
+
+  // Now types correct character
   const accepted = processInput(m, p.id, { key: m.protocol.text[0], cursor: 0 })
   assert.equal(accepted, true)
   assert.equal(p.cursor, 1)
@@ -204,10 +217,10 @@ test('processInput Spacebar jumps to next word when errors exist', () => {
   // Type first character correctly, then mistake '§'
   processInput(m, p.id, { key: text[0], cursor: 0 })
   processInput(m, p.id, { key: '§', cursor: 1 })
-  assert.equal(p.cursor, 1)
+  assert.equal(p.cursor, 2)
 
   // Pressing Space jumps to the next word boundary (after the first space)
-  processInput(m, p.id, { key: ' ', cursor: 1 })
+  processInput(m, p.id, { key: ' ', cursor: 2 })
   const nextWordIndex = text.indexOf(' ') + 1
   assert.equal(p.cursor, nextWordIndex)
 })
@@ -228,6 +241,32 @@ test('reaching the end of the text completes breach and declares winner', () => 
   assert.equal(p.finishTime, 2000)
   assert.equal(m.winner, p.id)
   assert.equal(m.phase, 'over')
+})
+
+test('cannot finish race with unresolved typos until backspaced and corrected', () => {
+  const m = make({ protocolId: 1 })
+  m.protocol = { id: 99, title: 'Test', tier: 1, text: 'Go' }
+  const p = join(m, { name: 'Alice' })
+  m.phase = 'racing'
+
+  // Type 'G' correctly
+  processInput(m, p.id, { key: 'G' })
+  assert.equal(p.cursor, 1)
+
+  // Type wrong character 'x' instead of 'o'
+  processInput(m, p.id, { key: 'x' })
+  assert.equal(p.cursor, 2)
+  assert.equal(p.finished, false, 'must not finish with unresolved typo')
+
+  // Backspace the wrong character
+  processInput(m, p.id, { key: 'Backspace' })
+  assert.equal(p.cursor, 1)
+  assert.equal(p.finished, false)
+
+  // Type correct character 'o'
+  processInput(m, p.id, { key: 'o' })
+  assert.equal(p.cursor, 2)
+  assert.equal(p.finished, true, 'finishes once typo is corrected')
 })
 
 test('castVote records valid votes and rejects invalid tiers or unknown players', () => {
