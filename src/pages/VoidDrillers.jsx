@@ -8,6 +8,7 @@ import { useFavicon } from '../lib/useFavicon.js'
 // Shaft and grid dimensions matching server/voiddrillers.js
 const WIDTH = 20
 const DEPTH = 260
+const TOTAL_BLOCKS = WIDTH * DEPTH
 const BLOCK_PX = 28
 const SHAFT_WIDTH_PX = WIDTH * BLOCK_PX // 560
 const MINIMAP_WIDTH_PX = 80
@@ -194,15 +195,17 @@ export default function VoidDrillers() {
       const fallbackUrl = 'ws://127.0.0.1:8086'
 
       function openSocket(url, isFallback = false) {
-        const ws = new WebSocket(url)
+        const ws = new WebSocket(url, 'voiddrillers.v1')
         wsRef.current = ws
 
         ws.onopen = () => {
+          if (wsRef.current !== ws) return
           setStatus('live')
           ws.send(JSON.stringify({ t: 'join', name: playerName || 'Driller' }))
         }
 
         ws.onmessage = (e) => {
+          if (wsRef.current !== ws) return
           let msg
           try {
             msg = JSON.parse(e.data)
@@ -246,12 +249,13 @@ export default function VoidDrillers() {
         }
 
         ws.onclose = () => {
-          if (!isFallback && !failedPrimary && ws.readyState !== WebSocket.OPEN) {
+          if (wsRef.current !== ws) return
+          if (!isFallback && !failedPrimary) {
             failedPrimary = true
             openSocket(fallbackUrl, true)
-          } else {
-            setStatus((s) => (s === 'full' ? s : 'closed'))
+            return
           }
+          setStatus((s) => (s === 'full' ? s : 'closed'))
         }
       }
 
@@ -289,17 +293,25 @@ export default function VoidDrillers() {
       }
     }
 
+    const onBlur = () => {
+      keysRef.current.clear()
+      mouseDownRef.current = false
+      sendInput()
+    }
+
     const interval = setInterval(() => {
       sendInput()
     }, SEND_MS)
 
     window.addEventListener('keydown', onKeyDown)
     window.addEventListener('keyup', onKeyUp)
+    window.addEventListener('blur', onBlur)
 
     return () => {
       clearInterval(interval)
       window.removeEventListener('keydown', onKeyDown)
       window.removeEventListener('keyup', onKeyUp)
+      window.removeEventListener('blur', onBlur)
     }
   }, [status, sendInput])
 

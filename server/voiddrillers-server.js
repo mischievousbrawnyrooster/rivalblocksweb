@@ -1,4 +1,4 @@
-// Socket wiring for one Void Drillers match. Contains no rules — every
+// Socket wiring for one Void Drillers match. Contains no rules: every
 // decision is made by voiddrillers.js. Binds to loopback; nginx / Vite faces
 // the network.
 
@@ -37,6 +37,7 @@ const wss = new WebSocketServer({
   port: PORT,
   maxPayload: 4096,
   perMessageDeflate: false,
+  handleProtocols: (protocols) => (protocols.has('voiddrillers.v1') ? 'voiddrillers.v1' : [...protocols][0] || false),
 })
 
 function restartMatch() {
