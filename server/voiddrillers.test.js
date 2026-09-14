@@ -260,6 +260,79 @@ test('first driller to touch extraction vault wins', () => {
   assert.equal(m.winner, 'p1', 'p1 reached vault and won match')
 })
 
+test('driller landing on top of extraction vault platform wins', () => {
+  const m = make({ seed: 334 })
+  const p1 = join(m, { id: 'p1', name: 'Speedy' })
+  // Clear the block at row 249 right above the vault platform
+  m.grid[249 * WIDTH + 5] = BLOCK_AIR
+  p1.x = 5.0
+  p1.y = VAULT_Y - 1.2
+  p1.grounded = false
+  while (!p1.grounded) {
+    tick(m, TICK_MS)
+  }
+
+  // Vertical collision clamps p.y to VAULT_Y - 1.0 = 249.0
+  assert.equal(p1.y, VAULT_Y - 1.0)
+  assert.equal(m.phase, 'over', 'landing on vault triggers match over')
+  assert.equal(m.winner, 'p1', 'touchdown on vault platform awards victory')
+})
+
+test('procedural bedrock obstacle shelves generate throughout shaft with bypass openings', () => {
+  const m = make({ seed: 42 })
+  let shelfCount = 0
+  for (let y = 12; y < VAULT_Y - 5; y++) {
+    let internalBedrock = 0
+    for (let x = 1; x < WIDTH - 1; x++) {
+      if (m.grid[y * WIDTH + x] === BLOCK_BEDROCK) {
+        internalBedrock++
+      }
+    }
+    if (internalBedrock >= 4) {
+      shelfCount++
+      // Ensure at least 4 contiguous open (non-bedrock) columns in this shelf row
+      let maxContiguousOpen = 0
+      let curOpen = 0
+      for (let x = 1; x < WIDTH - 1; x++) {
+        if (m.grid[y * WIDTH + x] !== BLOCK_BEDROCK) {
+          curOpen++
+          if (curOpen > maxContiguousOpen) maxContiguousOpen = curOpen
+        } else {
+          curOpen = 0
+        }
+      }
+      assert.equal(maxContiguousOpen >= 4, true, `shelf at y=${y} must have at least 4 contiguous passable columns`)
+    }
+  }
+  assert.equal(shelfCount >= 10, true, 'shaft should contain at least 10 obstacle shelves across depth')
+})
+
+test('internal bedrock obstacle shelves cannot be drilled', () => {
+  const m = make({ seed: 42 })
+  const p = join(m, { id: 'p1', name: 'Driller' })
+  let targetY = -1
+  let targetX = -1
+  for (let y = 14; y < 50; y++) {
+    for (let x = 2; x < WIDTH - 2; x++) {
+      if (m.grid[y * WIDTH + x] === BLOCK_BEDROCK) {
+        targetY = y
+        targetX = x
+        break
+      }
+    }
+    if (targetY !== -1) break
+  }
+  assert.ok(targetY > 0, 'found internal bedrock obstacle')
+
+  p.x = targetX
+  p.y = targetY - 1.0
+  setInput(m, 'p1', { dx: 0, thrust: false, drill: true, aim: Math.PI / 2 })
+  for (let i = 0; i < 20; i++) tick(m, TICK_MS)
+
+  const idx = targetY * WIDTH + targetX
+  assert.equal(m.grid[idx], BLOCK_BEDROCK, 'bedrock shelf block was not destroyed')
+})
+
 test('bedrock cannot be damaged by drilling', () => {
   const m = make({ seed: 111 })
   const p = join(m, { id: 'p1', name: 'Tester' })

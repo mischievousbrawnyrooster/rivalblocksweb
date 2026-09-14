@@ -21,10 +21,10 @@ export const VAULT_Y = 250
 export const SPAWN_Y = 1.0
 
 export const INITIAL_VOID_Y = -4.0
-export const BASE_VOID_SPEED = 1.4 // blocks/sec (gentler initial descent)
-export const VOID_ACCEL = 0.015 // blocks/sec^2 (gradual time ramping)
-export const VOID_DEPTH_ACCEL = 0.003 // blocks/sec per block depth
-export const MAX_VOID_SPEED = 4.2 // blocks/sec cap
+export const BASE_VOID_SPEED = 2.6 // blocks/sec (steady initial descent)
+export const VOID_ACCEL = 0.025 // blocks/sec^2 (gradual time ramping)
+export const VOID_DEPTH_ACCEL = 0.008 // blocks/sec per block depth (accelerates deeper in shaft)
+export const MAX_VOID_SPEED = 6.2 // blocks/sec cap
 
 export const PLAYER_WIDTH = 0.8
 export const PLAYER_HEIGHT = 0.9
@@ -208,6 +208,55 @@ export function make(options = {}) {
     }
   }
 
+  // Procedural Bedrock Obstacle Shelves
+  // Generates horizontal bedrock shelves across subterranean strata to prevent straight-down descent
+  let nextShelfY = 14 + Math.floor(rng() * 4)
+  let lastPattern = -1
+
+  while (nextShelfY < VAULT_Y - 6) {
+    const shelfY = nextShelfY
+    // Pick a pattern different from previous shelf
+    // 0: Left-anchored (cols 1..W), right side open (at least 7 cols open)
+    // 1: Right-anchored (cols W..18), left side open (at least 7 cols open)
+    // 2: Center shelf (cols S..E), both sides open (at least 4 cols on left and right)
+    let pattern = Math.floor(rng() * 3)
+    if (pattern === lastPattern) {
+      pattern = (pattern + 1) % 3
+    }
+    lastPattern = pattern
+
+    if (pattern === 0) {
+      // Left-anchored shelf: covers cols 1 to 8..11, leaving cols 9..18 or 12..18 open
+      const shelfWidth = 8 + Math.floor(rng() * 4)
+      for (let x = 1; x <= shelfWidth; x++) {
+        const idx = shelfY * WIDTH + x
+        grid[idx] = BLOCK_BEDROCK
+        hp[idx] = 255
+      }
+    } else if (pattern === 1) {
+      // Right-anchored shelf: covers cols 8..11 to 18, leaving cols 1 to 7..10 open
+      const shelfWidth = 8 + Math.floor(rng() * 4)
+      const startX = (WIDTH - 1) - shelfWidth
+      for (let x = startX; x < WIDTH - 1; x++) {
+        const idx = shelfY * WIDTH + x
+        grid[idx] = BLOCK_BEDROCK
+        hp[idx] = 255
+      }
+    } else {
+      // Center shelf: covers cols 5..6 to 12..14, leaving at least 4 cols open on each side
+      const startX = 5 + Math.floor(rng() * 2)
+      const endX = 12 + Math.floor(rng() * 3)
+      for (let x = startX; x <= endX; x++) {
+        const idx = shelfY * WIDTH + x
+        grid[idx] = BLOCK_BEDROCK
+        hp[idx] = 255
+      }
+    }
+
+    // Advance 9 to 14 rows for next shelf
+    nextShelfY += 9 + Math.floor(rng() * 6)
+  }
+
   return {
     width: WIDTH,
     depth: DEPTH,
@@ -298,6 +347,21 @@ export function setInput(match, playerId, input = {}) {
 function isSolid(grid, x, y) {
   if (x < 0 || x >= WIDTH || y < 0 || y >= DEPTH) return true
   return grid[y * WIDTH + x] !== BLOCK_AIR
+}
+
+export function touchesVault(grid, p) {
+  if (p.y >= VAULT_Y - 1.05) return true
+  const minCol = Math.floor(p.x + 0.1)
+  const maxCol = Math.floor(p.x + 0.9)
+  const minRow = Math.floor(p.y + 0.1)
+  const maxRow = Math.floor(p.y + 1.05)
+  for (let r = minRow; r <= maxRow; r++) {
+    if (r >= VAULT_Y) return true
+    for (let c = minCol; c <= maxCol; c++) {
+      if (grid[r * WIDTH + c] === BLOCK_VAULT) return true
+    }
+  }
+  return false
 }
 
 // --- Drilling Raycast -----------------------------------------------------
@@ -534,7 +598,7 @@ export function tick(match, dtMs) {
   // 4. Win / Loss Resolution
   if (match.phase === 'playing') {
     for (const p of match.players.values()) {
-      if (p.alive && p.y >= VAULT_Y) {
+      if (p.alive && touchesVault(match.grid, p)) {
         match.phase = 'over'
         match.winner = p.id
         match.winReason = 'vault'
