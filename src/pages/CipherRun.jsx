@@ -1,4 +1,4 @@
-﻿import { useEffect, useState, useRef, useCallback } from 'react'
+import { useEffect, useState, useRef, useCallback } from 'react'
 import { Link } from 'react-router-dom'
 import { useTitle } from '../lib/useTitle.js'
 import Leaderboard from '../components/Leaderboard.jsx'
@@ -24,7 +24,7 @@ export const SPRITE_VARIATIONS = [
     name: 'Street Hacker',
     tag: 'CYBER-01',
     desc: 'Neon Orange Hoodie & Visor',
-    src: '/art/runner-sprites.jpg',
+    src: '/art/runner-sprites.png',
     color: '#ff6b1a',
   },
   {
@@ -32,7 +32,7 @@ export const SPRITE_VARIATIONS = [
     name: 'Cyber Shinobi',
     tag: 'CYBER-02',
     desc: 'Tech-Ninja Cowl & Violet Scarf',
-    src: '/art/runner-sprites-1.jpg',
+    src: '/art/runner-sprites-1.png',
     color: '#a855f7',
   },
   {
@@ -40,7 +40,7 @@ export const SPRITE_VARIATIONS = [
     name: 'Mecha Android',
     tag: 'CYBER-03',
     desc: 'Cyber Catgirl & Jet Boosters',
-    src: '/art/runner-sprites-2.jpg',
+    src: '/art/runner-sprites-2.png',
     color: '#00f2fe',
   },
   {
@@ -48,7 +48,7 @@ export const SPRITE_VARIATIONS = [
     name: 'Tactical Merc',
     tag: 'CYBER-04',
     desc: 'Hazard Jacket & Spiky Hair',
-    src: '/art/runner-sprites-3.jpg',
+    src: '/art/runner-sprites-3.png',
     color: '#f59e0b',
   },
   {
@@ -56,7 +56,7 @@ export const SPRITE_VARIATIONS = [
     name: 'Neon Speedster',
     tag: 'CYBER-05',
     desc: 'Hot Pink Twintails & Skates',
-    src: '/art/runner-sprites-4.jpg',
+    src: '/art/runner-sprites-4.png',
     color: '#f43f5e',
   },
   {
@@ -64,7 +64,7 @@ export const SPRITE_VARIATIONS = [
     name: 'Glitch Phantom',
     tag: 'CYBER-06',
     desc: 'Matrix Coat & Data Code',
-    src: '/art/runner-sprites-5.jpg',
+    src: '/art/runner-sprites-5.png',
     color: '#10b981',
   },
 ]
