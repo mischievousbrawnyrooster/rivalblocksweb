@@ -262,6 +262,7 @@ export const games = [
   },
   {
     slug: 'void-drillers',
+    playPath: '/play/void-drillers',
     title: 'Void Drillers',
     tagline: 'Dig fast or get swallowed.',
     cover: '/art/void-drillers.jpg',

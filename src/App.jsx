@@ -9,6 +9,7 @@ import Play from './pages/Play.jsx'
 import Fracture from './pages/Fracture.jsx'
 import PlayIndex from './pages/PlayIndex.jsx'
 import Blastworks from './pages/Blastworks.jsx'
+import VoidDrillers from './pages/VoidDrillers.jsx'
 import LeaderboardPage from './pages/LeaderboardPage.jsx'
 import Admin from './pages/Admin.jsx'
 import About from './pages/About.jsx'
@@ -72,6 +73,7 @@ export default function App() {
         <Route path="play/blockout-royale" element={<Play />} />
         <Route path="play/fracture-line" element={<Fracture />} />
         <Route path="play/blastworks" element={<Blastworks />} />
+        <Route path="play/void-drillers" element={<VoidDrillers />} />
         <Route
           path="play/blockout-royale-3d"
           element={

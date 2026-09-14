@@ -58,6 +58,13 @@ export const MARKS = {
       `<rect x="15" y="10" width="10" height="10" fill="${FLARE}"/>` +
       `<rect x="9" y="20" width="10" height="10" fill="${PAPER}"/>`,
   ),
+
+  // Void Drillers: heavy downward drill bit chewing into rock.
+  'void-drillers': wrap(
+    `<rect x="6" y="5" width="20" height="5" fill="${PAPER}"/>` +
+      `<polygon points="6,12 26,12 16,27" fill="${FLARE}"/>` +
+      `<line x1="16" y1="12" x2="16" y2="24" stroke="${GROUND}" stroke-width="3"/>`,
+  ),
 }
 
 /**

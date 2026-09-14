@@ -21,7 +21,7 @@ export default function PlayIndex() {
           <p className="rule-label">Play</p>
           <h1 className="display mt-2 text-4xl sm:text-5xl">Play now</h1>
           <p className="mt-5 max-w-xl leading-relaxed text-muted">
-            Four titles, running in the browser against the same servers
+            Five titles, running in the browser against the same servers
             everyone else is on. No account, no download. Pick one and drop in.
           </p>
         </div>
@@ -76,7 +76,7 @@ export default function PlayIndex() {
 
         <section className="reveal mt-16 border-t border-line pt-10">
           <div className="flex flex-wrap items-baseline justify-between gap-4">
-            <h2 className="display text-2xl">Leaderboard across all four</h2>
+            <h2 className="display text-2xl">Leaderboard across all five</h2>
             <Link
               to="/leaderboard"
               className="text-xs uppercase tracking-[0.16em] text-muted hover:text-flare"
