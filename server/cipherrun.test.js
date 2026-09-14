@@ -66,11 +66,17 @@ test('join() and leave() handle player roster and slot assignment', () => {
   assert.ok(p1)
   assert.equal(p1.name, 'Alice')
   assert.equal(p1.slot, 0)
+  assert.equal(p1.avatar, 0)
   assert.equal(m.players.size, 1)
 
-  const p2 = join(m, { name: 'Bob' })
+  const p2 = join(m, { name: 'Bob', avatar: 3 })
   assert.equal(p2.slot, 1)
+  assert.equal(p2.avatar, 3)
   assert.equal(m.players.size, 2)
+
+  const s = snapshot(m)
+  assert.equal(s.players[0].avatar, 0)
+  assert.equal(s.players[1].avatar, 3)
 
   leave(m, p1.id)
   assert.equal(m.players.size, 1)

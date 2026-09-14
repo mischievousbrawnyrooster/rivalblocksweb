@@ -68,6 +68,7 @@ function restartMatch(protocolId = null) {
         ws: client,
         id: client.player.id,
         name: client.player.name,
+        avatar: client.player.avatar,
       })
     }
   }
@@ -82,8 +83,8 @@ function restartMatch(protocolId = null) {
   match.board = keep.top()
   sockets.clear()
 
-  for (const { ws, id, name } of activeSockets) {
-    const p = join(match, { id, name })
+  for (const { ws, id, name, avatar } of activeSockets) {
+    const p = join(match, { id, name, avatar })
     if (!p) continue
     ws.player = p
     sockets.set(p.id, ws)
@@ -148,7 +149,10 @@ wss.on('connection', (ws) => {
       }
 
       const name = sanitizeName(msg.name)
-      const player = join(match, { name })
+      const avatar = typeof msg.avatar === 'number' && Number.isFinite(msg.avatar) && msg.avatar >= 0
+        ? Math.floor(msg.avatar) % 6
+        : undefined
+      const player = join(match, { name, avatar })
       if (!player) {
         ws.send(JSON.stringify({ t: 'full' }))
         ws.close()
@@ -168,6 +172,8 @@ wss.on('connection', (ws) => {
       )
     } else if (msg?.t === 'input' && ws.player) {
       processInput(match, ws.player.id, msg)
+    } else if (msg?.t === 'avatar' && ws.player && typeof msg.avatar === 'number' && Number.isFinite(msg.avatar)) {
+      ws.player.avatar = Math.floor(msg.avatar) % 6
     } else if (msg?.t === 'ready' && ws.player) {
       match.botsWanted = true
     } else if (msg?.t === 'restart') {

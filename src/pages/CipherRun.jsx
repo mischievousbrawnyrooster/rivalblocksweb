@@ -17,7 +17,59 @@ const SLOT_COLORS = [
 ]
 const SLOT_ICONS = ['◈', '✶', 'Ψ', '≡', '⊔', '✚', '◎', '⊗']
 
-// Sprite Sheet coordinates from /art/runner-sprites.jpg (1376 x 768)
+// Sprite Sheet variations (1376 x 768)
+export const SPRITE_VARIATIONS = [
+  {
+    id: 'hacker',
+    name: 'Street Hacker',
+    tag: 'CYBER-01',
+    desc: 'Neon Orange Hoodie & Visor',
+    src: '/art/runner-sprites.jpg',
+    color: '#ff6b1a',
+  },
+  {
+    id: 'ninja',
+    name: 'Cyber Shinobi',
+    tag: 'CYBER-02',
+    desc: 'Tech-Ninja Cowl & Violet Scarf',
+    src: '/art/runner-sprites-1.jpg',
+    color: '#a855f7',
+  },
+  {
+    id: 'android',
+    name: 'Mecha Android',
+    tag: 'CYBER-03',
+    desc: 'Cyber Catgirl & Jet Boosters',
+    src: '/art/runner-sprites-2.jpg',
+    color: '#00f2fe',
+  },
+  {
+    id: 'tactical',
+    name: 'Tactical Merc',
+    tag: 'CYBER-04',
+    desc: 'Hazard Jacket & Spiky Hair',
+    src: '/art/runner-sprites-3.jpg',
+    color: '#f59e0b',
+  },
+  {
+    id: 'idol',
+    name: 'Neon Speedster',
+    tag: 'CYBER-05',
+    desc: 'Hot Pink Twintails & Skates',
+    src: '/art/runner-sprites-4.jpg',
+    color: '#f43f5e',
+  },
+  {
+    id: 'glitch',
+    name: 'Glitch Phantom',
+    tag: 'CYBER-06',
+    desc: 'Matrix Coat & Data Code',
+    src: '/art/runner-sprites-5.jpg',
+    color: '#10b981',
+  },
+]
+
+// Sprite Sheet coordinates from 1376 x 768 layout
 const RUN_FRAMES = [
   { sx: 50, sy: 20, sw: 160, sh: 175 },
   { sx: 275, sy: 20, sw: 160, sh: 175 },
@@ -50,6 +102,8 @@ export default function CipherRun() {
   const [myId, setMyId] = useState(null)
   const [mySlot, setMySlot] = useState(0)
   const [name, setName] = useState('Operator')
+  const [selectedAvatar, setSelectedAvatar] = useState(0)
+  const [showSprinters, setShowSprinters] = useState(false)
   const [hasJoined, setHasJoined] = useState(false)
   const [showDrawer, setShowDrawer] = useState(false)
   const [selectedTier, setSelectedTier] = useState(1)
@@ -67,17 +121,18 @@ export default function CipherRun() {
   const snapRef = useRef(null)
   const canvasRef = useRef(null)
   const inputRef = useRef(null)
-  const spriteImgRef = useRef(null)
+  const spriteImagesRef = useRef([])
   const interpProgressRef = useRef(new Map())
   const particlesRef = useRef([])
 
-  // Load sprite sheet image
+  // Preload all sprite sheet variations
   useEffect(() => {
-    const img = new Image()
-    img.src = '/art/runner-sprites.jpg'
-    img.onload = () => {
-      spriteImgRef.current = img
-    }
+    const images = SPRITE_VARIATIONS.map((v) => {
+      const img = new Image()
+      img.src = v.src
+      return img
+    })
+    spriteImagesRef.current = images
   }, [])
 
   // Initialize character states when protocol text changes
@@ -89,7 +144,7 @@ export default function CipherRun() {
   }, [protocol])
 
   // WebSocket Connection
-  const connect = useCallback((playerName, chosenProtocolId = null) => {
+  const connect = useCallback((playerName, chosenProtocolId = null, avatarIndex = selectedAvatar) => {
     setStatus('connecting')
     let failedPrimary = false
     const scheme = window.location.protocol === 'https:' ? 'wss' : 'ws'
@@ -108,6 +163,7 @@ export default function CipherRun() {
             t: 'join',
             name: playerName || 'Operator',
             protocolId: chosenProtocolId,
+            avatar: avatarIndex,
           }),
         )
       }
@@ -327,15 +383,24 @@ export default function CipherRun() {
         ctx.lineTo(runnerX + 10, laneY + 42)
         ctx.stroke()
 
+        // Select sprite image and metadata for racer
+        const spriteIdx = p.avatar != null
+          ? (p.avatar % SPRITE_VARIATIONS.length)
+          : (p.slot % SPRITE_VARIATIONS.length)
+        const spriteImg = spriteImagesRef.current[spriteIdx] || spriteImagesRef.current[0]
+        const variation = SPRITE_VARIATIONS[spriteIdx] || SPRITE_VARIATIONS[0]
+
         // Name & Telemetry Badge above runner
         ctx.font = '11px ui-monospace, monospace'
         ctx.fillStyle = '#94a3b8'
-        ctx.fillText(p.name, runnerX - 6, laneY + 12)
+        const labelText = p.name
+        ctx.fillText(labelText, runnerX - 6, laneY + 12)
+        const nameWidth = ctx.measureText(labelText).width
 
-        ctx.fillStyle = slotColor
+        ctx.fillStyle = variation.color || slotColor
         ctx.font = 'bold 10px ui-monospace, monospace'
         const wpmLabel = `${p.wpm?.toFixed(0) || 0} WPM`
-        ctx.fillText(wpmLabel, runnerX + 46, laneY + 12)
+        ctx.fillText(wpmLabel, runnerX - 6 + nameWidth + 8, laneY + 12)
 
         // Select Animation Frame
         let frame = RUN_FRAMES[0]
@@ -354,14 +419,10 @@ export default function CipherRun() {
         }
 
         // Draw Chibi Sprinter
-        if (spriteImgRef.current) {
+        if (spriteImg && spriteImg.complete && spriteImg.naturalWidth > 0) {
           ctx.save()
-          // Hue shift by slot
-          const hueDeg = (p.slot * 45) % 360
-          ctx.filter = `hue-rotate(${hueDeg}deg)`
-
           ctx.drawImage(
-            spriteImgRef.current,
+            spriteImg,
             frame.sx,
             frame.sy,
             frame.sw,
@@ -380,7 +441,15 @@ export default function CipherRun() {
 
     animId = requestAnimationFrame(render)
     return () => cancelAnimationFrame(animId)
-  }, [myId, dashTimer])
+  }, [myId, dashTimer, selectedAvatar])
+
+  // Select or change runner avatar
+  const handleAvatarSelect = (idx) => {
+    setSelectedAvatar(idx)
+    if (wsRef.current?.readyState === WebSocket.OPEN) {
+      wsRef.current.send(JSON.stringify({ t: 'avatar', avatar: idx }))
+    }
+  }
 
   // Restart match or switch protocol
   const handleRestart = (protoId = null) => {
@@ -407,6 +476,48 @@ export default function CipherRun() {
         </div>
 
         <div className="flex items-center gap-3">
+          {hasJoined && (
+            <div className="relative">
+              <button
+                type="button"
+                onClick={() => setShowSprinters(!showSprinters)}
+                className="flex items-center gap-2 border border-line bg-surface px-3 py-2 text-xs font-mono uppercase tracking-wider text-fg transition-colors hover:border-flare"
+              >
+                <span
+                  className="inline-block h-2.5 w-2.5 rounded-full"
+                  style={{ backgroundColor: SPRITE_VARIATIONS[selectedAvatar]?.color }}
+                />
+                <span>Sprinter: {SPRITE_VARIATIONS[selectedAvatar]?.name}</span>
+              </button>
+              {showSprinters && (
+                <div className="absolute right-0 top-full mt-2 z-20 w-64 border border-line bg-surface p-2 shadow-lg">
+                  <div className="text-[10px] font-mono text-muted uppercase px-2 py-1 border-b border-line mb-1">
+                    Switch Active Runner
+                  </div>
+                  {SPRITE_VARIATIONS.map((v, idx) => (
+                    <button
+                      key={v.id}
+                      type="button"
+                      onClick={() => {
+                        handleAvatarSelect(idx)
+                        setShowSprinters(false)
+                      }}
+                      className={`flex items-center gap-2.5 w-full text-left px-2.5 py-1.5 text-xs font-mono transition-colors ${
+                        selectedAvatar === idx ? 'bg-bg text-flare font-bold' : 'text-fg hover:bg-bg/50'
+                      }`}
+                    >
+                      <span
+                        className="inline-block h-2.5 w-2.5 rounded-full"
+                        style={{ backgroundColor: v.color }}
+                      />
+                      <span className="flex-1">{v.name}</span>
+                      <span className="text-[10px] text-muted">{v.tag}</span>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
           <button
             type="button"
             onClick={() => setShowDrawer(!showDrawer)}
@@ -466,8 +577,47 @@ export default function CipherRun() {
         <div className="my-10 border border-line bg-surface p-8 text-center">
           <h2 className="display text-2xl">Access Security Gateway</h2>
           <p className="mt-2 text-sm text-muted">
-            Enter your handle to initialize telemetry and join the active race lobby.
+            Enter your handle, choose your chibi cyber sprinter, and join the active race lobby.
           </p>
+
+          {/* Sprinter Avatar Selection Grid */}
+          <div className="mx-auto mt-6 max-w-2xl">
+            <div className="mb-2 text-left font-mono text-[11px] uppercase tracking-wider text-muted">
+              Select Runner Unit (6 Variations)
+            </div>
+            <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-3 md:grid-cols-6">
+              {SPRITE_VARIATIONS.map((v, idx) => (
+                <button
+                  key={v.id}
+                  type="button"
+                  onClick={() => setSelectedAvatar(idx)}
+                  className={`flex flex-col items-center rounded border p-3 transition-all text-center ${
+                    selectedAvatar === idx
+                      ? 'border-flare bg-bg shadow-sm scale-102'
+                      : 'border-line/60 bg-bg/40 hover:border-line hover:bg-bg/70'
+                  }`}
+                >
+                  <div
+                    className="mb-2 flex h-10 w-10 items-center justify-center rounded border font-mono text-base font-bold transition-transform"
+                    style={{
+                      borderColor: v.color,
+                      color: v.color,
+                      backgroundColor: `${v.color}18`,
+                    }}
+                  >
+                    {SLOT_ICONS[idx % SLOT_ICONS.length]}
+                  </div>
+                  <span className="font-mono text-xs font-bold leading-tight text-fg">
+                    {v.name}
+                  </span>
+                  <span className="mt-1 font-mono text-[10px] text-muted leading-tight">
+                    {v.desc}
+                  </span>
+                </button>
+              ))}
+            </div>
+          </div>
+
           <div className="mx-auto mt-6 flex max-w-sm gap-2">
             <input
               type="text"

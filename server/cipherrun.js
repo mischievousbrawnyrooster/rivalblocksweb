@@ -211,6 +211,9 @@ export function join(match, playerInfo = {}) {
   const id = playerInfo.id || (isBot ? `bot-${match.nextId++}` : `p-${match.nextId++}`)
   const name = sanitizeName(playerInfo.name)
   const slot = match.nextSlot++
+  const avatar = typeof playerInfo.avatar === 'number' && Number.isFinite(playerInfo.avatar) && playerInfo.avatar >= 0
+    ? Math.floor(playerInfo.avatar) % 6
+    : (slot % 6)
 
   // Bot typing characteristics
   const botWpm = isBot ? (55 + (slot % 4) * 14 + Math.floor(Math.random() * 8)) : null
@@ -219,6 +222,7 @@ export function join(match, playerInfo = {}) {
     id,
     name,
     slot,
+    avatar,
     bot: isBot,
     botWpm,
     botNextKeyAt: 0,
@@ -413,6 +417,7 @@ export function snapshot(match) {
       id: p.id,
       name: p.name,
       slot: p.slot,
+      avatar: p.avatar ?? (p.slot % 6),
       bot: p.bot,
       cursor: p.cursor,
       progress,
