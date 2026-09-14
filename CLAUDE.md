@@ -280,11 +280,6 @@ is nothing to lock. `BOARD_DIR` says where they live (`./data` in dev,
   counter-rotating tilted torus ring) use procedural geometries and materials only.
   Floating silhouette glyph billboard labels above heads preserve non-color player
   identification under WCAG 1.4.1.
-- **Cipher Run: Monkeytype standard WPM math.** 5 characters per normalized word (`(correctChars / 5) / (elapsedMinutes)`). Raw WPM counts total keystrokes. Accuracy percentage is `(correctChars / totalKeystrokes) * 100`.
-- **Cipher Run: Glitch Breaker Lockout.** 3 consecutive typos trigger 350ms static freeze (`LOCKOUT_MS = 350`). During lockout, incoming keystrokes are discarded until the timer expires.
-- **Cipher Run: Backspace recovery and Spacebar jump.** Backspace recovery clears typo state; Spacebar advances past word errors with uncorrected penalty.
-- **Cipher Run: Curated protocol tiers.** 18 curated protocols across 3 difficulty tiers (Quick, Kernel, Black Ice).
-- **Cipher Run: Chibi Cyber Sprinters.** Procedural anime runner with dynamic stride cadence scaling with WPM, word-dash impulse, and stumble states.
 
 ## Game-Specific Mechanics & Balance Solutions
 
