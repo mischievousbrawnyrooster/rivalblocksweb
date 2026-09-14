@@ -15,6 +15,7 @@ npm.cmd run fracture # Fracture Line                127.0.0.1:8082  ← /fractur
 npm.cmd run blast    # Blastworks (Last Man)        127.0.0.1:8083  ← /blast-ws
 npm.cmd run blast:dm # Blastworks (Deathmatch)      127.0.0.1:8084  ← /blast-dm-ws
 npm.cmd run drillers # Void Drillers                127.0.0.1:8086  ← /voiddrillers-ws
+npm.cmd run cipher   # Cipher Run                   127.0.0.1:8087  ← /cipherrun-ws
 npm.cmd run build    # static production build to dist/
 ```
 
@@ -33,17 +34,17 @@ node --test --test-name-pattern="cooldown" server/game.test.js
 
 ## Codebase Structure & Architectural Split
 
-The project contains a static marketing SPA and five authoritative multiplayer games sharing one build.
+The project contains a static marketing SPA and six authoritative multiplayer games sharing one build.
 
 ### Strict Three-Layer Architecture
 
 | Component / Layer | Files | Responsibilities | Constraints (Must NEVER contain) |
 |---|---|---|---|
-| **Rules Engine** | `server/game.js`, `server/fracture.js`, `server/blastworks.js`, `server/blockout3d.js`, `server/voiddrillers.js` | Authoritative match state, movement, collision, elimination, powerups, tick logic | **Zero external imports, zero Node APIs, zero sockets, zero timers, zero I/O**. Completely pure functions. |
-| **Network Adapter** | `server/server.js`, `server/fracture-server.js`, `server/blastworks-server.js`, `server/voiddrillers-server.js` | WebSocket lifecycle, frame parsing, validation, snapshot broadcasts | **Zero game decisions or simulation logic**. Only relays client input and broadcasts snapshots. |
+| **Rules Engine** | `server/game.js`, `server/fracture.js`, `server/blastworks.js`, `server/blockout3d.js`, `server/voiddrillers.js`, `server/cipherrun.js` | Authoritative match state, movement, collision, elimination, powerups, tick logic | **Zero external imports, zero Node APIs, zero sockets, zero timers, zero I/O**. Completely pure functions. |
+| **Network Adapter** | `server/server.js`, `server/fracture-server.js`, `server/blastworks-server.js`, `server/blockout3d-server.js`, `server/voiddrillers-server.js`, `server/cipherrun-server.js` | WebSocket lifecycle, frame parsing, validation, snapshot broadcasts | **Zero game decisions or simulation logic**. Only relays client input and broadcasts snapshots. |
 | **Shared Pure Logic** | `server/board.js` | Leaderboard merging, ranking, K/D math | **Runs in both Node.js and the browser**. No Node APIs, no clock (`Date.now` passed in). |
 | **Storage Layer** | `server/board-store.js` | Reading/writing the leaderboard JSON files | **Single-writer per file**. No locking needed. Corrupted files fall back to empty boards. |
-| **Client UI** | `src/pages/Play.jsx`, `src/pages/Fracture.jsx`, `src/pages/Blastworks.jsx`, `src/pages/Blockout3D.jsx`, `src/pages/VoidDrillers.jsx` | Canvas / DOM rendering, keyboard/mouse input uplink | **No client-side simulation, prediction, or rollback**. Pure rendering of authoritative server snapshots. |
+| **Client UI** | `src/pages/Play.jsx`, `src/pages/Fracture.jsx`, `src/pages/Blastworks.jsx`, `src/pages/Blockout3D.jsx`, `src/pages/VoidDrillers.jsx`, `src/pages/CipherRun.jsx` | Canvas / DOM rendering, keyboard/mouse input uplink | **No client-side simulation, prediction, or rollback**. Pure rendering of authoritative server snapshots. |
 
 
 ---
@@ -69,7 +70,7 @@ The project contains a static marketing SPA and five authoritative multiplayer g
    - WebSockets enforce `maxPayload: 4096` to prevent oversized join frames from crashing the server process.
 
 5. **Concurrency Without Locks**:
-   - Six board files (`board-blockout.json`, `board-blockout3d.json`, `board-fracture.json`, `board-blastworks-lastman.json`, `board-blastworks-deathmatch.json`, `board-voiddrillers.json`).
+   - Seven board files (`board-blockout.json`, `board-blockout3d.json`, `board-fracture.json`, `board-blastworks-lastman.json`, `board-blastworks-deathmatch.json`, `board-voiddrillers.json`, `board-cipherrun.json`).
    - Exactly one process writes to each file.
    - `load()` in `board-store.js` safely catches all syntax errors and returns an empty board if the file is damaged.
 
@@ -111,6 +112,13 @@ The project contains a static marketing SPA and five authoritative multiplayer g
 - **Thermal Dynamics**: Drilling adds heat (+0.25/s), cooling dissipates heat (-0.30/s), and reaching 100% triggers a 1.8s overheat breaker lockout.
 - **Crush Void**: Descends from -4.0 after a 4000 ms grace period, accelerating with depth to crush slow drillers. First player touching the Extraction Vault at y=250 wins.
 - **Delta Wire Protocol**: Full map transmitted once on join via run-length encoded string; 60 Hz snapshots transmit only dynamic entities and incremental block deltas.
+
+### Cipher Run (Typing Decryption Race)
+- **Monkeytype Standard**: 5 characters per normalized word (`(correctChars / 5) / (elapsedMinutes)`).
+- **Glitch Breaker Lockout**: 3 consecutive typos trigger 350ms static freeze (`LOCKOUT_MS = 350`).
+- **Error Recovery**: Backspace recovery clears typo state; Spacebar advances past word errors with uncorrected penalty.
+- **Curated Protocols**: 18 curated protocols across 3 difficulty tiers (Quick, Kernel, Black Ice).
+- **Chibi Cyber Sprinters**: Procedural anime runner with dynamic stride cadence scaling with WPM, word-dash impulse, and stumble states.
 
 ---
 

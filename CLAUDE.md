@@ -18,6 +18,7 @@ npm run blast    # Blastworks, last man standing  :8083  ← /blast-ws
 npm run blast:dm # Blastworks, deathmatch         :8084  ← /blast-dm-ws
 npm run blockout3d # Blockout Royale 3D            :8085  ← /blockout3d-ws
 npm run drillers # Void Drillers                   :8086  ← /voiddrillers-ws
+npm run cipher   # Cipher Run                      :8087  ← /cipherrun-ws
 npm test         # node --test over src/lib and server/*.test.js
 npm run build    # static output to dist/
 ```
@@ -55,11 +56,14 @@ Three layers with a deliberate, enforced split:
 | `server/blockout3d-server.js` | Connection lifecycle, parsing, broadcast | Any game decision |
 | `server/voiddrillers.js` | Every rule and all match state | Sockets, Node APIs, *any* import |
 | `server/voiddrillers-server.js` | Connection lifecycle, parsing, broadcast | Any game decision |
+| `server/cipherrun.js` | Every rule and all match state | Sockets, Node APIs, *any* import |
+| `server/cipherrun-server.js` | Connection lifecycle, parsing, broadcast | Any game decision |
 | `server/board.js` | Leaderboard merging and ranking | Node APIs, imports, I/O, a clock |
 | `server/board-store.js` | Reading and writing the board files | Any ranking decision |
 | `src/pages/Play.jsx` | Rendering and input | Simulation, prediction, rule checks |
 | `src/pages/Blockout3D.jsx` | Scene, camera, input, HUD | Simulation, prediction, rule checks |
 | `src/pages/VoidDrillers.jsx` | Canvas, camera, particles, HUD | Simulation, prediction, rule checks |
+| `src/pages/CipherRun.jsx` | Canvas, chibi runners, input, HUD | Simulation, prediction, rule checks |
 
 
 `game.js` has zero imports on purpose — that purity is why all ~60 tests live against it and why `server.js` and `Play.jsx` have none. Put new logic there, not in the socket wrapper.
@@ -88,7 +92,7 @@ body feels the replay delay as the whole world lagging the mouse.
 
 ## The leaderboard
 
-Five files, one per match server, each with **exactly one writer**. That is the
+Seven files, one per match server, each with **exactly one writer** (`board-blockout.json`, `board-blockout3d.json`, `board-fracture.json`, `board-blastworks-lastman.json`, `board-blastworks-deathmatch.json`, `board-voiddrillers.json`, `board-cipherrun.json`). That is the
 whole concurrency design: no two processes ever write the same path, so there
 is nothing to lock. `BOARD_DIR` says where they live (`./data` in dev,
 `/var/lib/rivalblocks/board` deployed).
@@ -276,6 +280,20 @@ is nothing to lock. `BOARD_DIR` says where they live (`./data` in dev,
   counter-rotating tilted torus ring) use procedural geometries and materials only.
   Floating silhouette glyph billboard labels above heads preserve non-color player
   identification under WCAG 1.4.1.
+- **Cipher Run: Monkeytype standard WPM math.** 5 characters per normalized word (`(correctChars / 5) / (elapsedMinutes)`). Raw WPM counts total keystrokes. Accuracy percentage is `(correctChars / totalKeystrokes) * 100`.
+- **Cipher Run: Glitch Breaker Lockout.** 3 consecutive typos trigger 350ms static freeze (`LOCKOUT_MS = 350`). During lockout, incoming keystrokes are discarded until the timer expires.
+- **Cipher Run: Backspace recovery and Spacebar jump.** Backspace recovery clears typo state; Spacebar advances past word errors with uncorrected penalty.
+- **Cipher Run: Curated protocol tiers.** 18 curated protocols across 3 difficulty tiers (Quick, Kernel, Black Ice).
+- **Cipher Run: Chibi Cyber Sprinters.** Procedural anime runner with dynamic stride cadence scaling with WPM, word-dash impulse, and stumble states.
+
+## Game-Specific Mechanics & Balance Solutions
+
+### Cipher Run (Typing Decryption Race)
+- **Monkeytype standard**: 5 characters per normalized word (`(correctChars / 5) / (elapsedMinutes)`).
+- **Glitch Breaker Lockout**: 3 consecutive typos trigger 350ms static freeze (`LOCKOUT_MS = 350`).
+- **Error Recovery**: Backspace recovery clears typo state; Spacebar advances past word errors with uncorrected penalty.
+- **Curated Protocols**: 18 curated protocols across 3 difficulty tiers (Quick, Kernel, Black Ice).
+- **Chibi Cyber Sprinters**: Procedural anime runner with dynamic stride cadence scaling with WPM, word-dash impulse, and stumble states.
 
 ## Design rules inherited from the site
 
