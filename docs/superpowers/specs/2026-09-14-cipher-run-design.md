@@ -200,27 +200,43 @@ export const BOT_NAMES = ['ZeroCool', 'AcidBurn', 'Crash', 'Phantom', 'Vector', 
 
 * **Aesthetic**: Retro-futuristic cyberpunk terminal; dark `#090d16` background with cyan, orange (`#ff6b1a`), and crisp monospace typography (`ui-monospace`, `Courier New`, `monospace`).
 
-### Interface Layers
-1. **Telemetry & Progress Strip (Top)**:
-   * Competitor lanes with slot colors and avatars (`PIECE_ICON`).
-   * Live animated progress bar showing each competitor's completion percentage.
-   * Real-time WPM pill badge beside each racer.
-2. **Breach Console (Center)**:
-   * **Decryption Text Buffer**:
-     * Characters correctly typed: Bright phosphor green/cyan.
-     * Characters with errors: Red background box with white font (`bg-danger/25 text-danger`).
-     * Current character: Pulsing amber caret cursor (`|`).
-     * Remaining characters: Dim muted gray.
-   * Hidden input capture handling seamless focus across mobile and desktop.
-3. **Operator Telemetry Gauges (Bottom)**:
-   * Live **WPM** (Monkeytype standard).
-   * **Raw WPM** (Gross keystroke cadence).
-   * **Accuracy %**.
-   * **Time Elapsed** / Remaining.
-4. **Terminal Glitch Overlay**:
-   * On 3 consecutive typos, triggers CSS horizontal chromatic static jitter and displays a brief flashing banner: `FIREWALL BREAKER LOCKOUT [350ms]`.
-5. **Solo Protocol Selector**:
-   * Sidebar or drawer to browse all 18 protocols by tier (Quick, Kernel, Black Ice) with personal best badges.
+### 6.1 Multi-Lane Race Deck & Chibi Cyber Sprinters
+Positioned prominently above the typing console is the live **Multi-Lane Race Deck**:
+* **Track Layout**:
+  * Stacked horizontal lanes (one per racer: players and bots), bordered by glowing neon track rails.
+  * Start gantry at 0% (left) and a vertical checkered neon finish tape at 100% (right).
+  * Smooth CSS/canvas interpolation of competitor positions so rivals glide across lanes in real time without jitter.
+* **Chibi Cyber Sprinter Character**:
+  * Procedural inline SVG / canvas character: chunky oversized head with glowing visor/goggles, slot-colored hoodie/jacket, tiny bouncing sneakers, and a bobbing cyber-backpack.
+  * **Word-Dash Impulse**: Whenever a player successfully completes a word (spacebar or terminal punctuation), their runner performs an energetic forward leap and kicks up a procedural dust puff.
+  * **Dynamic Stride Cadence**: Running leg pump speed dynamically scales with live WPM:
+    * Idle / 0 WPM: Foot-tapping idle breath.
+    * 30–50 WPM: Leisurely, cheerful jog.
+    * 60–85 WPM: Focused, athletic sprint.
+    * 90+ WPM: Frantic anime-style blur sprint with trailing motion lines.
+  * **Glitch Stumble Reaction**: When 3 consecutive errors occur, the runner stumbles or skids on their knees with dizzy glyphs (`@_@`), recovering as soon as the 350ms lockout concludes.
+  * **Finish Line Celebration**: Crossing the finish line triggers a victory flip, raised arms celebration, and procedural confetti particles.
+  * **Competitor Badges**: Above each runner's head sits a floating badge with their slot icon (`PIECE_ICON`), name, and live WPM pill.
+
+### 6.2 Active Breach Terminal (Center)
+* **Decryption Text Buffer**:
+  * Characters correctly typed: Bright phosphor green/cyan (`text-fg`).
+  * Characters with errors: Red background box with white font (`bg-danger/25 text-danger`).
+  * Current character: Pulsing amber caret cursor (`|`).
+  * Remaining characters: Dim muted gray (`text-muted`).
+* Hidden input capture handling seamless focus across mobile and desktop.
+
+### 6.3 Operator Telemetry Gauges (Bottom)
+* Live **WPM** (Monkeytype standard).
+* **Raw WPM** (Gross keystroke cadence).
+* **Accuracy %**.
+* **Time Elapsed** / Remaining.
+
+### 6.4 Terminal Glitch Overlay
+* On 3 consecutive typos, triggers CSS horizontal chromatic static jitter and displays a brief flashing banner: `FIREWALL BREAKER LOCKOUT [350ms]`.
+
+### 6.5 Solo Protocol Selector
+* Sidebar drawer to browse all 18 protocols by tier (Quick, Kernel, Black Ice) with personal best badges.
 
 ---
 
