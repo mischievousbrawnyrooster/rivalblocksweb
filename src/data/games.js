@@ -260,6 +260,88 @@ export const games = [
       { seed: 63, caption: 'Two floors left, and the void still climbing' },
     ],
   },
+  {
+    slug: 'void-drillers',
+    title: 'Void Drillers',
+    tagline: 'Dig fast or get swallowed.',
+    cover: '/art/void-drillers.jpg',
+    coverImage: '/art/void-drillers.jpg',
+    artHero: '/art/void-drillers.jpg',
+    artAction: '/art/void-drillers.jpg',
+    status: 'online',
+    statusTone: 'live',
+    port: 8086,
+    route: '/play/void-drillers',
+    players: '1-8',
+    genre: 'Excavation Race',
+    perspective: '2D Side Descent',
+    flagship: false,
+    platforms: ['PC'],
+    art: { variant: 'cavern', seed: 404 },
+    blurb:
+      'A vertical excavation race down a collapsing 260-block shaft. ' +
+      'Chew through dirt and stone, manage core heat, and hit the vault ' +
+      'before the void takes the ceiling.',
+    playBlurb:
+      'A vertical race down 260 blocks of crumbling rock. Drill fast, ' +
+      'watch the core heat, and reach the extraction vault before the void ' +
+      'crushes the shaft.',
+    description:
+      'A high-stakes excavation race where up to eight drillers plunge down ' +
+      'a 260-block destructible shaft. The ceiling collapses downward as the ' +
+      'Crush Void, consuming anything too slow to outrun it. First driller to ' +
+      'reach the Extraction Vault wins.',
+    mechanics:
+      'Drill through soft dirt, dense stone, and volatile gas pockets. ' +
+      'Watch your thermal gauge: continuous drilling overheats the bit and ' +
+      'triggers a thermal lockout. Shatter geode caches to vent heat and ' +
+      'activate super-drilling bursts. Fire jetpack thrusters to arrest falls ' +
+      'or maneuver across shafts.',
+    controls:
+      'Move horizontally with A/D or Arrow keys. Fire jetpack thrusters with ' +
+      'W, Space, or Up Arrow. Aim with the mouse pointer. Hold Left Click or ' +
+      'F to drill.',
+    features: [
+      {
+        title: 'The Crush Void',
+        body:
+          'Dark matter eats the shaft from above. Lingering too long in any pocket ' +
+          'is fatal. The void accelerates as you descend.',
+      },
+      {
+        title: 'Thermal management',
+        body:
+          'Continuous drilling builds core heat. Redlining trips the thermal breaker, ' +
+          'locking your drill bit until the system vents.',
+      },
+      {
+        title: 'Hazardous strata',
+        body:
+          'Dirt yields quickly, stone requires sustained drilling, and gas pockets ' +
+          'explode on puncture. Bedrock borders are completely impervious.',
+      },
+      {
+        title: 'Geode supercharges',
+        body:
+          'Crack subterranean crystals to instantly vent all core heat and trigger ' +
+          'temporary high-speed super-drilling through stone.',
+      },
+      {
+        title: 'The Extraction Vault',
+        body:
+          'Touch the beacon platform at the bottom of the 260-block shaft to win ' +
+          'the match, or outlast every rival crushed by the void.',
+      },
+    ],
+    serverNote:
+      'Descent physics, block destruction, and void tracking run authoritatively on our server.',
+    shots: [
+      { seed: 14, caption: 'Upper strata: carving an opening lane through packed dirt' },
+      { seed: 28, caption: 'Gas puncture: a volatile pocket detonating across rivals' },
+      { seed: 42, caption: 'Geode cache: venting core heat and bursting through stone' },
+      { seed: 56, caption: 'The Vault: touchdown on the extraction beacon platform' },
+    ],
+  },
 ]
 
 export const getGame = (slug) => games.find((g) => g.slug === slug)

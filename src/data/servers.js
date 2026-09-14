@@ -45,3 +45,15 @@ export const fleetStats = {
   tickRate: 128,
   uptime: 99.98,
 }
+
+export const gameServers = [
+  { slug: 'blockout-royale', title: 'Blockout Royale', port: 8081, path: '/ws', status: 'operational' },
+  { slug: 'fracture-line', title: 'Fracture Line', port: 8082, path: '/fracture-ws', status: 'operational' },
+  { slug: 'blastworks', title: 'Blastworks', port: 8083, path: '/blast-ws', status: 'operational' },
+  { slug: 'blastworks-dm', title: 'Blastworks Deathmatch', port: 8084, path: '/blast-dm-ws', status: 'operational' },
+  { slug: 'blockout-royale-3d', title: 'Blockout Royale 3D', port: 8085, path: '/blockout3d-ws', status: 'operational' },
+  { slug: 'void-drillers', title: 'Void Drillers', port: 8086, path: '/voiddrillers-ws', status: 'operational' },
+]
+
+export const servers = gameServers
+
