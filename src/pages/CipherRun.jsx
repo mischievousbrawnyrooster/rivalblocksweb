@@ -276,7 +276,8 @@ export default function CipherRun() {
         }
       }
 
-      if (snap?.phase !== 'racing' || glitchActive) return
+      const me = snap?.players?.find((p) => p.id === myId)
+      if (snap?.phase !== 'racing' || glitchActive || me?.finished) return
 
       const text = protocol.text
       const key = e.key
@@ -365,7 +366,7 @@ export default function CipherRun() {
         ws.send(JSON.stringify({ t: 'input', key, cursor }))
       }
     },
-    [protocol, cursor, snap?.phase, glitchActive, charStates, typedChars, handleVote],
+    [protocol, cursor, snap?.phase, snap?.players, myId, glitchActive, charStates, typedChars, handleVote],
   )
 
   // Attach global keyboard listener
@@ -872,6 +873,27 @@ export default function CipherRun() {
             <div className="bg-rose-950/60 border-b border-rose-500 px-5 py-2.5 text-center font-mono animate-bounce">
               <span className="text-xs font-bold text-rose-300">
                 ⚠ FIREWALL BREAKER LOCKOUT // STATIC FREEZE [350ms]
+              </span>
+            </div>
+          )}
+
+          {/* Post-Winner Finish Allowance Countdown Banner */}
+          {snap?.phase === 'racing' && snap?.finishCountdown > 0 && (
+            <div className="bg-amber-950/50 border-b border-amber-500/70 px-5 py-2.5 text-center font-mono">
+              <div className="flex items-center justify-center gap-2">
+                <span className="inline-block h-2 w-2 rounded-full bg-amber-400 animate-ping" />
+                <span className="text-xs sm:text-sm font-bold text-amber-300 tracking-wider">
+                  [!] FIRST BREACH CONFIRMED BY {snap.players?.find((p) => p.id === snap.winner)?.name || 'OPERATOR'} // SYSTEM PURGE IN [ {snap.finishCountdown}s ]
+                </span>
+              </div>
+            </div>
+          )}
+
+          {/* Local Player Finished State Banner */}
+          {snap?.phase === 'racing' && snap?.players?.find((p) => p.id === myId)?.finished && (
+            <div className="bg-emerald-950/50 border-b border-emerald-500/70 px-5 py-2.5 text-center font-mono">
+              <span className="text-xs sm:text-sm font-bold text-emerald-300 tracking-wider">
+                ✓ BREACH SUCCESSFUL // AWAITING REMAINING OPERATORS OR TIMEOUT...
               </span>
             </div>
           )}

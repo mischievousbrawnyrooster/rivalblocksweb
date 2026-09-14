@@ -269,6 +269,89 @@ test('cannot finish race with unresolved typos until backspaced and corrected', 
   assert.equal(p.finished, true, 'finishes once typo is corrected')
 })
 
+test('winner finishing keeps phase racing and gives 20-second allowance for other players to continue typing', () => {
+  const m = make({ protocolId: 1, botFill: 0, botsWanted: false })
+  m.protocol = { id: 99, title: 'Test', tier: 1, text: 'Go' }
+  const p1 = join(m, { name: 'Alice' })
+  const p2 = join(m, { name: 'Bob' })
+  m.phase = 'racing'
+  m.elapsed = 3000
+
+  // Alice finishes the protocol
+  processInput(m, p1.id, { key: 'G' })
+  processInput(m, p1.id, { key: 'o' })
+  assert.equal(p1.finished, true)
+  assert.equal(m.winner, p1.id)
+  assert.equal(m.finishTimer, 20000)
+  assert.equal(m.phase, 'racing', 'phase must remain racing during allowance')
+
+  // Alice is finished and cannot send more inputs
+  assert.equal(processInput(m, p1.id, { key: 'x' }), false)
+
+  // Bob has not finished and is still allowed to type
+  assert.equal(p2.finished, false)
+  const accepted = processInput(m, p2.id, { key: 'G' })
+  assert.equal(accepted, true, 'other players must still be allowed to type')
+  assert.equal(p2.cursor, 1)
+})
+
+test('phase becomes over when 20-second allowance timer expires', () => {
+  const m = make({ protocolId: 1, botFill: 0, botsWanted: false })
+  m.protocol = { id: 99, title: 'Test', tier: 1, text: 'Go' }
+  const p1 = join(m, { name: 'Alice' })
+  const p2 = join(m, { name: 'Bob' })
+  m.phase = 'racing'
+
+  // Alice finishes
+  processInput(m, p1.id, { key: 'G' })
+  processInput(m, p1.id, { key: 'o' })
+  assert.equal(m.winner, p1.id)
+  assert.equal(m.phase, 'racing')
+
+  // Tick 10 seconds (half of allowance)
+  tick(m, 10000)
+  assert.equal(m.finishTimer, 10000)
+  assert.equal(m.phase, 'racing')
+
+  // Tick another 10 seconds (allowance expires)
+  tick(m, 10000)
+  assert.equal(m.finishTimer, 0)
+  assert.equal(m.phase, 'over', 'phase must transition to over once allowance expires')
+
+  // Bob can no longer type once phase is over
+  assert.equal(processInput(m, p2.id, { key: 'G' }), false)
+})
+
+test('phase becomes over early if all remaining players finish before allowance expires', () => {
+  const m = make({ protocolId: 1, botFill: 0, botsWanted: false })
+  m.protocol = { id: 99, title: 'Test', tier: 1, text: 'Go' }
+  const p1 = join(m, { name: 'Alice' })
+  const p2 = join(m, { name: 'Bob' })
+  m.phase = 'racing'
+  m.elapsed = 4000
+
+  // Alice finishes first
+  processInput(m, p1.id, { key: 'G' })
+  processInput(m, p1.id, { key: 'o' })
+  assert.equal(p1.finished, true)
+  assert.equal(m.winner, p1.id)
+  assert.equal(m.phase, 'racing')
+
+  // Tick 4 seconds (advances elapsed to 8000)
+  tick(m, 4000)
+  assert.equal(m.phase, 'racing')
+
+  // Bob finishes second
+  processInput(m, p2.id, { key: 'G' })
+  processInput(m, p2.id, { key: 'o' })
+  assert.equal(p2.finished, true)
+  assert.equal(p2.finishTime, 8000)
+
+  // Both players finished, phase must immediately transition to over
+  assert.equal(m.phase, 'over')
+  assert.equal(m.winner, p1.id)
+})
+
 test('castVote records valid votes and rejects invalid tiers or unknown players', () => {
   const m = make()
   const p1 = join(m, { name: 'Alice' })
@@ -455,5 +538,27 @@ test('snapshot exposes voteTimer, votes tally, and easterEgg flag', () => {
   assert.equal(typeof s.voteTimer, 'number')
   assert.deepEqual(s.votes, { short: 1, medium: 0, long: 0, total: 1 })
   assert.equal(s.easterEgg, false)
+})
+
+test('snapshot exposes finishCountdown during allowance', () => {
+  const m = make({ protocolId: 1, botFill: 0, botsWanted: false })
+  m.protocol = { id: 99, title: 'Test', tier: 1, text: 'Go' }
+  const p1 = join(m, { name: 'Alice' })
+  join(m, { name: 'Bob' })
+  m.phase = 'racing'
+
+  let s = snapshot(m)
+  assert.equal(s.finishCountdown, 0)
+
+  // Alice finishes
+  processInput(m, p1.id, { key: 'G' })
+  processInput(m, p1.id, { key: 'o' })
+
+  s = snapshot(m)
+  assert.equal(s.finishCountdown, 20)
+
+  tick(m, 5000)
+  s = snapshot(m)
+  assert.equal(s.finishCountdown, 15)
 })
 

@@ -5,6 +5,7 @@ export const TICK_MS = 33 // ~30 Hz tick loop
 export const VOTE_DURATION_MS = 5000 // 5-second pre-round difficulty vote
 export const COUNTDOWN_MS = 5000 // 5-second synchronized start
 export const POST_RACE_GRACE_MS = 6000 // 6 seconds to view finish standings
+export const FINISH_ALLOWANCE_MS = 20000 // 20-second allowance for remaining players to finish
 export const LOCKOUT_MS = 350 // Terminal static freeze on consecutive errors
 export const CONSECUTIVE_ERROR_LIMIT = 3
 export const MAX_PLAYERS = 8
@@ -82,6 +83,7 @@ export function make(options = {}) {
     elapsed: 0,
     now: 0,
     winner: null,
+    finishTimer: 0,
     overSince: 0,
     board: options.board ?? [],
     botFill: options.botFill ?? BOT_FILL_TO,
@@ -140,6 +142,9 @@ export function resolveVote(match, rng = Math.random) {
     p.finalAcc = 100
     if (p.errors) p.errors.clear()
   }
+
+  match.winner = null
+  match.finishTimer = 0
 
   // Easter Egg roll: 2% probability
   if (rng() < 0.02) {
@@ -220,6 +225,11 @@ export function leave(match, playerId) {
   match.votes.delete(playerId)
   if (match.players.size === 0) {
     match.phase = 'waiting'
+  } else if (match.phase === 'racing' && match.winner) {
+    const living = [...match.players.values()]
+    if (living.length > 0 && living.every((p) => p.finished)) {
+      match.phase = 'over'
+    }
   }
 }
 
@@ -291,6 +301,12 @@ export function processInput(match, playerId, input = {}) {
 
       if (!match.winner) {
         match.winner = p.id
+        match.finishTimer = FINISH_ALLOWANCE_MS
+      }
+
+      // Conclude immediately if all players in the match have finished
+      const living = [...match.players.values()]
+      if (living.length > 0 && living.every((q) => q.finished)) {
         match.phase = 'over'
       }
     }
@@ -389,9 +405,16 @@ export function tick(match, dtMs = TICK_MS, rng = Math.random) {
     match.elapsed += dtMs
     driveBots(match, rng)
 
-    // If everyone is finished
+    if (match.winner) {
+      match.finishTimer = Math.max(0, match.finishTimer - dtMs)
+    }
+
+    // Conclude if everyone is finished or the 20-second finish allowance expired
     const living = [...match.players.values()]
-    if (living.length > 0 && living.every((p) => p.finished)) {
+    const allFinished = living.length > 0 && living.every((p) => p.finished)
+    const allowanceExpired = match.winner && match.finishTimer <= 0
+
+    if (allFinished || allowanceExpired) {
       match.phase = 'over'
     }
   } else if (match.phase === 'over') {
@@ -439,6 +462,7 @@ export function snapshot(match) {
     easterEgg: Boolean(match.easterEgg),
     elapsed: match.elapsed,
     winner: match.winner,
+    finishCountdown: match.winner && match.phase === 'racing' ? Math.ceil(match.finishTimer / 1000) : 0,
     protocol: {
       id: match.protocol.id,
       title: match.protocol.title,
