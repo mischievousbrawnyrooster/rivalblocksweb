@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 import Leaderboard from '../components/Leaderboard.jsx'
+import SidebarAd from '../components/SidebarAd.jsx'
 import { useTitle } from '../lib/useTitle.js'
 import { useFavicon } from '../lib/useFavicon.js'
 import { makeWallTiles, styleFor } from '../lib/wallTiles.js'
@@ -722,6 +723,8 @@ export default function Play() {
           >
             Use
           </button>
+
+          <SidebarAd className="mt-8" />
         </div>
       </div>
 

@@ -190,3 +190,4 @@ Blocks are never identified by color alone:
 - Navigate to `http://localhost:5173/play/void-drillers`.
 - Verify smooth 30 Hz rendering, camera descent tracking, drilling responsiveness, and HUD telemetry.
 - Verify flanking ad banners and in-page ad breaks display correctly around the canvas layout.
+

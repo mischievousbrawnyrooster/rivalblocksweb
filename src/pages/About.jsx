@@ -1,6 +1,7 @@
 import { Link } from 'react-router-dom'
 import NewsletterForm from '../components/NewsletterForm.jsx'
 import { fleetStats } from '../data/servers.js'
+import BannerAd from '../components/BannerAd.jsx'
 import { useTitle } from '../lib/useTitle.js'
 
 const values = [
@@ -65,6 +66,11 @@ export default function About() {
           </div>
         </div>
       </header>
+
+      {/* ---------- In-Page Holo-Ad ---------- */}
+      <section className="mx-auto max-w-6xl px-5 pt-10">
+        <BannerAd />
+      </section>
 
       <section className="reveal mx-auto max-w-6xl px-5 py-20">
         <p className="rule-label">What we hold to</p>

@@ -542,3 +542,4 @@ Expected: Clean build to `dist/`.
 git add GEMINI.md CLAUDE.md
 git commit -m "docs: document Void Drillers architecture, port 8086, and game invariants"
 ```
+

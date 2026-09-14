@@ -1,6 +1,7 @@
 import { Link } from 'react-router-dom'
 import BlockArt from '../components/BlockArt.jsx'
 import Leaderboard from '../components/Leaderboard.jsx'
+import SidebarAd from '../components/SidebarAd.jsx'
 import { games } from '../data/games.js'
 import { useTitle } from '../lib/useTitle.js'
 import { useBoard } from '../lib/useBoard.js'
@@ -83,12 +84,15 @@ export default function PlayIndex() {
               Full table →
             </Link>
           </div>
-          <div className="mt-6 max-w-md">
-            {ready ? (
-              <Leaderboard entries={all} />
-            ) : (
-              <p className="text-sm text-muted">Reading the standings…</p>
-            )}
+          <div className="mt-6 grid gap-8 lg:grid-cols-[1fr_20rem] items-start">
+            <div className="max-w-md">
+              {ready ? (
+                <Leaderboard entries={all} />
+              ) : (
+                <p className="text-sm text-muted">Reading the standings…</p>
+              )}
+            </div>
+            <SidebarAd />
           </div>
         </section>
       </div>

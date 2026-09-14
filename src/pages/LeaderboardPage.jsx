@@ -1,5 +1,6 @@
 import { Link } from 'react-router-dom'
 import Leaderboard from '../components/Leaderboard.jsx'
+import BannerAd from '../components/BannerAd.jsx'
 import { useTitle } from '../lib/useTitle.js'
 import { useBoard } from '../lib/useBoard.js'
 import { rank } from '../../server/board.js'
@@ -52,6 +53,8 @@ export default function LeaderboardPage() {
             )}
           </div>
         </section>
+
+        <BannerAd className="my-12" />
 
         <section className="mt-16">
           <div className="flex items-baseline justify-between border-b border-line pb-3">

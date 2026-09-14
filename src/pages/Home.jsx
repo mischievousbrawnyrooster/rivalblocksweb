@@ -1,6 +1,7 @@
 import { Link } from 'react-router-dom'
 import GameCard from '../components/GameCard.jsx'
 import GameCarousel from '../components/GameCarousel.jsx'
+import BannerAd from '../components/BannerAd.jsx'
 import NewsletterForm from '../components/NewsletterForm.jsx'
 import { games } from '../data/games.js'
 import { fleetStats } from '../data/servers.js'
@@ -36,6 +37,11 @@ export default function Home() {
             </dd>
           </div>
         </dl>
+      </section>
+
+      {/* ---------- In-Page Holo-Ad ---------- */}
+      <section className="mx-auto max-w-6xl px-5 pt-10">
+        <BannerAd />
       </section>
 
       {/* ---------- Games ---------- */}

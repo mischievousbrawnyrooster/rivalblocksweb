@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 import Leaderboard from '../components/Leaderboard.jsx'
+import SidebarAd from '../components/SidebarAd.jsx'
 import { useTitle } from '../lib/useTitle.js'
 import { useFavicon } from '../lib/useFavicon.js'
 import { makeCamera, orbit, worldDir, poseFor } from '../lib/followCamera.js'
@@ -536,6 +537,8 @@ export default function Blockout3D() {
               <dd className="font-mono text-xs">mouse</dd>
             </div>
           </dl>
+
+          <SidebarAd className="mt-8" />
         </div>
       </div>
 

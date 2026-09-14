@@ -1,4 +1,5 @@
 import GameCard from '../components/GameCard.jsx'
+import BannerAd from '../components/BannerAd.jsx'
 import { games } from '../data/games.js'
 import { useTitle } from '../lib/useTitle.js'
 
@@ -24,6 +25,8 @@ export default function Games() {
             <GameCard key={g.slug} game={g} />
           ))}
         </div>
+
+        <BannerAd className="mt-14" />
       </div>
     </>
   )

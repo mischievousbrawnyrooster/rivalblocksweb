@@ -1,17 +1,18 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
- import Leaderboard from '../components/Leaderboard.jsx'
+import Leaderboard from '../components/Leaderboard.jsx'
+import SidebarAd from '../components/SidebarAd.jsx'
 import BlockArt from '../components/BlockArt.jsx'
 import { games } from '../data/games.js'
+import { ads as IN_GAME_ADS } from '../data/ads.js'
 import { makeWallTiles, styleFor } from '../lib/wallTiles.js'
 import { makeBombArt } from '../lib/fireTiles.js'
 import { makePickupArt } from '../lib/pickupArt.js'
 import { useTitle } from '../lib/useTitle.js'
 import { useFavicon } from '../lib/useFavicon.js'
 
-// The ad is for one of the studio's other titles, copy straight out of the
-// catalog — so it stays in fiction and there is no second place to edit it.
-const ADS = games.filter((g) => g.slug !== 'fracture-line')
+// In-universe advertisements for the popup ad attack
+const ADS = IN_GAME_ADS
 
 // The X does nothing for this long, exactly like the real thing. It is what
 // makes the pickup worth spending; the server timeout is the backstop.
@@ -1257,27 +1258,24 @@ export default function Fracture() {
                   </button>
                 </div>
                 <div className="blueprint flex items-center gap-4 p-5">
-                  {ADS[ad.which].coverImage ? (
+                  {ADS[ad.which]?.image ? (
                     <img
-                      src={ADS[ad.which].coverImage}
+                      src={ADS[ad.which].image}
                       alt={ADS[ad.which].title}
                       className="hidden h-24 w-24 shrink-0 object-cover border border-line sm:block"
                     />
-                  ) : (
-                    <BlockArt
-                      variant={ADS[ad.which].art.variant}
-                      seed={ADS[ad.which].art.seed}
-                      className="hidden h-24 w-24 shrink-0 sm:block"
-                    />
-                  )}
+                  ) : null}
                   <div className="min-w-0">
-                    <p className="rule-label">Also from RivalBlocks</p>
-                    <p className="display mt-1 text-2xl">{ADS[ad.which].title}</p>
-                    <p className="mt-1 text-sm text-flare">{ADS[ad.which].tagline}</p>
-                    <p className="mt-2 text-xs leading-relaxed text-muted">{ADS[ad.which].genre}</p>
-                    <span className="mt-3 inline-block bg-flare px-4 py-2 text-[0.625rem] font-bold uppercase tracking-[0.12em] text-on-flare">
-                      Play free now
-                    </span>
+                    <p className="rule-label">{ADS[ad.which]?.sponsor ?? 'Sponsored transmission'}</p>
+                    <p className="display mt-1 text-2xl">{ADS[ad.which]?.title}</p>
+                    <p className="mt-1 text-sm text-flare">{ADS[ad.which]?.tagline}</p>
+                    <p className="mt-2 text-xs leading-relaxed text-muted line-clamp-2">{ADS[ad.which]?.blurb}</p>
+                    <Link
+                      to={ADS[ad.which]?.href ?? '/'}
+                      className="mt-3 inline-block bg-flare px-4 py-2 text-[0.625rem] font-bold uppercase tracking-[0.12em] text-on-flare"
+                    >
+                      {ADS[ad.which]?.cta ?? 'Inspect transmission'}
+                    </Link>
                   </div>
                 </div>
               </div>
@@ -1461,6 +1459,8 @@ export default function Fracture() {
               <dd className="font-mono text-xs">E</dd>
             </div>
           </dl>
+
+          <SidebarAd className="mt-8" />
         </div>
       </div>
 

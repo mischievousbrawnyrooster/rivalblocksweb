@@ -2,6 +2,7 @@ import { useEffect } from 'react'
 import { Outlet, useLocation } from 'react-router-dom'
 import Nav from './Nav.jsx'
 import Footer from './Footer.jsx'
+import FlankingAds from './FlankingAds.jsx'
 
 export default function Layout() {
   const { pathname } = useLocation()
@@ -25,6 +26,7 @@ export default function Layout() {
         Skip to content
       </a>
       <Nav />
+      <FlankingAds />
       <main id="main" tabIndex={-1}>
         <Outlet />
       </main>

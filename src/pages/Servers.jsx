@@ -1,4 +1,5 @@
 import StatusTable from '../components/StatusTable.jsx'
+import BannerAd from '../components/BannerAd.jsx'
 import { regions, fleetStats } from '../data/servers.js'
 import { useTitle } from '../lib/useTitle.js'
 
@@ -35,6 +36,8 @@ export default function Servers() {
 
       <div className="mx-auto max-w-6xl px-5 py-16">
         <StatusTable regions={regions} />
+
+        <BannerAd className="my-12" />
 
         <div className="mt-16 grid gap-6 border-t border-line pt-12 md:grid-cols-3">
           {[

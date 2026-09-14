@@ -2,6 +2,7 @@ import { useRef, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import BlockArt from '../components/BlockArt.jsx'
 import Lightbox from '../components/Lightbox.jsx'
+import BannerAd from '../components/BannerAd.jsx'
 import NewsletterForm from '../components/NewsletterForm.jsx'
 import Leaderboard from '../components/Leaderboard.jsx'
 import NotFound from './NotFound.jsx'
@@ -185,6 +186,11 @@ export default function GameDetail() {
           </div>
         </section>
       )}
+
+      {/* ---------- In-Page Holo-Ad ---------- */}
+      <section className="mx-auto max-w-6xl px-5 py-8">
+        <BannerAd />
+      </section>
 
       {/* ---------- Gallery ---------- */}
       <section className="reveal border-y border-line bg-surface">
