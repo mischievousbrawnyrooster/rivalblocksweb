@@ -2,6 +2,7 @@
 // zero sockets, zero timers, zero I/O. Everything here is exercised by cipherrun.test.js.
 
 export const TICK_MS = 33 // ~30 Hz tick loop
+export const VOTE_DURATION_MS = 5000 // 5-second pre-round difficulty vote
 export const COUNTDOWN_MS = 5000 // 5-second synchronized start
 export const POST_RACE_GRACE_MS = 6000 // 6 seconds to view finish standings
 export const LOCKOUT_MS = 350 // Terminal static freeze on consecutive errors
@@ -73,8 +74,11 @@ export function make(options = {}) {
     nextSlot: 0,
     nextId: 1,
     seq: 0,
-    phase: 'waiting', // waiting | countdown | racing | over
+    phase: 'waiting', // waiting | voting | countdown | racing | over
     countdown: COUNTDOWN_MS,
+    voteTimer: VOTE_DURATION_MS,
+    votes: new Map(), // playerId -> 1 | 2 | 3
+    easterEgg: false,
     elapsed: 0,
     now: 0,
     winner: null,
@@ -85,6 +89,72 @@ export function make(options = {}) {
     botsOnly: options.botsOnly ?? false,
     mode: options.mode ?? 'race', // 'race' | 'solo'
   }
+}
+
+// --- Pre-Round Voting -----------------------------------------------------
+export function castVote(match, playerId, tier) {
+  if (!match?.players?.has(playerId)) return false
+
+  let tierNum
+  if (tier === 1 || tier === '1' || tier === 'short') tierNum = 1
+  else if (tier === 2 || tier === '2' || tier === 'medium') tierNum = 2
+  else if (tier === 3 || tier === '3' || tier === 'long') tierNum = 3
+  else return false
+
+  match.votes.set(playerId, tierNum)
+  return true
+}
+
+export function getVoteTallies(match) {
+  let short = 0
+  let medium = 0
+  let long = 0
+
+  if (match?.votes) {
+    for (const tier of match.votes.values()) {
+      if (tier === 1) short++
+      else if (tier === 2) medium++
+      else if (tier === 3) long++
+    }
+  }
+
+  return {
+    short,
+    medium,
+    long,
+    total: short + medium + long,
+  }
+}
+
+export function resolveVote(match, rng = Math.random) {
+  // Easter Egg roll: 2% probability
+  if (rng() < 0.02) {
+    const egg = PROTOCOLS.find((p) => p.id === 151)
+    if (egg) {
+      match.protocol = egg
+      match.easterEgg = true
+      return { winningTier: egg.tier, protocol: egg, easterEgg: true }
+    }
+  }
+
+  match.easterEgg = false
+  const tallies = getVoteTallies(match)
+  const counts = { 1: tallies.short, 2: tallies.medium, 3: tallies.long }
+  const maxVotes = Math.max(counts[1], counts[2], counts[3])
+
+  let candidateTiers
+  if (maxVotes === 0) {
+    candidateTiers = [1, 2, 3]
+  } else {
+    candidateTiers = [1, 2, 3].filter((t) => counts[t] === maxVotes)
+  }
+
+  const winningTier = candidateTiers[Math.floor(rng() * candidateTiers.length)]
+  const tierProtocols = PROTOCOLS.filter((p) => p.tier === winningTier && p.category !== 'easter_egg')
+  const chosen = tierProtocols[Math.floor(rng() * tierProtocols.length)] ?? PROTOCOLS[0]
+
+  match.protocol = chosen
+  return { winningTier, protocol: chosen, easterEgg: false }
 }
 
 // --- Player Roster --------------------------------------------------------
@@ -132,9 +202,13 @@ export function join(match, playerInfo = {}) {
 
 export function leave(match, playerId) {
   match.players.delete(playerId)
+  match.votes.delete(playerId)
   if (match.players.size === 0) {
     match.phase = 'waiting'
     match.countdown = COUNTDOWN_MS
+    match.voteTimer = VOTE_DURATION_MS
+    match.votes.clear()
+    match.easterEgg = false
     match.elapsed = 0
     match.winner = null
   }
@@ -265,6 +339,15 @@ export function tick(match, dtMs = TICK_MS, rng = Math.random) {
   // Advance Phase
   if (match.phase === 'waiting') {
     if (humans > 0 || match.botsOnly) {
+      match.phase = 'voting'
+      match.voteTimer = VOTE_DURATION_MS
+      match.votes.clear()
+      match.easterEgg = false
+    }
+  } else if (match.phase === 'voting') {
+    match.voteTimer = Math.max(0, match.voteTimer - dtMs)
+    if (match.voteTimer <= 0) {
+      resolveVote(match, rng)
       match.phase = 'countdown'
       match.countdown = COUNTDOWN_MS
     }
@@ -323,6 +406,9 @@ export function snapshot(match) {
     seq: match.seq++,
     phase: match.phase,
     countdown: Math.ceil(match.countdown / 1000),
+    voteTimer: Math.ceil(match.voteTimer / 1000),
+    votes: getVoteTallies(match),
+    easterEgg: Boolean(match.easterEgg),
     elapsed: match.elapsed,
     winner: match.winner,
     protocol: {

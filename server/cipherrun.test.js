@@ -9,6 +9,7 @@ import {
   CONSECUTIVE_ERROR_LIMIT,
   MAX_PLAYERS,
   BOT_FILL_TO,
+  VOTE_DURATION_MS,
   calculateWpm,
   calculateRawWpm,
   calculateAccuracy,
@@ -16,6 +17,9 @@ import {
   make,
   join,
   leave,
+  castVote,
+  getVoteTallies,
+  resolveVote,
   processInput,
   tick,
   snapshot,
@@ -221,16 +225,130 @@ test('reaching the end of the text completes breach and declares winner', () => 
   assert.equal(m.phase, 'over')
 })
 
-test('tick advances countdown from waiting/countdown to racing', () => {
-  const m = make({ protocolId: 1 })
-  join(m, { name: 'Alice' })
+test('castVote records valid votes and rejects invalid tiers or unknown players', () => {
+  const m = make()
+  const p1 = join(m, { name: 'Alice' })
+  const p2 = join(m, { name: 'Bob' })
 
-  // First human triggers countdown
+  assert.equal(castVote(m, p1.id, 1), true)
+  assert.equal(m.votes.get(p1.id), 1)
+
+  // Accepts string aliases
+  assert.equal(castVote(m, p1.id, 'medium'), true)
+  assert.equal(m.votes.get(p1.id), 2)
+
+  assert.equal(castVote(m, p2.id, '3'), true)
+  assert.equal(m.votes.get(p2.id), 3)
+
+  // Rejects invalid tiers
+  assert.equal(castVote(m, p1.id, 0), false)
+  assert.equal(castVote(m, p1.id, 4), false)
+  assert.equal(castVote(m, p1.id, 'invalid'), false)
+  assert.equal(m.votes.get(p1.id), 2) // Remains unchanged
+
+  // Rejects unknown player ID
+  assert.equal(castVote(m, 'unknown-player', 1), false)
+})
+
+test('getVoteTallies calculates short, medium, long and total counts', () => {
+  const m = make()
+  const p1 = join(m, { name: 'Alice' })
+  const p2 = join(m, { name: 'Bob' })
+  const p3 = join(m, { name: 'Charlie' })
+
+  let t = getVoteTallies(m)
+  assert.deepEqual(t, { short: 0, medium: 0, long: 0, total: 0 })
+
+  castVote(m, p1.id, 1)
+  castVote(m, p2.id, 1)
+  castVote(m, p3.id, 3)
+
+  t = getVoteTallies(m)
+  assert.deepEqual(t, { short: 2, medium: 0, long: 1, total: 3 })
+})
+
+test('resolveVote selects winning tier by plurality and chooses protocol from that tier', () => {
+  const m = make()
+  const p1 = join(m, { name: 'Alice' })
+  const p2 = join(m, { name: 'Bob' })
+  const p3 = join(m, { name: 'Charlie' })
+
+  castVote(m, p1.id, 2)
+  castVote(m, p2.id, 2)
+  castVote(m, p3.id, 1)
+
+  // deterministic RNG that does not roll easter egg (0.5 >= 0.02)
+  const res = resolveVote(m, () => 0.5)
+  assert.equal(res.winningTier, 2)
+  assert.equal(res.easterEgg, false)
+  assert.equal(m.protocol.tier, 2)
+  assert.ok(m.protocol.id >= 51 && m.protocol.id <= 100)
+  assert.equal(m.easterEgg, false)
+})
+
+test('resolveVote breaks ties randomly among top tied tiers', () => {
+  const m = make()
+  const p1 = join(m, { name: 'Alice' })
+  const p2 = join(m, { name: 'Bob' })
+
+  castVote(m, p1.id, 1)
+  castVote(m, p2.id, 3)
+
+  // Tie between tier 1 and tier 3.
+  let calls = 0
+  const rngTier1 = () => {
+    calls++
+    if (calls === 1) return 0.5 // easter egg check >= 0.02
+    if (calls === 2) return 0.0 // candidate index 0 -> tier 1
+    return 0.1
+  }
+  const res1 = resolveVote(m, rngTier1)
+  assert.equal(res1.winningTier, 1)
+  assert.equal(m.protocol.tier, 1)
+
+  calls = 0
+  const rngTier3 = () => {
+    calls++
+    if (calls === 1) return 0.5 // easter egg check >= 0.02
+    if (calls === 2) return 0.99 // candidate index 1 -> tier 3
+    return 0.1
+  }
+  const res3 = resolveVote(m, rngTier3)
+  assert.equal(res3.winningTier, 3)
+  assert.equal(m.protocol.tier, 3)
+})
+
+test('resolveVote triggers Protocol 151 when 2% easter egg roll passes', () => {
+  const m = make()
+  const p1 = join(m, { name: 'Alice' })
+  castVote(m, p1.id, 3)
+
+  // RNG returns 0.01 (< 0.02), triggering Easter Egg
+  const res = resolveVote(m, () => 0.01)
+  assert.equal(res.easterEgg, true)
+  assert.equal(res.protocol.id, 151)
+  assert.equal(m.easterEgg, true)
+  assert.equal(m.protocol.id, 151)
+})
+
+test('tick advances state machine waiting -> voting -> countdown -> racing', () => {
+  const m = make({ protocolId: 1 })
+  const p = join(m, { name: 'Alice' })
+
+  // First human triggers transition to voting
   tick(m, TICK_MS)
+  assert.equal(m.phase, 'voting')
+  assert.ok(m.voteTimer <= VOTE_DURATION_MS)
+
+  castVote(m, p.id, 2)
+
+  // Advance through remaining voting timer
+  tick(m, VOTE_DURATION_MS)
   assert.equal(m.phase, 'countdown')
   assert.ok(m.countdown <= COUNTDOWN_MS)
+  assert.equal(m.protocol.tier, 2)
 
-  // Advance through remaining countdown
+  // Advance through countdown to racing
   tick(m, COUNTDOWN_MS)
   assert.equal(m.phase, 'racing')
   assert.equal(m.countdown, 0)
@@ -267,3 +385,17 @@ test('snapshot produces JSON-safe public frame with progress and telemetry', () 
   assert.equal(typeof s.players[0].wpm, 'number')
   assert.equal(typeof s.players[0].progress, 'number')
 })
+
+test('snapshot exposes voteTimer, votes tally, and easterEgg flag', () => {
+  const m = make({ protocolId: 1 })
+  const p = join(m, { name: 'Alice' })
+  tick(m, TICK_MS) // enters voting
+  castVote(m, p.id, 1)
+
+  const s = JSON.parse(JSON.stringify(snapshot(m)))
+  assert.equal(s.phase, 'voting')
+  assert.equal(typeof s.voteTimer, 'number')
+  assert.deepEqual(s.votes, { short: 1, medium: 0, long: 0, total: 1 })
+  assert.equal(s.easterEgg, false)
+})
+
