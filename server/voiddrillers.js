@@ -1036,6 +1036,7 @@ export function snapshot(match) {
     voidY: Number(match.voidY.toFixed(2)),
     phase: match.phase,
     winner: match.winner,
+    elapsed: match.elapsed,
     arena: 'strata-shaft',
     botFill: match.botFill ?? 0,
     botsOnly: Boolean(match.botsOnly),

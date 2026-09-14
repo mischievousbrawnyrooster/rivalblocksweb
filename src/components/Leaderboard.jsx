@@ -1,4 +1,4 @@
-import { TOP_N, kd } from '../../server/board.js'
+import { TOP_N, kd, formatClearTime } from '../../server/board.js'
 
 /**
  * A kill-to-death ratio, or a dash.
@@ -51,6 +51,7 @@ export default function Leaderboard({ entries = [], limit = TOP_N, you = null, f
   // keeps. Marked with a glyph and aria-current as well as a colour: the site
   // never says anything with colour alone.
   const mine = (name) => you !== null && name === you
+  const hasTimes = rows.some((p) => typeof p.fastestTime === 'number')
 
   if (!full) {
     return (
@@ -73,6 +74,11 @@ export default function Leaderboard({ entries = [], limit = TOP_N, you = null, f
               {p.wins}
               <span className="sr-only"> {p.wins === 1 ? 'match won' : 'matches won'}</span>
             </span>
+            {hasTimes && (
+              <span className="w-12 shrink-0 text-right font-mono text-xs text-muted tabular-nums">
+                {typeof p.fastestTime === 'number' ? formatClearTime(p.fastestTime) : ''}
+              </span>
+            )}
             <span className="w-9 shrink-0 text-right font-mono text-xs text-muted tabular-nums">
               <Ratio row={p} />
             </span>
@@ -96,6 +102,11 @@ export default function Leaderboard({ entries = [], limit = TOP_N, you = null, f
             <th scope="col" className="rule-label py-2 pr-3 text-right">
               Won
             </th>
+            {hasTimes && (
+              <th scope="col" className="rule-label py-2 pr-3 text-right">
+                Fastest
+              </th>
+            )}
             <th scope="col" className="rule-label py-2 pr-3 text-right">
               Played
             </th>
@@ -126,6 +137,11 @@ export default function Leaderboard({ entries = [], limit = TOP_N, you = null, f
                 {mine(p.name) && <span className="sr-only">, you</span>}
               </td>
               <td className="py-2 pr-3 text-right font-mono">{p.wins}</td>
+              {hasTimes && (
+                <td className="py-2 pr-3 text-right font-mono text-muted tabular-nums">
+                  {typeof p.fastestTime === 'number' ? formatClearTime(p.fastestTime) : ''}
+                </td>
+              )}
               <td className="py-2 pr-3 text-right font-mono text-muted">{p.matches}</td>
               <td className="py-2 pr-3 text-right font-mono text-muted">{p.kills}</td>
               <td className="py-2 pr-3 text-right font-mono text-muted">{p.deaths}</td>

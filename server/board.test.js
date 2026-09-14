@@ -13,6 +13,7 @@ import {
   isBoard,
   once,
   kd,
+  formatClearTime,
 } from './board.js'
 
 /** One player as a wrapper hands them over at the end of a match. */
@@ -78,7 +79,7 @@ test('a first match puts everyone who played on the board', () => {
 
   assert.equal(b.players.length, 2)
   const ada = b.players.find((p) => p.name === 'ada')
-  assert.deepEqual(ada, { name: 'ada', wins: 1, kills: 12, deaths: 3, matches: 1, last: at })
+  assert.deepEqual(ada, { name: 'ada', wins: 1, kills: 12, deaths: 3, matches: 1, last: at, fastestTime: null })
   assert.equal(b.updated, at)
 })
 
@@ -87,7 +88,7 @@ test('a second match adds to the first rather than replacing it', () => {
   b = merge(b, [person('ada', { kills: 5, deaths: 9 })], at + 1000)
 
   const ada = b.players.find((p) => p.name === 'ada')
-  assert.deepEqual(ada, { name: 'ada', wins: 1, kills: 17, deaths: 12, matches: 2, last: at + 1000 })
+  assert.deepEqual(ada, { name: 'ada', wins: 1, kills: 17, deaths: 12, matches: 2, last: at + 1000, fastestTime: null })
   assert.equal(b.players.length, 1, 'the same person was added twice')
 })
 
@@ -210,7 +211,7 @@ test('one player across three games is one row, with the totals added up', () =>
 
   const all = combine([a, b, c])
   const ada = all.find((p) => p.name === 'ada')
-  assert.deepEqual(ada, { name: 'ada', wins: 2, kills: 14, deaths: 7, matches: 3, last: at + 50 })
+  assert.deepEqual(ada, { name: 'ada', wins: 2, kills: 14, deaths: 7, matches: 3, last: at + 50, fastestTime: null })
   assert.equal(all[0].name, 'ada', 'two wins did not outrank one')
   assert.equal(all.length, 2)
 })
@@ -275,3 +276,136 @@ test('a ratio is only offered where the game keeps the score', () => {
   const fracture = merge(emptyBoard('fracture'), [person('ada', { kills: 9, deaths: 3 })], at)
   assert.equal(kd(combine([blockout, fracture])[0]), 3)
 })
+
+// --- fastest clear time --------------------------------------------------
+
+test('a winning match with a clear time records fastestTime on the board', () => {
+  const b = merge(
+    emptyBoard('voiddrillers'),
+    [person('ada', { won: true, time: 45200 })],
+    at,
+  )
+  const ada = b.players.find((p) => p.name === 'ada')
+  assert.equal(ada.fastestTime, 45200)
+  assert.equal(ada.wins, 1)
+})
+
+test('a faster win replaces the previous fastestTime', () => {
+  let b = merge(
+    emptyBoard('voiddrillers'),
+    [person('ada', { won: true, time: 60000 })],
+    at,
+  )
+  b = merge(b, [person('ada', { won: true, time: 42000 })], at + 1000)
+  const ada = b.players.find((p) => p.name === 'ada')
+  assert.equal(ada.fastestTime, 42000, 'a faster time did not replace the old one')
+  assert.equal(ada.wins, 2)
+})
+
+test('a slower win preserves the existing fastestTime', () => {
+  let b = merge(
+    emptyBoard('voiddrillers'),
+    [person('ada', { won: true, time: 30000 })],
+    at,
+  )
+  b = merge(b, [person('ada', { won: true, time: 55000 })], at + 1000)
+  const ada = b.players.find((p) => p.name === 'ada')
+  assert.equal(ada.fastestTime, 30000, 'a slower time overwrote the faster one')
+})
+
+test('a loss does not set fastestTime even if time is present', () => {
+  const b = merge(
+    emptyBoard('voiddrillers'),
+    [person('ada', { won: false, time: 20000 })],
+    at,
+  )
+  const ada = b.players.find((p) => p.name === 'ada')
+  assert.equal(ada.fastestTime, null)
+})
+
+test('a win without a clear time does not set fastestTime', () => {
+  const b = merge(
+    emptyBoard('voiddrillers'),
+    [person('ada', { won: true })],
+    at,
+  )
+  const ada = b.players.find((p) => p.name === 'ada')
+  assert.equal(ada.fastestTime, null)
+  assert.equal(ada.wins, 1)
+})
+
+test('boards without fastestTime on rows are still valid', () => {
+  // Backwards compatibility: old board files have rows without fastestTime.
+  assert.equal(
+    isBoard({
+      game: 'fracture',
+      players: [{ name: 'ada', wins: 1, kills: 0, deaths: 0, matches: 1, last: 0 }],
+    }),
+    true,
+    'an existing row without fastestTime was rejected',
+  )
+})
+
+test('equal wins rank by fastest clear time, lower is better', () => {
+  const order = rank([
+    { name: 'zoe', wins: 2, kills: 0, deaths: 0, matches: 2, last: 0, fastestTime: 80000 },
+    { name: 'ada', wins: 2, kills: 0, deaths: 0, matches: 2, last: 0, fastestTime: 30000 },
+    { name: 'bob', wins: 2, kills: 0, deaths: 0, matches: 2, last: 0, fastestTime: 55000 },
+  ]).map((p) => p.name)
+  assert.deepEqual(order, ['ada', 'bob', 'zoe'])
+})
+
+test('a player with a clear time ranks above one without on equal wins', () => {
+  const order = rank([
+    { name: 'zoe', wins: 1, kills: 0, deaths: 0, matches: 1, last: 0, fastestTime: null },
+    { name: 'ada', wins: 1, kills: 0, deaths: 0, matches: 1, last: 0, fastestTime: 50000 },
+  ]).map((p) => p.name)
+  assert.deepEqual(order, ['ada', 'zoe'])
+})
+
+test('combine takes the fastest time across boards', () => {
+  const a = merge(
+    emptyBoard('voiddrillers'),
+    [person('ada', { won: true, time: 60000 })],
+    at,
+  )
+  const b = merge(
+    emptyBoard('fracture'),
+    [person('ada', { won: true, time: 35000, kills: 5 })],
+    at,
+  )
+  const all = combine([a, b])
+  const ada = all.find((p) => p.name === 'ada')
+  assert.equal(ada.fastestTime, 35000, 'combine did not pick the faster time')
+  assert.equal(ada.wins, 2)
+})
+
+test('combine ignores null fastestTime values', () => {
+  const a = merge(emptyBoard('blockout'), [person('ada', { won: true })], at)
+  const b = merge(
+    emptyBoard('voiddrillers'),
+    [person('ada', { won: true, time: 45000 })],
+    at,
+  )
+  const all = combine([a, b])
+  const ada = all.find((p) => p.name === 'ada')
+  assert.equal(ada.fastestTime, 45000, 'a null dragged the time to NaN or zero')
+})
+
+test('formatClearTime renders sub-minute times in seconds', () => {
+  assert.equal(formatClearTime(45200), '45.2s')
+  assert.equal(formatClearTime(8000), '8.0s')
+  assert.equal(formatClearTime(59900), '59.9s')
+})
+
+test('formatClearTime renders times at or above one minute with minutes and seconds', () => {
+  assert.equal(formatClearTime(60000), '1:00.0')
+  assert.equal(formatClearTime(75300), '1:15.3')
+  assert.equal(formatClearTime(125600), '2:05.6')
+})
+
+test('formatClearTime returns a dash for null or undefined', () => {
+  assert.equal(formatClearTime(null), '—')
+  assert.equal(formatClearTime(undefined), '—')
+})
+

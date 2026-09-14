@@ -72,7 +72,8 @@ function statusLine(snap, myId) {
   if (snap.phase === 'over') {
     if (snap.winner) {
       const winnerName = snap.players?.find((p) => p.id === snap.winner)?.name ?? 'A driller'
-      return `${winnerName} reached the extraction vault. Restarting shortly.`
+      const clearSec = snap.elapsed ? ` in ${(snap.elapsed / 1000).toFixed(1)}s` : ''
+      return `${winnerName} reached the extraction vault${clearSec}. Restarting shortly.`
     }
     return 'The crush void swallowed the shaft. No survivors. Restarting shortly.'
   }
@@ -1014,6 +1015,7 @@ export default function VoidDrillers() {
 
         const iWon = snap.winner === myIdRef.current
         const winnerObj = snap.players?.find((p) => p.id === snap.winner)
+        const clearSec = snap.elapsed ? (snap.elapsed / 1000).toFixed(1) : null
 
         ctx.textAlign = 'center'
         ctx.fillStyle = '#ff6b1a'
@@ -1023,9 +1025,19 @@ export default function VoidDrillers() {
         ctx.fillStyle = '#f8fafc'
         ctx.font = 'bold 22px ui-sans-serif, system-ui, sans-serif'
         if (iWon) {
-          ctx.fillText('YOU REACHED THE VAULT', bx + bannerW / 2, by + 68)
+          ctx.fillText('YOU REACHED THE VAULT', bx + bannerW / 2, by + 62)
+          if (clearSec) {
+            ctx.fillStyle = '#ff6b1a'
+            ctx.font = 'bold 16px monospace'
+            ctx.fillText(`Clear time: ${clearSec}s`, bx + bannerW / 2, by + 86)
+          }
         } else if (winnerObj) {
-          ctx.fillText(`${winnerObj.name} TAKES THE MATCH`, bx + bannerW / 2, by + 68)
+          ctx.fillText(`${winnerObj.name} TAKES THE MATCH`, bx + bannerW / 2, by + 62)
+          if (clearSec) {
+            ctx.fillStyle = '#94a3b8'
+            ctx.font = '13px monospace'
+            ctx.fillText(`Clear time: ${clearSec}s`, bx + bannerW / 2, by + 86)
+          }
         } else {
           ctx.fillText('CRUSH VOID CONSUMED ALL', bx + bannerW / 2, by + 68)
         }

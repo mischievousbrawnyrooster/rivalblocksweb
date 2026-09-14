@@ -52,7 +52,8 @@ export const emptyBoard = (game, mode = null) => ({ game, mode, updated: 0, play
 const isRow = (r) =>
   !!r &&
   typeof r.name === 'string' &&
-  ['wins', 'kills', 'deaths', 'matches', 'last'].every((k) => Number.isFinite(r[k]))
+  ['wins', 'kills', 'deaths', 'matches', 'last'].every((k) => Number.isFinite(r[k])) &&
+  (r.fastestTime === undefined || r.fastestTime === null || Number.isFinite(r.fastestTime))
 
 /**
  * Whether something read off disk is a board.
@@ -75,21 +76,25 @@ export const isBoard = (b) =>
 function rowFor(players, name) {
   let row = players.find((p) => p.name === name)
   if (!row) {
-    row = { name, wins: 0, kills: 0, deaths: 0, matches: 0, last: 0 }
+    row = { name, wins: 0, kills: 0, deaths: 0, matches: 0, last: 0, fastestTime: null }
     players.push(row)
   }
   return row
 }
 
-/** Best first: wins, then kills, then fewest deaths, then name. */
+/** Best first: wins, then fastest clear time, then kills, then fewest deaths, then name. */
 export const rank = (players) =>
-  [...players].sort(
-    (a, b) =>
-      b.wins - a.wins ||
-      b.kills - a.kills ||
-      a.deaths - b.deaths ||
-      (a.name < b.name ? -1 : a.name > b.name ? 1 : 0),
-  )
+  [...players].sort((a, b) => {
+    if (b.wins !== a.wins) return b.wins - a.wins
+    // Fastest clear time: lower is better, having one beats not having one.
+    const aHas = typeof a.fastestTime === 'number'
+    const bHas = typeof b.fastestTime === 'number'
+    if (aHas && bHas && a.fastestTime !== b.fastestTime) return a.fastestTime - b.fastestTime
+    if (aHas !== bHas) return aHas ? -1 : 1
+    if (b.kills !== a.kills) return b.kills - a.kills
+    if (a.deaths !== b.deaths) return a.deaths - b.deaths
+    return a.name < b.name ? -1 : a.name > b.name ? 1 : 0
+  })
 
 /**
  * Kills against deaths, or null where the game keeps neither.
@@ -135,6 +140,12 @@ export function merge(board, results, at) {
     row.deaths += Math.max(0, Math.trunc(r.deaths ?? 0))
     row.matches += 1
     row.last = at
+
+    // Fastest clear time: only recorded on a win with a valid time.
+    if (r.won && typeof r.time === 'number' && Number.isFinite(r.time) && r.time > 0) {
+      row.fastestTime =
+        typeof row.fastestTime === 'number' ? Math.min(row.fastestTime, r.time) : r.time
+    }
   }
 
   // Ranked before the cap, so what falls off the end is the bottom of the
@@ -153,9 +164,30 @@ export function combine(boards) {
       row.deaths += p.deaths
       row.matches += p.matches
       row.last = Math.max(row.last, p.last)
+      // Fastest time across all boards: pick the lower of the two, ignoring
+      // null entries so a game without clear times cannot zero the record.
+      if (typeof p.fastestTime === 'number') {
+        row.fastestTime =
+          typeof row.fastestTime === 'number' ? Math.min(row.fastestTime, p.fastestTime) : p.fastestTime
+      }
     }
   }
   return rank(players)
+}
+
+/**
+ * Human-readable clear time from milliseconds.
+ *
+ * Under a minute: `45.2s`. A minute or more: `1:15.3`. Null or absent: an em
+ * dash, same as K/D when the game keeps neither kills nor deaths.
+ */
+export function formatClearTime(ms) {
+  if (ms === null || ms === undefined) return '\u2014'
+  const totalSec = ms / 1000
+  if (totalSec < 60) return `${totalSec.toFixed(1)}s`
+  const m = Math.floor(totalSec / 60)
+  const s = totalSec - m * 60
+  return `${m}:${s < 10 ? '0' : ''}${s.toFixed(1)}`
 }
 
 /**

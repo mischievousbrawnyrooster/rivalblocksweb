@@ -46,6 +46,7 @@ const played = () =>
     won: p.id === match.winner,
     kills: 0,
     deaths: p.alive ? 0 : 1,
+    time: p.id === match.winner ? match.elapsed : null,
   }))
 
 // WebSocket server with maxPayload bound to 4096 bytes and cleartext perMessageDeflate disabled
