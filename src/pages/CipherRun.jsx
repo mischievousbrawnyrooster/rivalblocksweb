@@ -1,4 +1,4 @@
-import { useEffect, useState, useRef, useCallback } from 'react'
+﻿import { useEffect, useState, useRef, useCallback } from 'react'
 import { Link } from 'react-router-dom'
 import { useTitle } from '../lib/useTitle.js'
 import Leaderboard from '../components/Leaderboard.jsx'
@@ -204,11 +204,13 @@ export default function CipherRun() {
         } else if (msg.t === 'full') {
           setStatus('full')
         } else if (msg.t === 'snap') {
+          const protocolChanged = msg.protocol?.id && msg.protocol.id !== protocolRef.current?.id
+          const roundStarted = msg.phase === 'countdown' && snapRef.current?.phase === 'voting'
+
           snapRef.current = msg
           setSnap(msg)
 
-          // Sync protocol when round resolves to a new protocol
-          if (msg.protocol?.id && msg.protocol.id !== protocolRef.current?.id) {
+          if (protocolChanged || roundStarted) {
             const fullProto = PROTOCOLS.find((p) => p.id === msg.protocol.id) || msg.protocol
             protocolRef.current = fullProto
             setProtocol(fullProto)

@@ -1,4 +1,4 @@
-// Pure authoritative rules engine for Cipher Run. Zero external imports, zero Node APIs,
+﻿// Pure authoritative rules engine for Cipher Run. Zero external imports, zero Node APIs,
 // zero sockets, zero timers, zero I/O. Everything here is exercised by cipherrun.test.js.
 
 export const TICK_MS = 33 // ~30 Hz tick loop
@@ -93,7 +93,7 @@ export function make(options = {}) {
 
 // --- Pre-Round Voting -----------------------------------------------------
 export function castVote(match, playerId, tier) {
-  if (!match?.players?.has(playerId)) return false
+  if (!match?.players?.has(playerId) || match.phase !== 'voting') return false
 
   let tierNum
   if (tier === 1 || tier === '1' || tier === 'short') tierNum = 1
@@ -205,12 +205,6 @@ export function leave(match, playerId) {
   match.votes.delete(playerId)
   if (match.players.size === 0) {
     match.phase = 'waiting'
-    match.countdown = COUNTDOWN_MS
-    match.voteTimer = VOTE_DURATION_MS
-    match.votes.clear()
-    match.easterEgg = false
-    match.elapsed = 0
-    match.winner = null
   }
 }
 

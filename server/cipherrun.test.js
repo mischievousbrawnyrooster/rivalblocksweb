@@ -1,4 +1,4 @@
-import test from 'node:test'
+﻿import test from 'node:test'
 import assert from 'node:assert/strict'
 import {
   PROTOCOLS,
@@ -126,6 +126,11 @@ test('join() and leave() handle player roster and slot assignment', () => {
   leave(m, p1.id)
   assert.equal(m.players.size, 1)
   assert.equal(m.players.has(p1.id), false)
+
+  m.phase = 'racing'
+  leave(m, p2.id)
+  assert.equal(m.players.size, 0)
+  assert.equal(m.phase, 'waiting')
 })
 
 test('processInput matches characters and advances cursor', () => {
@@ -230,6 +235,16 @@ test('castVote records valid votes and rejects invalid tiers or unknown players'
   const p1 = join(m, { name: 'Alice' })
   const p2 = join(m, { name: 'Bob' })
 
+  // Rejects votes outside voting phase
+  assert.equal(castVote(m, p1.id, 1), false)
+  m.phase = 'countdown'
+  assert.equal(castVote(m, p1.id, 1), false)
+  m.phase = 'racing'
+  assert.equal(castVote(m, p1.id, 1), false)
+
+  // Enters voting phase
+  m.phase = 'voting'
+
   assert.equal(castVote(m, p1.id, 1), true)
   assert.equal(m.votes.get(p1.id), 1)
 
@@ -252,6 +267,7 @@ test('castVote records valid votes and rejects invalid tiers or unknown players'
 
 test('getVoteTallies calculates short, medium, long and total counts', () => {
   const m = make()
+  m.phase = 'voting'
   const p1 = join(m, { name: 'Alice' })
   const p2 = join(m, { name: 'Bob' })
   const p3 = join(m, { name: 'Charlie' })
@@ -269,6 +285,7 @@ test('getVoteTallies calculates short, medium, long and total counts', () => {
 
 test('resolveVote selects winning tier by plurality and chooses protocol from that tier', () => {
   const m = make()
+  m.phase = 'voting'
   const p1 = join(m, { name: 'Alice' })
   const p2 = join(m, { name: 'Bob' })
   const p3 = join(m, { name: 'Charlie' })
@@ -288,6 +305,7 @@ test('resolveVote selects winning tier by plurality and chooses protocol from th
 
 test('resolveVote breaks ties randomly among top tied tiers', () => {
   const m = make()
+  m.phase = 'voting'
   const p1 = join(m, { name: 'Alice' })
   const p2 = join(m, { name: 'Bob' })
 
@@ -320,6 +338,7 @@ test('resolveVote breaks ties randomly among top tied tiers', () => {
 
 test('resolveVote triggers Protocol 151 when 2% easter egg roll passes', () => {
   const m = make()
+  m.phase = 'voting'
   const p1 = join(m, { name: 'Alice' })
   castVote(m, p1.id, 3)
 
