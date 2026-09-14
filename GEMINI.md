@@ -53,7 +53,7 @@ The project contains a static marketing SPA and five authoritative multiplayer g
 1. **Strict Server Authority**:
    - The client only transmits intent (`{t: 'join' | 'move' | 'input' | 'use'}`).
    - The server decides position, collision, validity, elimination, and victory.
-   - Snapshots are broadcast at 10 Hz (grid games) or 30 Hz (continuous games).
+   - Snapshots are broadcast at 10 Hz (grid games), 30 Hz (Fracture Line), or 60 Hz (Blockout 3D, Void Drillers).
    - In continuous games (`Fracture.jsx`), the client renders `DELAY_MS = 100` behind the latest snapshot, smoothly interpolating between two known server states without client prediction or rollback.
 
 2. **Snapshot Reference Safety**:
@@ -110,7 +110,7 @@ The project contains a static marketing SPA and five authoritative multiplayer g
 - **Continuous Physics**: Downward gravity (14.0 blocks/s²), terminal fall velocity (12.0 blocks/s²), jetpack thrusters (-18.0 blocks/s²) consuming fuel with ground recharge.
 - **Thermal Dynamics**: Drilling adds heat (+0.25/s), cooling dissipates heat (-0.30/s), and reaching 100% triggers a 1.8s overheat breaker lockout.
 - **Crush Void**: Descends from -4.0 after a 4000 ms grace period, accelerating with depth to crush slow drillers. First player touching the Extraction Vault at y=250 wins.
-- **Delta Wire Protocol**: Full map transmitted once on join via run-length encoded string; 30 Hz snapshots transmit only dynamic entities and incremental block deltas.
+- **Delta Wire Protocol**: Full map transmitted once on join via run-length encoded string; 60 Hz snapshots transmit only dynamic entities and incremental block deltas.
 
 ---
 

@@ -15,7 +15,7 @@ const MINIMAP_WIDTH_PX = 80
 const CANVAS_WIDTH = SHAFT_WIDTH_PX + MINIMAP_WIDTH_PX // 640
 const CANVAS_HEIGHT = 700
 const VAULT_Y = 250
-const SEND_MS = 33
+const SEND_MS = 16
 
 const BLOCK_AIR = 0
 const BLOCK_DIRT = 1
@@ -104,6 +104,8 @@ export default function VoidDrillers() {
   const cameraYRef = useRef(0)
   const particlesRef = useRef([])
   const lastSendTimeRef = useRef(0)
+  const interpRef = useRef(new Map())
+  const voidYRef = useRef(null)
 
   // Spawn procedural spark, flame, and dust particles
   const addParticle = useCallback((p) => {
@@ -166,8 +168,9 @@ export default function VoidDrillers() {
 
     let aim = Math.PI / 2
     if (hasMouseRef.current) {
-      const playerScreenX = (me.x + 0.4) * BLOCK_PX
-      const playerScreenY = (me.y + 0.45 - cameraYRef.current) * BLOCK_PX + CANVAS_HEIGHT * 0.38
+      const myPos = interpRef.current.get(me.id) ?? me
+      const playerScreenX = (myPos.x + 0.4) * BLOCK_PX
+      const playerScreenY = (myPos.y + 0.45 - cameraYRef.current) * BLOCK_PX + CANVAS_HEIGHT * 0.38
       aim = Math.atan2(mousePosRef.current.y - playerScreenY, mousePosRef.current.x - playerScreenX)
     } else if (dx !== 0) {
       aim = dx > 0 ? Math.PI / 4 : (3 * Math.PI) / 4
@@ -217,6 +220,8 @@ export default function VoidDrillers() {
             myIdRef.current = msg.id
             setMyId(msg.id)
             mapRef.current = decodeMap(msg.map)
+            interpRef.current.clear()
+            voidYRef.current = null
           } else if (msg.t === 'full') {
             setStatus('full')
           } else if (msg.t === 'snap') {
@@ -371,8 +376,14 @@ export default function VoidDrillers() {
       const me = snap?.players?.find((p) => p.id === myIdRef.current)
 
       // Smooth camera vertical follow
-      const targetY = me ? me.y : snap ? snap.voidY + 6 : 10
-      cameraYRef.current += (targetY - cameraYRef.current) * Math.min(1, dt * 8)
+      let targetY = 10
+      if (me) {
+        const myPos = interpRef.current.get(me.id)
+        targetY = myPos ? myPos.y : me.y
+      } else if (snap) {
+        targetY = (voidYRef.current ?? snap.voidY) + 6
+      }
+      cameraYRef.current += (targetY - cameraYRef.current) * Math.min(1, dt * 10)
       const cameraY = cameraYRef.current
 
       const toScreenY = (wy) => (wy - cameraY) * BLOCK_PX + CANVAS_HEIGHT * 0.38
@@ -563,9 +574,28 @@ export default function VoidDrillers() {
 
       // 5. Render Players
       if (snap?.players) {
+        const activeIds = new Set()
         for (const p of snap.players) {
-          const px = p.x * BLOCK_PX
-          const py = toScreenY(p.y)
+          activeIds.add(p.id)
+          let pos = interpRef.current.get(p.id)
+          if (!pos) {
+            pos = { x: p.x, y: p.y }
+            interpRef.current.set(p.id, pos)
+          } else {
+            const dx = p.x - pos.x
+            const dy = p.y - pos.y
+            if (Math.abs(dx) > 3 || Math.abs(dy) > 3) {
+              pos.x = p.x
+              pos.y = p.y
+            } else {
+              const factor = Math.min(1, dt * 30)
+              pos.x += dx * factor
+              pos.y += dy * factor
+            }
+          }
+
+          const px = pos.x * BLOCK_PX
+          const py = toScreenY(pos.y)
           const pw = 0.8 * BLOCK_PX // ~22.4px
           const ph = 0.9 * BLOCK_PX // ~25.2px
           const pcx = px + pw / 2
@@ -588,7 +618,7 @@ export default function VoidDrillers() {
             for (let f = 0; f < 2; f++) {
               addParticle({
                 x: pcx + (Math.random() - 0.5) * 8,
-                y: (p.y + 0.9) * BLOCK_PX,
+                y: (pos.y + 0.9) * BLOCK_PX,
                 vx: (Math.random() - 0.5) * 30,
                 vy: 50 + Math.random() * 80,
                 color: Math.random() > 0.4 ? '#ff6b1a' : '#fbbf24',
@@ -604,7 +634,7 @@ export default function VoidDrillers() {
           if (p.drilling) {
             const tipDist = 24
             const tipX = pcx + Math.cos(p.aim) * tipDist
-            const tipWorldY = (p.y + 0.45) * BLOCK_PX + Math.sin(p.aim) * tipDist
+            const tipWorldY = (pos.y + 0.45) * BLOCK_PX + Math.sin(p.aim) * tipDist
             for (let s = 0; s < 2; s++) {
               addParticle({
                 x: tipX,
@@ -677,11 +707,29 @@ export default function VoidDrillers() {
             ctx.fillText('▼ YOU', pcx, py - 18)
           }
         }
+
+        // Clean up departed players
+        for (const id of interpRef.current.keys()) {
+          if (!activeIds.has(id)) {
+            interpRef.current.delete(id)
+          }
+        }
       }
 
       // 6. Render Crush Void Grinder Horizon
       if (snap) {
-        const voidScreenY = toScreenY(snap.voidY)
+        if (voidYRef.current === null) {
+          voidYRef.current = snap.voidY
+        } else {
+          const dVoid = snap.voidY - voidYRef.current
+          if (Math.abs(dVoid) > 5) {
+            voidYRef.current = snap.voidY
+          } else {
+            voidYRef.current += dVoid * Math.min(1, dt * 25)
+          }
+        }
+        const voidY = voidYRef.current
+        const voidScreenY = toScreenY(voidY)
         if (voidScreenY >= -120) {
           // Crushed void interior
           const voidGrad = ctx.createLinearGradient(0, 0, 0, Math.max(0, voidScreenY))
@@ -720,7 +768,7 @@ export default function VoidDrillers() {
           if (Math.random() < 0.35) {
             addParticle({
               x: Math.random() * SHAFT_WIDTH_PX,
-              y: snap.voidY * BLOCK_PX,
+              y: voidY * BLOCK_PX,
               vx: (Math.random() - 0.5) * 40,
               vy: 30 + Math.random() * 60,
               color: Math.random() > 0.5 ? '#a855f7' : '#ff6b1a',
@@ -770,7 +818,7 @@ export default function VoidDrillers() {
 
       // Crush Void on minimap
       if (snap) {
-        const miniVoidY = toMiniY(snap.voidY)
+        const miniVoidY = toMiniY(voidYRef.current ?? snap.voidY)
         ctx.fillStyle = 'rgba(239, 68, 68, 0.45)'
         ctx.fillRect(stripX + 8, miniTrackTop, stripW - 16, Math.max(2, miniVoidY - miniTrackTop))
 
@@ -785,7 +833,8 @@ export default function VoidDrillers() {
       // Player pips on minimap
       if (snap?.players) {
         for (const p of snap.players) {
-          const myPip = toMiniY(p.y)
+          const pos = interpRef.current.get(p.id)
+          const myPip = toMiniY(pos ? pos.y : p.y)
           const isMe = p.id === myIdRef.current
           const col = PLAYER_COLORS[p.slot % PLAYER_COLORS.length]
 

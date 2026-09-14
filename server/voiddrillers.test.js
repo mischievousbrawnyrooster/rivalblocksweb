@@ -180,7 +180,7 @@ test('destroying gas pocket generates expanding hazard', () => {
 
   setInput(m, 'p1', { dx: 0, thrust: false, drill: true, aim: Math.PI / 2 })
   // Drill the gas block
-  for (let i = 0; i < 5; i++) tick(m, TICK_MS)
+  for (let i = 0; i < 15; i++) tick(m, TICK_MS)
 
   assert.equal(m.grid[gasIdx], BLOCK_AIR, 'gas block popped into air')
   assert.equal(m.hazards.length > 0, true, 'expanding gas hazard created')
@@ -197,11 +197,12 @@ test('collecting geode clears heat and activates super drill', () => {
   m.hp[geodeIdx] = GEODE_HP
 
   setInput(m, 'p1', { dx: 0, thrust: false, drill: true, aim: Math.PI / 2 })
-  for (let i = 0; i < 8; i++) tick(m, TICK_MS)
+  for (let i = 0; i < 20; i++) tick(m, TICK_MS)
 
   assert.equal(m.grid[geodeIdx], BLOCK_AIR)
   assert.equal(p.heat, 0, 'drill heat flushed')
   assert.equal(p.superDrillTimer > 0, true, 'super drill active')
+
 })
 
 test('crush void advances after grace period and crushes drillers', () => {

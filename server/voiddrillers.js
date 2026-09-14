@@ -14,8 +14,9 @@ export const BLOCK_GAS = 4
 export const BLOCK_GEODE = 5
 export const BLOCK_VAULT = 6
 
-export const TICK_MS = 33
+export const TICK_MS = 16 // 60 FPS simulation loop
 export const GRACE_MS = 4000
+
 export const VAULT_Y = 250
 export const SPAWN_Y = 1.0
 
