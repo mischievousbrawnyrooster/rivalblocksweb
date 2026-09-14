@@ -59,11 +59,7 @@ export default defineConfig({
       // Not '/ws…': proxy keys match by prefix, here and in nginx, so anything
       // starting '/ws' is swallowed by the Blockout rule above.
       '/blockout3d-ws': { target: 'ws://127.0.0.1:8085', ws: true },
-      '/voiddrillers-ws': {
-        target: 'http://127.0.0.1:8086',
-        ws: true,
-        rewriteWsOrigin: true,
-      },
+      '/voiddrillers-ws': { target: 'ws://127.0.0.1:8086', ws: true },
     },
   },
 })
