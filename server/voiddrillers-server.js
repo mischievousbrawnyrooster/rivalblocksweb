@@ -93,6 +93,7 @@ wss.on('connection', (ws) => {
     if (admin) {
       if (msg.t === 'kick' && typeof msg.id === 'string') {
         const target = sockets.get(msg.id)
+        sockets.delete(msg.id)
         leave(match, msg.id)
         if (target) {
           target.player = null
@@ -118,8 +119,7 @@ wss.on('connection', (ws) => {
       }
 
       const name = sanitizeName(msg.name)
-      const id = typeof msg.id === 'string' && msg.id.length > 0 ? msg.id : undefined
-      const player = join(match, { id, name })
+      const player = join(match, { name })
       if (!player) {
         ws.send(JSON.stringify({ t: 'full' }))
         ws.close()
@@ -182,7 +182,7 @@ setInterval(() => {
   last = now
   tick(match, dt)
 
-  if (match.phase === 'over') {
+  if (match.phase === 'over' && match.players.size > 0) {
     if (!overSince) {
       overSince = now
     } else if (now - overSince >= RESET_DELAY_MS) {
