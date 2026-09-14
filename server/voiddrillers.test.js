@@ -215,7 +215,8 @@ test('crush void advances after grace period and crushes drillers', () => {
   // Advance past grace period (4000 ms)
   for (let t = 0; t < 5000; t += TICK_MS) tick(m, TICK_MS)
 
-  assert.equal(m.voidY > 0, true, 'void is descending')
+  assert.equal(m.voidY > INITIAL_VOID_Y, true, 'void is descending')
+
 
   // Advance until void passes player position
   while (m.voidY < p.y) {

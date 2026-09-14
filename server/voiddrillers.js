@@ -20,10 +20,10 @@ export const VAULT_Y = 250
 export const SPAWN_Y = 1.0
 
 export const INITIAL_VOID_Y = -4.0
-export const BASE_VOID_SPEED = 4.8 // blocks/sec
-export const VOID_ACCEL = 0.05 // blocks/sec^2
-export const VOID_DEPTH_ACCEL = 0.008 // blocks/sec per block depth
-export const MAX_VOID_SPEED = 12.0
+export const BASE_VOID_SPEED = 1.4 // blocks/sec (gentler initial descent)
+export const VOID_ACCEL = 0.015 // blocks/sec^2 (gradual time ramping)
+export const VOID_DEPTH_ACCEL = 0.003 // blocks/sec per block depth
+export const MAX_VOID_SPEED = 4.2 // blocks/sec cap
 
 export const PLAYER_WIDTH = 0.8
 export const PLAYER_HEIGHT = 0.9
@@ -40,11 +40,14 @@ export const GAS_HP = 1
 export const GEODE_HP = 2
 
 export const DRILL_RANGE = 1.35 // blocks
-export const DRILL_PULSE_INTERVAL = 125 // ms (8 pulses per sec)
+export const SUPER_DRILL_RANGE = 1.65 // blocks
+export const DRILL_PULSE_INTERVAL = 110 // ms (~9 pulses per sec)
+export const SUPER_DRILL_PULSE_INTERVAL = 55 // ms (~18 pulses per sec)
 export const HEAT_ACCUMULATE_RATE = 0.25 // per sec
 export const HEAT_DISSIPATE_RATE = 0.30 // per sec
 export const OVERHEAT_LOCKOUT_MS = 1800 // ms
-export const SUPER_DRILL_DURATION_MS = 3000 // ms
+export const SUPER_DRILL_DURATION_MS = 5000 // ms (extended to 5s)
+
 
 export const GAS_HAZARD_RADIUS = 2.0
 export const GAS_HAZARD_TTL_MS = 4000
@@ -158,23 +161,32 @@ export function make(options = {}) {
         type = BLOCK_DIRT
         hitPoints = 1
       } else if (y >= 3 && y <= 10) {
-        // Upper strata: soft dirt with air pockets in clusters
+        // Upper strata: soft dirt with air pockets and occasional surface geodes
         if (veinRemaining <= 0) {
-          veinType = rng() < 0.20 ? BLOCK_AIR : BLOCK_DIRT
+          const u = rng()
+          if (u < 0.18) {
+            veinType = BLOCK_AIR
+          } else if (u < 0.28) {
+            veinType = BLOCK_GEODE
+          } else {
+            veinType = BLOCK_DIRT
+          }
           veinRemaining = Math.floor(rng() * 4) + 2
         }
         type = veinType
-        hitPoints = type === BLOCK_AIR ? 0 : DIRT_HP
+        if (type === BLOCK_AIR) hitPoints = 0
+        else if (type === BLOCK_GEODE) hitPoints = GEODE_HP
+        else hitPoints = DIRT_HP
         veinRemaining--
       } else {
-        // Subterranean strata (11 <= y < VAULT_Y)
+        // Subterranean strata (11 <= y < VAULT_Y): dirt, stone, gas, and 16% geode caches
         if (veinRemaining <= 0) {
           const r = rng()
-          if (r < 0.42) {
+          if (r < 0.44) {
             veinType = BLOCK_DIRT
-          } else if (r < 0.82) {
+          } else if (r < 0.74) {
             veinType = BLOCK_STONE
-          } else if (r < 0.92) {
+          } else if (r < 0.84) {
             veinType = BLOCK_GAS
           } else {
             veinType = BLOCK_GEODE
@@ -188,6 +200,7 @@ export function make(options = {}) {
         else if (type === BLOCK_GEODE) hitPoints = GEODE_HP
         veinRemaining--
       }
+
 
       grid[idx] = type
       hp[idx] = hitPoints
@@ -294,7 +307,10 @@ function executeDrillPulse(match, p) {
   const cos = Math.cos(aim)
   const sin = Math.sin(aim)
 
-  for (let d = 0.35; d <= DRILL_RANGE; d += 0.1) {
+  const isSuper = p.superDrillTimer > 0
+  const maxReach = isSuper ? SUPER_DRILL_RANGE : DRILL_RANGE
+
+  for (let d = 0.35; d <= maxReach; d += 0.1) {
     const bx = Math.floor(cx + cos * d)
     const by = Math.floor(cy + sin * d)
     if (bx < 0 || bx >= WIDTH || by < 0 || by >= DEPTH) continue
@@ -309,8 +325,8 @@ function executeDrillPulse(match, p) {
         break
       }
 
-      const isSuper = p.superDrillTimer > 0
       const dmg = isSuper ? match.hp[idx] : 1
+
       match.hp[idx] = Math.max(0, match.hp[idx] - dmg)
 
       if (match.hp[idx] === 0) {
@@ -401,14 +417,16 @@ export function tick(match, dtMs) {
 
     // Drilling execution
     if (p.input.drill && !p.overheated) {
+      const interval = p.superDrillTimer > 0 ? SUPER_DRILL_PULSE_INTERVAL : DRILL_PULSE_INTERVAL
       p.drillTimer = (p.drillTimer || 0) + dtMs
-      while (p.drillTimer >= DRILL_PULSE_INTERVAL) {
-        p.drillTimer -= DRILL_PULSE_INTERVAL
+      while (p.drillTimer >= interval) {
+        p.drillTimer -= interval
         executeDrillPulse(match, p)
       }
     } else {
       p.drillTimer = 0
     }
+
 
     // Jetpack & Gravity
     const canThrust = p.input.thrust && p.fuel > 0
