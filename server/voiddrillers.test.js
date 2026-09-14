@@ -4,6 +4,7 @@ import {
   make,
   join,
   leave,
+  removePlayer,
   setInput,
   tick,
   snapshot,
@@ -18,10 +19,26 @@ import {
   BLOCK_GAS,
   BLOCK_GEODE,
   BLOCK_VAULT,
+  CHAR_TO_BLOCK,
   TICK_MS,
   GRACE_MS,
   VAULT_Y,
-  BASE_VOID_SPEED
+  SPAWN_Y,
+  INITIAL_VOID_Y,
+  BASE_VOID_SPEED,
+  VOID_ACCEL,
+  VOID_DEPTH_ACCEL,
+  MAX_VOID_SPEED,
+  PLAYER_WIDTH,
+  PLAYER_HEIGHT,
+  WALK_SPEED,
+  GRAVITY,
+  TERMINAL_VELOCITY,
+  JETPACK_THRUST,
+  DIRT_HP,
+  STONE_HP,
+  GAS_HP,
+  GEODE_HP
 } from './voiddrillers.js'
 
 test('shaft generation initializes correct dimensions and boundary bedrock', () => {
@@ -62,12 +79,23 @@ test('run-length encoding serializes and compresses the shaft map', () => {
   }
 })
 
+test('decodeMap resists prototype pollution keys', () => {
+  const decoded = decodeMap('1__proto__1constructor1toString')
+  assert.equal(decoded.length > 0, true)
+  for (const b of decoded) {
+    assert.equal(typeof b, 'number')
+    assert.equal(b, BLOCK_AIR)
+  }
+  assert.equal(Object.hasOwn(CHAR_TO_BLOCK, 'constructor'), false)
+  assert.equal(Object.hasOwn(CHAR_TO_BLOCK, '__proto__'), false)
+})
+
 test('player joins at launch gantry and respects gravity and solid collisions', () => {
   const m = make({ seed: 123 })
   const p = join(m, { id: 'p1', name: 'DrillerOne' })
   assert.ok(p)
   assert.equal(p.alive, true)
-  assert.equal(p.y, 1.0)
+  assert.equal(p.y, SPAWN_Y)
 
   // Advance simulation by 5 ticks with no inputs
   const initialY = p.y
@@ -83,16 +111,42 @@ test('player joins at launch gantry and respects gravity and solid collisions', 
   assert.equal(p.y > initialY, true, 'player accelerates downward under gravity')
 })
 
+test('player flush against solid right wall does not wall-cling and falls under gravity', () => {
+  const m = make({ seed: 501 })
+  const p = join(m, { id: 'p1', name: 'WallHugger' })
+  p.x = 5.1 // flush against right wall at column 6 (5.1 + PLAYER_WIDTH + epsilon = 6.0)
+  p.y = 10.0
+  p.vy = 0
+
+  // Column 6 has solid blocks from y = 10 to 15
+  for (let y = 10; y <= 15; y++) {
+    m.grid[y * WIDTH + 6] = BLOCK_STONE
+    m.hp[y * WIDTH + 6] = STONE_HP
+  }
+  // Column 5 below player is empty air
+  for (let y = 10; y <= 15; y++) {
+    m.grid[y * WIDTH + 5] = BLOCK_AIR
+    m.hp[y * WIDTH + 5] = 0
+  }
+
+  // Tick simulation with no horizontal input
+  setInput(m, 'p1', { dx: 0, thrust: false, drill: false, aim: 0 })
+  for (let i = 0; i < 5; i++) tick(m, TICK_MS)
+
+  assert.equal(p.y > 10.0, true, 'driller fell downward rather than clinging to right wall')
+  assert.equal(p.grounded, false, 'driller is in free-fall')
+})
+
 test('drilling damages blocks, builds heat, and triggers overheat lockout', () => {
   const m = make({ seed: 777 })
   const p = join(m, { id: 'p1', name: 'Tester' })
   p.x = 5.0
   p.y = 10.0
 
-  // Place a stone block directly below player (durability 3)
+  // Place a stone block directly below player (durability STONE_HP)
   const targetIdx = 11 * WIDTH + 5
   m.grid[targetIdx] = BLOCK_STONE
-  m.hp[targetIdx] = 3
+  m.hp[targetIdx] = STONE_HP
 
   // Aim downwards (PI / 2) and drill
   setInput(m, 'p1', { dx: 0, thrust: false, drill: true, aim: Math.PI / 2 })
@@ -100,7 +154,7 @@ test('drilling damages blocks, builds heat, and triggers overheat lockout', () =
   // Tick for 250ms (two drill pulses)
   for (let i = 0; i < 8; i++) tick(m, TICK_MS)
 
-  assert.equal(m.hp[targetIdx] < 3, true, 'stone block sustained damage')
+  assert.equal(m.hp[targetIdx] < STONE_HP, true, 'stone block sustained damage')
   assert.equal(p.heat > 0, true, 'drill heat accumulated')
 
   // Continue drilling until overheated
@@ -122,7 +176,7 @@ test('destroying gas pocket generates expanding hazard', () => {
   p.y = 10.0
   const gasIdx = 11 * WIDTH + 5
   m.grid[gasIdx] = BLOCK_GAS
-  m.hp[gasIdx] = 1
+  m.hp[gasIdx] = GAS_HP
 
   setInput(m, 'p1', { dx: 0, thrust: false, drill: true, aim: Math.PI / 2 })
   // Drill the gas block
@@ -140,10 +194,10 @@ test('collecting geode clears heat and activates super drill', () => {
   p.heat = 0.8
   const geodeIdx = 11 * WIDTH + 5
   m.grid[geodeIdx] = BLOCK_GEODE
-  m.hp[geodeIdx] = 1
+  m.hp[geodeIdx] = GEODE_HP
 
   setInput(m, 'p1', { dx: 0, thrust: false, drill: true, aim: Math.PI / 2 })
-  for (let i = 0; i < 5; i++) tick(m, TICK_MS)
+  for (let i = 0; i < 8; i++) tick(m, TICK_MS)
 
   assert.equal(m.grid[geodeIdx], BLOCK_AIR)
   assert.equal(p.heat, 0, 'drill heat flushed')
@@ -154,9 +208,9 @@ test('crush void advances after grace period and crushes drillers', () => {
   const m = make({ seed: 555 })
   const p = join(m, { id: 'p1', name: 'SlowDriller' })
   p.x = 5.0
-  p.y = 1.0
+  p.y = SPAWN_Y
 
-  assert.equal(m.voidY, -4.0)
+  assert.equal(m.voidY, INITIAL_VOID_Y)
 
   // Advance past grace period (4000 ms)
   for (let t = 0; t < 5000; t += TICK_MS) tick(m, TICK_MS)
@@ -171,6 +225,24 @@ test('crush void advances after grace period and crushes drillers', () => {
 
   assert.equal(p.alive, false, 'player eliminated by crush void')
   assert.equal(m.phase, 'over', 'match over when all drillers crushed')
+})
+
+test('crush void accelerates with depth', () => {
+  const m = make({ seed: 505 })
+  m.elapsed = GRACE_MS + 1000
+  m.voidY = 100.0 // deep in the shaft
+  const voidYBefore = m.voidY
+  tick(m, 1000)
+  const deltaDeep = m.voidY - voidYBefore
+
+  const m2 = make({ seed: 506 })
+  m2.elapsed = GRACE_MS + 1000
+  m2.voidY = 10.0 // shallow in the shaft
+  const voidY2Before = m2.voidY
+  tick(m2, 1000)
+  const deltaShallow = m2.voidY - voidY2Before
+
+  assert.equal(deltaDeep > deltaShallow, true, 'void moves faster at deeper depth')
 })
 
 test('first driller to touch extraction vault wins', () => {
@@ -229,7 +301,7 @@ test('jetpack consumes fuel and accelerates upward, recharges on ground', () => 
   p.y = 10.0
   p.fuel = 0.2
   m.grid[11 * WIDTH + 5] = BLOCK_STONE
-  m.hp[11 * WIDTH + 5] = 3
+  m.hp[11 * WIDTH + 5] = STONE_HP
 
   // Fall onto the stone block
   for (let i = 0; i < 10; i++) tick(m, TICK_MS)
@@ -243,7 +315,7 @@ test('horizontal movement stops at bedrock border', () => {
   const m = make({ seed: 444 })
   const p = join(m, { id: 'p1', name: 'Walker' })
   p.x = 2.0
-  p.y = 1.0
+  p.y = SPAWN_Y
 
   // Walk left toward bedrock wall at col 0
   setInput(m, 'p1', { dx: -1, thrust: false, drill: false, aim: 0 })
@@ -271,6 +343,45 @@ test('last surviving driller among multiple players wins match', () => {
   assert.equal(p1.alive, true, 'p1 still alive')
   assert.equal(m.phase, 'over', 'match ends when 1 driller survives')
   assert.equal(m.winner, 'p1', 'p1 declared winner')
+})
+
+test('leaving player triggers survival win for remaining driller', () => {
+  const m = make({ seed: 502 })
+  const p1 = join(m, { id: 'p1', name: 'Stayer' })
+  const p2 = join(m, { id: 'p2', name: 'Leaver' })
+  assert.equal(m.phase, 'playing')
+
+  // p2 leaves match
+  leave(m, 'p2')
+
+  assert.equal(m.players.size, 1)
+  assert.equal(m.phase, 'over', 'match ends when only one player remains')
+  assert.equal(m.winner, 'p1', 'remaining player wins by survival')
+  assert.equal(m.winReason, 'survival')
+})
+
+test('removePlayer is exported alias for leave', () => {
+  const m = make({ seed: 503 })
+  const p1 = join(m, { id: 'p1', name: 'P1' })
+  const p2 = join(m, { id: 'p2', name: 'P2' })
+  removePlayer(m, 'p1')
+  assert.equal(m.players.has('p1'), false)
+  assert.equal(m.players.size, 1)
+})
+
+test('setInput rejects NaN and non-finite inputs without corrupting state', () => {
+  const m = make({ seed: 504 })
+  const p = join(m, { id: 'p1', name: 'Tester' })
+  const initialDx = p.input.dx
+  const initialAim = p.input.aim
+
+  setInput(m, 'p1', { dx: NaN, aim: Infinity })
+  assert.equal(p.input.dx, initialDx)
+  assert.equal(p.input.aim, initialAim)
+
+  setInput(m, 'p1', { dx: -Infinity, aim: NaN })
+  assert.equal(p.input.dx, initialDx)
+  assert.equal(p.input.aim, initialAim)
 })
 
 test('drilling heat dissipates when idle', () => {

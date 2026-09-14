@@ -17,17 +17,27 @@ export const BLOCK_VAULT = 6
 export const TICK_MS = 33
 export const GRACE_MS = 4000
 export const VAULT_Y = 250
+export const SPAWN_Y = 1.0
 
+export const INITIAL_VOID_Y = -4.0
 export const BASE_VOID_SPEED = 4.8 // blocks/sec
 export const VOID_ACCEL = 0.05 // blocks/sec^2
+export const VOID_DEPTH_ACCEL = 0.008 // blocks/sec per block depth
 export const MAX_VOID_SPEED = 12.0
 
+export const PLAYER_WIDTH = 0.8
+export const PLAYER_HEIGHT = 0.9
 export const WALK_SPEED = 4.5 // blocks/sec
 export const GRAVITY = 14.0 // blocks/sec^2
 export const TERMINAL_VELOCITY = 12.0 // blocks/sec
 export const JETPACK_THRUST = -18.0 // blocks/sec^2
 export const FUEL_CONSUME_RATE = 0.35 // per sec
 export const FUEL_RECHARGE_RATE = 0.50 // per sec
+
+export const DIRT_HP = 1
+export const STONE_HP = 3
+export const GAS_HP = 1
+export const GEODE_HP = 2
 
 export const DRILL_RANGE = 1.35 // blocks
 export const DRILL_PULSE_INTERVAL = 125 // ms (8 pulses per sec)
@@ -75,12 +85,12 @@ export function encodeMap(grid) {
 export function decodeMap(str) {
   if (!str) return new Uint8Array(0)
   const out = []
-  const re = /(\d+)([A-Za-z])/g
+  const re = /(\d+)([A-Za-z_]+)/g
   let match
   while ((match = re.exec(str)) !== null) {
     const count = parseInt(match[1], 10)
     const char = match[2].toUpperCase()
-    const type = CHAR_TO_BLOCK[char] ?? BLOCK_AIR
+    const type = Object.hasOwn(CHAR_TO_BLOCK, char) ? CHAR_TO_BLOCK[char] : BLOCK_AIR
     for (let i = 0; i < count; i++) {
       out.push(type)
     }
@@ -154,7 +164,7 @@ export function make(options = {}) {
           veinRemaining = Math.floor(rng() * 4) + 2
         }
         type = veinType
-        hitPoints = type === BLOCK_AIR ? 0 : 1
+        hitPoints = type === BLOCK_AIR ? 0 : DIRT_HP
         veinRemaining--
       } else {
         // Subterranean strata (11 <= y < VAULT_Y)
@@ -172,10 +182,10 @@ export function make(options = {}) {
           veinRemaining = Math.floor(rng() * 4) + 2
         }
         type = veinType
-        if (type === BLOCK_DIRT) hitPoints = 1
-        else if (type === BLOCK_STONE) hitPoints = 3
-        else if (type === BLOCK_GAS) hitPoints = 1
-        else if (type === BLOCK_GEODE) hitPoints = 2
+        if (type === BLOCK_DIRT) hitPoints = DIRT_HP
+        else if (type === BLOCK_STONE) hitPoints = STONE_HP
+        else if (type === BLOCK_GAS) hitPoints = GAS_HP
+        else if (type === BLOCK_GEODE) hitPoints = GEODE_HP
         veinRemaining--
       }
 
@@ -192,7 +202,7 @@ export function make(options = {}) {
     players: new Map(),
     nextSlot: 0,
     elapsed: 0,
-    voidY: -4.0,
+    voidY: INITIAL_VOID_Y,
     seq: 0,
     phase: 'playing',
     winner: null,
@@ -213,7 +223,7 @@ export function join(match, playerInfo = {}) {
     name,
     slot,
     x: spawnX,
-    y: 1.0,
+    y: SPAWN_Y,
     vx: 0,
     vy: 0,
     fuel: 1.0,
@@ -236,10 +246,11 @@ export function join(match, playerInfo = {}) {
 }
 
 export function leave(match, playerId) {
+  const hadMultiple = match.players.size > 1
   match.players.delete(playerId)
   if (match.phase === 'playing' && match.players.size > 0) {
     const alive = [...match.players.values()].filter(p => p.alive)
-    if (alive.length === 1 && match.players.size > 1) {
+    if (alive.length === 1 && hadMultiple) {
       match.phase = 'over'
       match.winner = alive[0].id
       match.winReason = 'survival'
@@ -250,10 +261,12 @@ export function leave(match, playerId) {
   }
 }
 
+export const removePlayer = leave
+
 export function setInput(match, playerId, input = {}) {
   const p = match.players.get(playerId)
   if (!p) return
-  if (typeof input.dx === 'number') {
+  if (typeof input.dx === 'number' && Number.isFinite(input.dx)) {
     p.input.dx = Math.max(-1, Math.min(1, input.dx))
   }
   if (typeof input.thrust === 'boolean') {
@@ -262,7 +275,7 @@ export function setInput(match, playerId, input = {}) {
   if (typeof input.drill === 'boolean') {
     p.input.drill = input.drill
   }
-  if (typeof input.aim === 'number' && !Number.isNaN(input.aim)) {
+  if (typeof input.aim === 'number' && Number.isFinite(input.aim)) {
     p.input.aim = input.aim
   }
 }
@@ -335,7 +348,8 @@ export function tick(match, dtMs) {
   match.elapsed += dtMs
   if (match.elapsed > GRACE_MS) {
     const postGraceSec = (match.elapsed - GRACE_MS) / 1000
-    const speed = Math.min(MAX_VOID_SPEED, BASE_VOID_SPEED + postGraceSec * VOID_ACCEL)
+    const depth = Math.max(0, match.voidY)
+    const speed = Math.min(MAX_VOID_SPEED, BASE_VOID_SPEED + postGraceSec * VOID_ACCEL + depth * VOID_DEPTH_ACCEL)
     match.voidY += speed * dtSec
   }
 
@@ -454,8 +468,8 @@ export function tick(match, dtMs) {
 
     // Vertical Movement & AABB Collision
     const newY = p.y + p.vy * dtSec
-    const minCol = Math.floor(p.x + 0.1)
-    const maxCol = Math.floor(p.x + 0.9)
+    const minCol = Math.floor(p.x + 0.101)
+    const maxCol = Math.floor(p.x + 0.899)
 
     if (p.vy >= 0) {
       const targetRow = Math.floor(newY + 1.0)
