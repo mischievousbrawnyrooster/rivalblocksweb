@@ -5,36 +5,52 @@ import BannerAd from '../components/BannerAd.jsx'
 import Leaderboard from '../components/Leaderboard.jsx'
 import { useTitle } from '../lib/useTitle.js'
 import { useFavicon } from '../lib/useFavicon.js'
+// Pure, like board.js: the shaft's shape, block ids and map decoder come from
+// the rules module itself, so a new block type cannot land on one side only.
+import {
+  WIDTH,
+  DEPTH,
+  TOTAL_BLOCKS,
+  VAULT_Y,
+  PLAYER_WIDTH,
+  PLAYER_HEIGHT,
+  BLOCK_AIR,
+  BLOCK_DIRT,
+  BLOCK_STONE,
+  BLOCK_BEDROCK,
+  BLOCK_GAS,
+  BLOCK_GEODE,
+  BLOCK_VAULT,
+  BLOCK_SABOTAGE,
+  BLOCK_OBSIDIAN,
+  GRIEF_MS,
+  decodeMap,
+} from '../../server/voiddrillers.js'
 
-// Shaft and grid dimensions matching server/voiddrillers.js
-const WIDTH = 20
-const DEPTH = 260
-const TOTAL_BLOCKS = WIDTH * DEPTH
 const BLOCK_PX = 28
 const SHAFT_WIDTH_PX = WIDTH * BLOCK_PX // 560
 const MINIMAP_WIDTH_PX = 80
 const CANVAS_WIDTH = SHAFT_WIDTH_PX + MINIMAP_WIDTH_PX // 640
 const CANVAS_HEIGHT = 700
-const VAULT_Y = 250
 const SEND_MS = 16
+// The minimap's depth track, shared by its drawing and by spectators dragging it.
+const MINI_TOP = 40
+const MINI_H = CANVAS_HEIGHT - 64
 
-const BLOCK_AIR = 0
-const BLOCK_DIRT = 1
-const BLOCK_STONE = 2
-const BLOCK_BEDROCK = 3
-const BLOCK_GAS = 4
-const BLOCK_GEODE = 5
-const BLOCK_VAULT = 6
+// A pointer event in canvas pixels, whatever size the canvas is drawn at.
+function toCanvas(canvas, e) {
+  const rect = canvas.getBoundingClientRect()
+  return {
+    x: (e.clientX - rect.left) * (canvas.width / rect.width),
+    y: (e.clientY - rect.top) * (canvas.height / rect.height),
+  }
+}
 
-const CHAR_TO_BLOCK = {
-  A: BLOCK_AIR,
-  D: BLOCK_DIRT,
-  S: BLOCK_STONE,
-  B: BLOCK_BEDROCK,
-  G: BLOCK_GAS,
-  C: BLOCK_GEODE,
-  E: BLOCK_GEODE,
-  V: BLOCK_VAULT,
+// Where a spectator's drag parks the camera: panned along with the shaft, or
+// jumped to the depth under the pointer on the minimap.
+function spectateCamera(drag, pt) {
+  const y = drag.onMap ? ((pt.y - MINI_TOP) / MINI_H) * DEPTH : drag.cam - (pt.y - drag.y) / BLOCK_PX
+  return Math.max(0, Math.min(DEPTH, y))
 }
 
 // Silhouette icons and distinct colors for each player slot
@@ -50,24 +66,24 @@ const PLAYER_COLORS = [
   '#84cc16', // slot 7: lime
 ]
 
-function decodeMap(str) {
-  if (!str) return new Uint8Array(0)
-  const out = []
-  const re = /(\d+)([A-Za-z_]+)/g
-  let match
-  while ((match = re.exec(str)) !== null) {
-    const count = parseInt(match[1], 10)
-    const char = match[2].toUpperCase()
-    const type = Object.hasOwn(CHAR_TO_BLOCK, char) ? CHAR_TO_BLOCK[char] : BLOCK_AIR
-    for (let i = 0; i < count; i++) {
-      out.push(type)
-    }
-  }
-  return new Uint8Array(out)
+// Blocks drawn as a plate, a border and a glyph. The glyph is what tells them
+// apart without colour (WCAG 1.4.1); dirt, stone and bedrock carry textures.
+const PLATES = {
+  [BLOCK_GAS]: { fill: '#451a03', stroke: '#f59e0b', ink: '#fbbf24', font: 'bold 14px monospace', glyph: '⊗' },
+  [BLOCK_GEODE]: { fill: '#082f49', stroke: '#06b6d4', ink: '#22d3ee', font: 'bold 15px monospace', glyph: '◈' },
+  [BLOCK_VAULT]: { fill: '#1c1917', stroke: '#eab308', ink: '#eab308', font: 'bold 14px monospace', glyph: '▲' },
+  [BLOCK_SABOTAGE]: { fill: '#2e1065', stroke: '#a855f7', ink: '#c084fc', font: 'bold 15px monospace', glyph: '✦' },
+  [BLOCK_OBSIDIAN]: { fill: '#030303', stroke: '#e5e7eb', ink: '#f8fafc', font: 'bold 15px monospace', glyph: '⬢' },
 }
+
+// How long a sabotage message stays up, fading, from the moment a grief lands.
+const TOAST_MS = 2000
 
 function statusLine(snap, myId) {
   if (!snap) return 'Connecting to excavation shaft server.'
+  if (snap.phase === 'waiting') {
+    return 'Waiting for a rival driller. Start now against bots, or hold for someone to drop in.'
+  }
   const me = snap.players?.find((p) => p.id === myId)
   if (snap.phase === 'over') {
     if (snap.winner) {
@@ -78,7 +94,7 @@ function statusLine(snap, myId) {
     return 'The crush void swallowed the shaft. No survivors. Restarting shortly.'
   }
   if (me && !me.alive) {
-    return 'Crushed by the void. Spectating remaining drillers.'
+    return 'Crushed by the void. Drag the shaft or minimap to spectate.'
   }
   const living = snap.players?.filter((p) => p.alive).length ?? 0
   const depth = me ? Math.floor(Math.max(0, me.y)) : 0
@@ -105,10 +121,11 @@ export default function VoidDrillers() {
   const hasMouseRef = useRef(false)
   const cameraYRef = useRef(0)
   const particlesRef = useRef([])
-  const lastSendTimeRef = useRef(0)
   const interpRef = useRef(new Map())
   const voidYRef = useRef(null)
   const shakeRef = useRef(0)
+  const freeCamRef = useRef(null) // where a crushed driller parked the camera, or null to follow
+  const dragRef = useRef(null)
 
   // Spawn procedural spark, flame, and dust particles
   const addParticle = useCallback((p) => {
@@ -148,9 +165,12 @@ export default function VoidDrillers() {
       } else if (blockType === BLOCK_GEODE) {
         color = '#22d3ee'
         count = 12
-      } else if (blockType === BLOCK_VAULT) {
-        color = '#eab308'
-        count = 8
+      } else if (blockType === BLOCK_SABOTAGE) {
+        color = '#a855f7'
+        count = 12
+      } else if (blockType === BLOCK_OBSIDIAN) {
+        color = '#e5e7eb'
+        count = 12
       }
 
       for (let i = 0; i < count; i++) {
@@ -206,86 +226,60 @@ export default function VoidDrillers() {
         aim: Number(aim.toFixed(2)),
       }),
     )
-    lastSendTimeRef.current = performance.now()
   }, [])
 
-  // Connect to WebSocket with loopback fallback
   const connect = useCallback(
     (playerName) => {
       setStatus('connecting')
-      let failedPrimary = false
       const scheme = window.location.protocol === 'https:' ? 'wss' : 'ws'
-      const primaryUrl = `${scheme}://${window.location.host}/voiddrillers-ws`
-      const fallbackUrl = 'ws://127.0.0.1:8086'
+      // 'voiddrillers.v1' is the WebSocket subprotocol: it names this game in a packet capture.
+      const ws = new WebSocket(`${scheme}://${window.location.host}/voiddrillers-ws`, 'voiddrillers.v1')
+      wsRef.current = ws
 
-      function openSocket(url, isFallback = false) {
-        const ws = new WebSocket(url, 'voiddrillers.v1')
-        wsRef.current = ws
+      ws.onopen = () => {
+        setStatus('live')
+        ws.send(JSON.stringify({ t: 'join', name: playerName || 'Driller' }))
+      }
 
-        ws.onopen = () => {
-          if (wsRef.current !== ws) return
-          setStatus('live')
-          ws.send(JSON.stringify({ t: 'join', name: playerName || 'Driller' }))
+      ws.onmessage = (e) => {
+        let msg
+        try {
+          msg = JSON.parse(e.data)
+        } catch {
+          return
         }
 
-        ws.onmessage = (e) => {
-          if (wsRef.current !== ws) return
-          let msg
-          try {
-            msg = JSON.parse(e.data)
-          } catch {
-            return
-          }
-
-          if (msg.t === 'welcome') {
-            myIdRef.current = msg.id
-            setMyId(msg.id)
-            mapRef.current = decodeMap(msg.map)
-            interpRef.current.clear()
-            voidYRef.current = null
-          } else if (msg.t === 'full') {
-            setStatus('full')
-          } else if (msg.t === 'snap') {
-            if (msg.deltas && mapRef.current) {
-              for (const d of msg.deltas) {
-                if (typeof d.i === 'number' && d.i >= 0 && d.i < mapRef.current.length) {
-                  const oldType = mapRef.current[d.i]
-                  mapRef.current[d.i] = d.t
-                  if (oldType !== BLOCK_AIR && d.t === BLOCK_AIR) {
-                    const bx = (d.i % WIDTH) * BLOCK_PX + BLOCK_PX / 2
-                    const by = Math.floor(d.i / WIDTH) * BLOCK_PX + BLOCK_PX / 2
-                    spawnBreakParticles(bx, by, oldType)
-                  }
+        if (msg.t === 'welcome') {
+          myIdRef.current = msg.id
+          setMyId(msg.id)
+          mapRef.current = decodeMap(msg.map)
+          interpRef.current.clear()
+          voidYRef.current = null
+          freeCamRef.current = null
+        } else if (msg.t === 'full') {
+          setStatus('full')
+        } else if (msg.t === 'snap') {
+          if (msg.deltas && mapRef.current) {
+            for (const d of msg.deltas) {
+              if (typeof d.i === 'number' && d.i >= 0 && d.i < mapRef.current.length) {
+                const oldType = mapRef.current[d.i]
+                mapRef.current[d.i] = d.t
+                if (oldType !== BLOCK_AIR && d.t === BLOCK_AIR) {
+                  const bx = (d.i % WIDTH) * BLOCK_PX + BLOCK_PX / 2
+                  const by = Math.floor(d.i / WIDTH) * BLOCK_PX + BLOCK_PX / 2
+                  spawnBreakParticles(bx, by, oldType)
                 }
               }
             }
-            snapRef.current = msg
-            setHud(msg)
           }
-        }
-
-        ws.onerror = () => {
-          if (!isFallback && !failedPrimary) {
-            failedPrimary = true
-            ws.close()
-            openSocket(fallbackUrl, true)
-          } else {
-            ws.close()
-          }
-        }
-
-        ws.onclose = () => {
-          if (wsRef.current !== ws) return
-          if (!isFallback && !failedPrimary) {
-            failedPrimary = true
-            openSocket(fallbackUrl, true)
-            return
-          }
-          setStatus((s) => (s === 'full' ? s : 'closed'))
+          snapRef.current = msg
+          setHud(msg)
         }
       }
 
-      openSocket(primaryUrl, false)
+      // ponytail: manual reconnect only, as Blastworks. Add backoff retry if the link proves flaky.
+      ws.onclose = () => setStatus((s) => (s === 'full' ? s : 'closed'))
+      ws.onerror = () => ws.close()
     },
     [spawnBreakParticles],
   )
@@ -341,40 +335,41 @@ export default function VoidDrillers() {
     }
   }, [status, sendInput])
 
-  // Mouse input handlers
-  const handleCanvasMouseMove = useCallback(
+  // Pointer input. Alive, the left button drills. Crushed, it drags the camera
+  // round the shaft to spectate.
+  const handleCanvasPointerMove = useCallback((e) => {
+    if (!canvasRef.current) return
+    const pt = toCanvas(canvasRef.current, e)
+    // No send here: the SEND_MS interval already carries the aim.
+    mousePosRef.current = pt
+    hasMouseRef.current = true
+    if (dragRef.current) freeCamRef.current = spectateCamera(dragRef.current, pt)
+  }, [])
+
+  const handleCanvasPointerDown = useCallback(
     (e) => {
-      const canvas = canvasRef.current
-      if (!canvas) return
-      const rect = canvas.getBoundingClientRect()
-      const scaleX = canvas.width / rect.width
-      const scaleY = canvas.height / rect.height
-      mousePosRef.current = {
-        x: (e.clientX - rect.left) * scaleX,
-        y: (e.clientY - rect.top) * scaleY,
+      if (e.button !== 0) return
+      const me = snapRef.current?.players?.find((p) => p.id === myIdRef.current)
+      if (me && !me.alive) {
+        const pt = toCanvas(e.currentTarget, e)
+        // Captured, so the drag keeps going when the pointer leaves the canvas.
+        e.currentTarget.setPointerCapture(e.pointerId)
+        dragRef.current = { y: pt.y, cam: cameraYRef.current, onMap: pt.x > SHAFT_WIDTH_PX }
+        freeCamRef.current = spectateCamera(dragRef.current, pt)
+        return
       }
-      hasMouseRef.current = true
+      mouseDownRef.current = true
       sendInput()
     },
     [sendInput],
   )
 
-  const handleCanvasMouseDown = useCallback(
+  const handleCanvasPointerUp = useCallback(
     (e) => {
-      if (e.button === 0) {
-        mouseDownRef.current = true
-        sendInput()
-      }
-    },
-    [sendInput],
-  )
-
-  const handleCanvasMouseUp = useCallback(
-    (e) => {
-      if (e.button === 0) {
-        mouseDownRef.current = false
-        sendInput()
-      }
+      if (e.button !== 0) return
+      dragRef.current = null
+      mouseDownRef.current = false
+      sendInput()
     },
     [sendInput],
   )
@@ -396,18 +391,28 @@ export default function VoidDrillers() {
       const map = mapRef.current
       const me = snap?.players?.find((p) => p.id === myIdRef.current)
 
-      // Smooth camera vertical follow
-      let targetY = 10
-      if (me) {
-        const myPos = interpRef.current.get(me.id)
-        targetY = myPos ? myPos.y : me.y
-      } else if (snap) {
-        targetY = (voidYRef.current ?? snap.voidY) + 6
+      // Smooth camera vertical follow, unless a crushed driller has dragged the
+      // view somewhere else to spectate: then it stays where they put it.
+      if (me && !me.alive && freeCamRef.current !== null) {
+        cameraYRef.current = freeCamRef.current
+      } else {
+        let targetY = 10
+        if (me) {
+          const myPos = interpRef.current.get(me.id)
+          targetY = myPos ? myPos.y : me.y
+        } else if (snap) {
+          targetY = (voidYRef.current ?? snap.voidY) + 6
+        }
+        cameraYRef.current += (targetY - cameraYRef.current) * Math.min(1, dt * 10)
       }
-      cameraYRef.current += (targetY - cameraYRef.current) * Math.min(1, dt * 10)
       const cameraY = cameraYRef.current
 
       const toScreenY = (wy) => (wy - cameraY) * BLOCK_PX + CANVAS_HEIGHT * 0.38
+
+      // Grief from a rival's sabotage crystal. Tremor rides the screen shake gas
+      // blasts already use, at +/-3 px for as long as it lasts.
+      const grief = me?.alive ? me.grief : null
+      if (grief?.type === 'tremor') shakeRef.current = Math.max(shakeRef.current, 6)
 
       // Screen Shake
       const shake = shakeRef.current
@@ -499,45 +504,19 @@ export default function VoidDrillers() {
               ctx.moveTo(sx + 2, sy + 19)
               ctx.lineTo(sx + BLOCK_PX - 2, sy + 19)
               ctx.stroke()
-            } else if (block === BLOCK_GAS) {
-              // Gas: amber warning border with hazard glyph ⊗
-              ctx.fillStyle = '#451a03'
+            } else if (PLATES[block]) {
+              const plate = PLATES[block]
+              ctx.fillStyle = plate.fill
               ctx.fillRect(sx, sy, BLOCK_PX, BLOCK_PX)
-              ctx.strokeStyle = '#f59e0b'
+              ctx.strokeStyle = plate.stroke
               ctx.lineWidth = 2
               ctx.strokeRect(sx + 1, sy + 1, BLOCK_PX - 2, BLOCK_PX - 2)
 
-              ctx.fillStyle = '#fbbf24'
-              ctx.font = 'bold 14px monospace'
+              ctx.fillStyle = plate.ink
+              ctx.font = plate.font
               ctx.textAlign = 'center'
               ctx.textBaseline = 'middle'
-              ctx.fillText('⊗', sx + 14, sy + 14)
-            } else if (block === BLOCK_GEODE) {
-              // Geode: cyan crystal with diamond glyph ◈
-              ctx.fillStyle = '#082f49'
-              ctx.fillRect(sx, sy, BLOCK_PX, BLOCK_PX)
-              ctx.strokeStyle = '#06b6d4'
-              ctx.lineWidth = 2
-              ctx.strokeRect(sx + 1, sy + 1, BLOCK_PX - 2, BLOCK_PX - 2)
-
-              ctx.fillStyle = '#22d3ee'
-              ctx.font = 'bold 15px monospace'
-              ctx.textAlign = 'center'
-              ctx.textBaseline = 'middle'
-              ctx.fillText('◈', sx + 14, sy + 14)
-            } else if (block === BLOCK_VAULT) {
-              // Vault: yellow/black industrial warning chevrons ▲
-              ctx.fillStyle = '#1c1917'
-              ctx.fillRect(sx, sy, BLOCK_PX, BLOCK_PX)
-              ctx.strokeStyle = '#eab308'
-              ctx.lineWidth = 2
-              ctx.strokeRect(sx + 1, sy + 1, BLOCK_PX - 2, BLOCK_PX - 2)
-
-              ctx.fillStyle = '#eab308'
-              ctx.font = 'bold 14px monospace'
-              ctx.textAlign = 'center'
-              ctx.textBaseline = 'middle'
-              ctx.fillText('▲', sx + 14, sy + 14)
+              ctx.fillText(plate.glyph, sx + 14, sy + 14)
             }
           }
         }
@@ -642,11 +621,14 @@ export default function VoidDrillers() {
 
           const px = pos.x * BLOCK_PX
           const py = toScreenY(pos.y)
-          const pw = 0.8 * BLOCK_PX // ~22.4px
-          const ph = 0.9 * BLOCK_PX // ~25.2px
+          const pw = PLAYER_WIDTH * BLOCK_PX
+          const ph = PLAYER_HEIGHT * BLOCK_PX
           const pcx = px + pw / 2
           const pcy = py + ph / 2
           const slotColor = PLAYER_COLORS[p.slot % PLAYER_COLORS.length]
+          // Rivals race shafts of their own: drawn as ghosts over yours, touching nothing.
+          const ghost = p.id !== myIdRef.current
+          ctx.globalAlpha = ghost ? 0.25 : 1
 
           if (!p.alive) {
             // Crushed wreck
@@ -656,11 +638,12 @@ export default function VoidDrillers() {
             ctx.font = 'bold 12px monospace'
             ctx.textAlign = 'center'
             ctx.fillText('†', pcx, py + ph - 10)
+            ctx.globalAlpha = 1
             continue
           }
 
-          // Jetpack thruster flame particles
-          if (p.vy < -0.5 || (p.id === myIdRef.current && keysRef.current.has('KeyW'))) {
+          // Jetpack thruster flame particles. Yours only: a ghost's would land on your rock.
+          if (!ghost && (p.vy < -0.5 || keysRef.current.has('KeyW'))) {
             for (let f = 0; f < 2; f++) {
               addParticle({
                 x: pcx + (Math.random() - 0.5) * 8,
@@ -677,7 +660,7 @@ export default function VoidDrillers() {
           }
 
           // Drill sparks when actively drilling
-          if (p.drilling) {
+          if (!ghost && p.drilling) {
             const tipDist = 24
             const tipX = pcx + Math.cos(p.aim) * tipDist
             const tipWorldY = (pos.y + 0.45) * BLOCK_PX + Math.sin(p.aim) * tipDist
@@ -745,10 +728,12 @@ export default function VoidDrillers() {
           // Player name tag and silhouette
           ctx.font = 'bold 10px monospace'
           ctx.textAlign = 'center'
-          ctx.fillStyle = '#f8fafc'
+          ctx.globalAlpha = ghost ? 0.4 : 1
+          ctx.fillStyle = ghost ? slotColor : '#f8fafc'
           ctx.fillText(`${PIECE_ICON[p.slot % 8]} ${p.name}`, pcx, py - 6)
+          ctx.globalAlpha = 1
 
-          if (p.id === myIdRef.current) {
+          if (!ghost) {
             ctx.fillStyle = '#ff6b1a'
             ctx.fillText('▼ YOU', pcx, py - 18)
           }
@@ -829,6 +814,21 @@ export default function VoidDrillers() {
 
       ctx.restore()
 
+      // Fog darkens the shaft away from you; chill frosts the whole view.
+      if (grief?.type === 'fog') {
+        const myPos = interpRef.current.get(me.id) ?? me
+        const fx = (myPos.x + 0.5) * BLOCK_PX
+        const fy = toScreenY(myPos.y + 0.5)
+        const fog = ctx.createRadialGradient(fx, fy, BLOCK_PX * 2, fx, fy, SHAFT_WIDTH_PX * 0.6)
+        fog.addColorStop(0, 'rgba(15, 23, 42, 0)')
+        fog.addColorStop(1, 'rgba(15, 23, 42, 0.4)')
+        ctx.fillStyle = fog
+        ctx.fillRect(0, 0, SHAFT_WIDTH_PX, CANVAS_HEIGHT)
+      } else if (grief?.type === 'chill') {
+        ctx.fillStyle = 'rgba(56, 189, 248, 0.15)'
+        ctx.fillRect(0, 0, SHAFT_WIDTH_PX, CANVAS_HEIGHT)
+      }
+
       // 7. Right-Edge Shaft Minimap Telemetry Strip
       const stripX = SHAFT_WIDTH_PX + 8
       const stripY = 12
@@ -847,8 +847,8 @@ export default function VoidDrillers() {
       ctx.fillText('SHAFT', stripX + stripW / 2, stripY + 12)
       ctx.fillText('260m', stripX + stripW / 2, stripY + 22)
 
-      const miniTrackTop = stripY + 28
-      const miniTrackH = stripH - 40
+      const miniTrackTop = MINI_TOP
+      const miniTrackH = MINI_H
       const toMiniY = (wy) => miniTrackTop + Math.max(0, Math.min(1, wy / DEPTH)) * miniTrackH
 
       // Shaft background well
@@ -893,20 +893,22 @@ export default function VoidDrillers() {
             continue
           }
 
-          ctx.fillStyle = col
+          // Yours solid, rivals outlined: told apart by shape, not only colour.
           ctx.beginPath()
-          ctx.arc(stripX + stripW / 2, myPip, isMe ? 4.5 : 3, 0, Math.PI * 2)
-          ctx.fill()
-
+          ctx.arc(stripX + stripW / 2, myPip, isMe ? 3 : 2.5, 0, Math.PI * 2)
           if (isMe) {
-            ctx.strokeStyle = '#ff6b1a'
-            ctx.lineWidth = 1.5
-            ctx.stroke()
-
+            ctx.fillStyle = col
+            ctx.fill()
             ctx.fillStyle = '#ff6b1a'
             ctx.font = 'bold 8px monospace'
             ctx.textAlign = 'right'
             ctx.fillText('YOU', stripX - 2, myPip + 3)
+          } else {
+            ctx.globalAlpha = 0.6
+            ctx.strokeStyle = col
+            ctx.lineWidth = 1.5
+            ctx.stroke()
+            ctx.globalAlpha = 1
           }
         }
       }
@@ -997,6 +999,39 @@ export default function VoidDrillers() {
       ctx.fillStyle = fuel > 0.25 ? '#06b6d4' : '#ef4444'
       ctx.fillRect(hudX + 10, hudY + 90, 180 * Math.max(0, Math.min(1, fuel)), 6)
 
+      // Sabotage messages, each up for the first TOAST_MS of a grief and fading.
+      const drawToast = (text, age, row) => {
+        const y = 140 + row * 34
+        ctx.globalAlpha = Math.max(0, 1 - age / TOAST_MS)
+        ctx.fillStyle = 'rgba(15, 23, 42, 0.9)'
+        ctx.fillRect(SHAFT_WIDTH_PX / 2 - 150, y, 300, 26)
+        ctx.fillStyle = '#c084fc'
+        ctx.font = 'bold 12px monospace'
+        ctx.textAlign = 'center'
+        ctx.textBaseline = 'middle'
+        ctx.fillText(text, SHAFT_WIDTH_PX / 2, y + 13)
+        ctx.globalAlpha = 1
+      }
+      if (grief && GRIEF_MS[grief.type] - grief.ttl < TOAST_MS) {
+        drawToast(`✦ ${grief.by} SABOTAGED YOU`, GRIEF_MS[grief.type] - grief.ttl, 0)
+      }
+      // ponytail: the snapshot names no target, so a sent grief is matched by
+      // name and a namesake's sabotage reads as yours. Add a sender id if that bites.
+      const sent =
+        me?.alive &&
+        snap.players.find(
+          (q) => q.id !== me.id && q.grief?.by === me.name && GRIEF_MS[q.grief.type] - q.grief.ttl < TOAST_MS,
+        )
+      if (sent) {
+        drawToast(`✦ SENT ${sent.grief.type.toUpperCase()} TO ${sent.name}`, GRIEF_MS[sent.grief.type] - sent.grief.ttl, 1)
+      }
+      if (grief?.type === 'chill') {
+        ctx.fillStyle = '#38bdf8'
+        ctx.font = 'bold 13px monospace'
+        ctx.textAlign = 'center'
+        ctx.fillText('❄ DRILL CHILLED', SHAFT_WIDTH_PX / 2, CANVAS_HEIGHT - 20)
+      }
+
       // 9. Centered Victory / Elimination Overlays
       if (snap?.phase === 'over') {
         ctx.fillStyle = 'rgba(0, 0, 0, 0.75)'
@@ -1063,7 +1098,7 @@ export default function VoidDrillers() {
         ctx.fillText('CRUSHED BY THE VOID', wx + warnW / 2, wy + 26)
         ctx.fillStyle = '#94a3b8'
         ctx.font = '11px monospace'
-        ctx.fillText('Spectating remaining drillers.', wx + warnW / 2, wy + 46)
+        ctx.fillText('Drag the shaft or minimap to look around.', wx + warnW / 2, wy + 46)
       }
 
       rafId = requestAnimationFrame(render)
@@ -1178,6 +1213,22 @@ export default function VoidDrillers() {
         {statusLine(hud, myId)}
       </p>
 
+      {hud?.phase === 'waiting' && (
+        <div className="mt-4 border border-line bg-surface p-5">
+          <p className="rule-label">Lobby</p>
+          <p className="mt-2 text-sm leading-relaxed text-muted">
+            The void holds until a rival drops in. Anyone who joins later takes a bot’s place.
+          </p>
+          <button
+            type="button"
+            onClick={() => wsRef.current?.send(JSON.stringify({ t: 'ready' }))}
+            className="mt-4 bg-flare px-6 py-3 text-xs font-bold uppercase tracking-[0.12em] text-on-flare transition-opacity hover:opacity-90"
+          >
+            Start with bots
+          </button>
+        </div>
+      )}
+
       <div className="mt-8 grid gap-8 lg:grid-cols-[640px_1fr] items-start justify-center">
         {/* Canvas Area */}
         <div className="relative mx-auto w-full max-w-[640px]">
@@ -1187,10 +1238,13 @@ export default function VoidDrillers() {
             height={CANVAS_HEIGHT}
             role="img"
             aria-label={`Void Drillers match canvas. ${statusLine(hud, myId)}`}
-            onMouseMove={handleCanvasMouseMove}
-            onMouseDown={handleCanvasMouseDown}
-            onMouseUp={handleCanvasMouseUp}
-            className="w-full border border-line bg-bg aspect-[640/700] select-none cursor-crosshair"
+            onPointerMove={handleCanvasPointerMove}
+            onPointerDown={handleCanvasPointerDown}
+            onPointerUp={handleCanvasPointerUp}
+            onLostPointerCapture={() => {
+              dragRef.current = null
+            }}
+            className={`w-full border border-line bg-bg aspect-[640/700] select-none ${me && !me.alive ? 'cursor-grab active:cursor-grabbing' : 'cursor-crosshair'}`}
           />
 
           {/* Telemetry Bar Under Canvas */}
@@ -1324,6 +1378,14 @@ export default function VoidDrillers() {
               <li className="flex items-center gap-2">
                 <span className="font-mono font-bold text-live">◈ Geode:</span>
                 <span>Shatter to vent core heat and supercharge bit.</span>
+              </li>
+              <li className="flex items-center gap-2">
+                <span className="font-mono font-bold text-fg">✦ Sabotage:</span>
+                <span>Shatter to jam a rival’s screen or drill.</span>
+              </li>
+              <li className="flex items-center gap-2">
+                <span className="font-mono font-bold text-fg">⬢ Obsidian:</span>
+                <span>Only a super-charged drill cuts it.</span>
               </li>
               <li className="flex items-center gap-2">
                 <span className="font-mono font-bold text-fg">▲ Vault:</span>

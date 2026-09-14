@@ -13,6 +13,8 @@ export const BLOCK_BEDROCK = 3
 export const BLOCK_GAS = 4
 export const BLOCK_GEODE = 5
 export const BLOCK_VAULT = 6
+export const BLOCK_SABOTAGE = 7
+export const BLOCK_OBSIDIAN = 8
 
 export const TICK_MS = 16 // 60 FPS simulation loop
 export const GRACE_MS = 4000
@@ -39,6 +41,17 @@ export const DIRT_HP = 1
 export const STONE_HP = 3
 export const GAS_HP = 1
 export const GEODE_HP = 2
+export const SABOTAGE_HP = 2
+export const OBSIDIAN_HP = 7 // super-drill pulses only: 7 x 55 ms, just over stone's 3 x 110 ms by hand
+
+// What a shattered sabotage crystal sends a rival, and for how long (ms).
+// Mild on purpose: fog and tremor only blur the screen; chill slows the drill.
+export const GRIEF_MS = { fog: 3000, tremor: 2500, chill: 3000 }
+// How often each lands. Chill is the rare one, about one crystal in 21, since
+// it is the only grief that costs a rival real drilling time.
+export const GRIEF_WEIGHT = { fog: 10, tremor: 10, chill: 1 }
+// Chance a deep row holds a sabotage crystal. Scattered singly, never touching.
+export const SABOTAGE_ROW_CHANCE = 0.25
 
 export const DRILL_RANGE = 1.35 // blocks
 export const SUPER_DRILL_RANGE = 1.65 // blocks
@@ -57,11 +70,12 @@ export const GAS_HEAT_SURGE = 0.50 // instant heat burst on detonation
 export const GAS_FUEL_BURN = 0.25 // jetpack fuel burned by blast
 export const GAS_CLOUD_HEAT_RATE = 0.45 // heat accumulation per sec while inside cloud
 export const MAX_PLAYERS = 8
+export const MIN_PLAYERS = 2 // people it takes to start a match without bots
 export const BOT_FILL_TO = 4
 export const BOT_NAMES = ['Bore', 'Quarry', 'Piston', 'Chisel', 'Grit', 'Rivet', 'Auger']
 export const BOT_REACT_MS = 120 // ~8 bot decisions per sec
 
-export const BLOCK_CHARS = ['A', 'D', 'S', 'B', 'G', 'C', 'V']
+export const BLOCK_CHARS = ['A', 'D', 'S', 'B', 'G', 'C', 'V', 'X', 'O']
 export const CHAR_TO_BLOCK = {
   A: BLOCK_AIR,
   D: BLOCK_DIRT,
@@ -69,8 +83,9 @@ export const CHAR_TO_BLOCK = {
   B: BLOCK_BEDROCK,
   G: BLOCK_GAS,
   C: BLOCK_GEODE,
-  E: BLOCK_GEODE,
-  V: BLOCK_VAULT
+  V: BLOCK_VAULT,
+  X: BLOCK_SABOTAGE,
+  O: BLOCK_OBSIDIAN
 }
 
 // --- Map Encoding & Decoding ----------------------------------------------
@@ -138,9 +153,10 @@ function createRng(seed = 12345) {
   }
 }
 
-// --- Match Creation -------------------------------------------------------
-export function make(options = {}) {
-  const rng = typeof options.rng === 'function' ? options.rng : createRng(options.seed ?? 12345)
+// --- Shaft Generation -----------------------------------------------------
+// One driller's shaft: strata, bedrock formations and standalone nodules.
+export function generateShaft(seed) {
+  const rng = createRng(seed)
   const grid = new Uint8Array(WIDTH * DEPTH)
   const hp = new Uint8Array(WIDTH * DEPTH)
 
@@ -188,10 +204,15 @@ export function make(options = {}) {
         else hitPoints = DIRT_HP
         veinRemaining--
       } else {
-        // Subterranean strata (11 <= y < VAULT_Y): dirt, stone, gas, and 16% geode caches
+        // Subterranean strata (11 <= y < VAULT_Y). Gas takes 10% and geode caches 16%
+        // all the way down; the other 74% hardens with depth, dirt thinning from 44%
+        // to 19% as stone thickens from 30% to 55%. Obsidian and sabotage crystals
+        // are never a vein: they are scattered singly further down.
         if (veinRemaining <= 0) {
+          const depth = (y - 11) / (VAULT_Y - 11)
+          const dirt = 0.44 - 0.25 * depth
           const r = rng()
-          if (r < 0.44) {
+          if (r < dirt) {
             veinType = BLOCK_DIRT
           } else if (r < 0.74) {
             veinType = BLOCK_STONE
@@ -334,21 +355,92 @@ export function make(options = {}) {
     }
   }
 
+  // 3. Obsidian and sabotage crystals, scattered one tile at a time through dirt and
+  // stone: at most one a row, never touching another of their own kind, diagonals
+  // included, so neither ever groups. `chance` is the odds a row gets one, given how
+  // deep that row sits (0 at the top of the strata, 1 at the vault).
+  const scatter = (block, blockHp, chance) => {
+    for (let y = 11; y < VAULT_Y; y++) {
+      if (rng() >= chance((y - 11) / (VAULT_Y - 11))) continue
+      const x = 1 + Math.floor(rng() * (WIDTH - 2))
+      const idx = y * WIDTH + x
+      if (grid[idx] !== BLOCK_DIRT && grid[idx] !== BLOCK_STONE) continue
+      let touching = false
+      for (let dy = -1; dy <= 1; dy++) {
+        for (let dx = -1; dx <= 1; dx++) {
+          if (grid[(y + dy) * WIDTH + x + dx] === block) touching = true
+        }
+      }
+      if (touching) continue
+      grid[idx] = block
+      hp[idx] = blockHp
+    }
+  }
+  // Obsidian is rare: a row in ten near the top, four in ten down by the vault.
+  scatter(BLOCK_OBSIDIAN, OBSIDIAN_HP, (depth) => 0.1 + 0.3 * depth)
+  scatter(BLOCK_SABOTAGE, SABOTAGE_HP, () => SABOTAGE_ROW_CHANCE)
+
+  // 4. A way down for anyone without the super drill. Find the route from the launch
+  // air to the vault that crosses the fewest obsidian tiles, never bedrock, and turn
+  // those tiles back into stone. Obsidian costs 1 and everything else 0, so each
+  // cost level is swept completely before the next one starts.
+  const cost = new Array(WIDTH * VAULT_Y).fill(Infinity)
+  const from = new Int32Array(WIDTH * VAULT_Y).fill(-1)
+  let level = []
+  for (let x = 1; x < WIDTH - 1; x++) {
+    cost[WIDTH + x] = 0
+    level.push(WIDTH + x)
+  }
+  let end = -1
+  for (let k = 0; level.length > 0 && end < 0; k++) {
+    const next = []
+    for (let h = 0; h < level.length && end < 0; h++) {
+      const i = level[h]
+      if (cost[i] !== k) continue // improved since it was queued
+      if (Math.floor(i / WIDTH) === VAULT_Y - 1) {
+        end = i
+        continue
+      }
+      for (const j of [i + WIDTH, i - 1, i + 1, i - WIDTH]) {
+        const x = j % WIDTH
+        if (j < WIDTH || j >= WIDTH * VAULT_Y || x < 1 || x > WIDTH - 2) continue
+        if (grid[j] === BLOCK_BEDROCK) continue
+        const c = k + (grid[j] === BLOCK_OBSIDIAN ? 1 : 0)
+        if (c >= cost[j]) continue
+        cost[j] = c
+        from[j] = i
+        if (c === k) level.push(j)
+        else next.push(j)
+      }
+    }
+    level = next
+  }
+  for (let i = end; i >= 0; i = from[i]) {
+    if (grid[i] === BLOCK_OBSIDIAN) {
+      grid[i] = BLOCK_STONE
+      hp[i] = STONE_HP
+    }
+  }
+
+  return { grid, hp }
+}
+
+// --- Match Creation -------------------------------------------------------
+// The match holds no terrain: every driller digs a copy of their own, all grown
+// on join from this one seed, so everyone races the same layout.
+export function make(options = {}) {
   return {
     width: WIDTH,
     depth: DEPTH,
-    grid,
-    hp,
+    seed: options.seed ?? 12345,
     players: new Map(),
     nextSlot: 0,
     elapsed: 0,
     voidY: INITIAL_VOID_Y,
     seq: 0,
-    phase: 'playing',
+    phase: 'waiting', // the lobby: see tick()
     winner: null,
     winReason: null,
-    deltas: [],
-    hazards: [],
     board: options.board ?? [],
     botFill: options.botFill ?? 0,
     botsOnly: options.botsOnly ?? false,
@@ -358,7 +450,7 @@ export function make(options = {}) {
 }
 
 // --- Player Management ----------------------------------------------------
-export function join(match, playerInfo = {}) {
+export function join(match, playerInfo = {}, rng = Math.random) {
   const isBot = Boolean(playerInfo.bot)
   if (!isBot && match.players.size >= MAX_PLAYERS) {
     const bot = [...match.players.values()].find((p) => p.bot)
@@ -369,12 +461,20 @@ export function join(match, playerInfo = {}) {
   const id = playerInfo.id || (isBot ? `bot-${match.nextId++}` : `p-${match.nextId++}`)
   const name = sanitizeName(playerInfo.name)
   const slot = match.nextSlot++
-  const spawnX = 2.0 + (slot % 8) * 2.0
+  // Any column between the walls, drawn at random rather than handed out in join order.
+  const spawnX = 1 + Math.floor(rng() * (WIDTH - 2))
+  // Everyone gets the same layout, so the race is fair, in a copy of their own to dig.
+  const { grid, hp } = generateShaft(match.seed)
   const p = {
     id,
     name,
     bot: isBot,
     slot,
+    grid,
+    hp,
+    deltas: [], // this tick's block changes, sent to this driller alone
+    hazards: [],
+    grief: null, // { type, ttl, by } while a rival's sabotage lasts
     x: spawnX,
     y: SPAWN_Y,
     vx: 0,
@@ -400,23 +500,27 @@ export function join(match, playerInfo = {}) {
 }
 
 export function leave(match, playerId) {
-  const hadMultipleHumans = [...match.players.values()].filter(p => !p.bot).length > 1
-  const hadBots = [...match.players.values()].some(p => p.bot)
+  // Counted before the leaver goes: a rival walking out still leaves a survivor.
+  const all = [...match.players.values()]
   match.players.delete(playerId)
   if (match.phase === 'playing' && match.players.size > 0) {
-    const alive = [...match.players.values()].filter(p => p.alive)
-    if (!hadBots && hadMultipleHumans && alive.length === 1) {
-      match.phase = 'over'
-      match.winner = alive[0].id
-      match.winReason = 'survival'
-    } else if (alive.length === 0) {
-      match.phase = 'over'
-      match.winner = null
-    }
+    settle(match, all.some((p) => p.bot), all.filter((p) => !p.bot).length)
   }
 }
 
-export const removePlayer = leave
+// Over when the void takes everyone, or when one human outlasts the others.
+// Never on survival while bots race: beating bots means reaching the vault.
+function settle(match, hadBots, humans) {
+  const alive = [...match.players.values()].filter((p) => p.alive)
+  if (alive.length === 0) {
+    match.phase = 'over'
+    match.winner = null
+  } else if (!hadBots && humans > 1 && alive.length === 1) {
+    match.phase = 'over'
+    match.winner = alive[0].id
+    match.winReason = 'survival'
+  }
+}
 
 // --- Bot AI & Lifecycle ---------------------------------------------------
 export const canRun = (state) =>
@@ -427,17 +531,10 @@ export function wantBots(state) {
   return true
 }
 
-export function ensureBots(state) {
-  if (!canRun(state)) {
-    for (const bot of [...state.players.values()].filter((p) => p.bot)) leave(state, bot.id)
-    state.botsWanted = false
-    return
-  }
-  if (!state.botsWanted && !state.botsOnly) {
-    for (const bot of [...state.players.values()].filter((p) => p.bot)) leave(state, bot.id)
-    return
-  }
-  const fillTarget = state.botFill ?? (state.botsOnly ? BOT_FILL_TO : 0)
+export function ensureBots(state, rng = Math.random) {
+  // Nobody racing and nobody asked to watch: every bot stands down.
+  if (!canRun(state)) state.botsWanted = false
+  const fillTarget = state.botsWanted || state.botsOnly ? state.botFill : 0
   const humans = [...state.players.values()].filter((p) => !p.bot).length
   const bots = [...state.players.values()].filter((p) => p.bot)
   const want = Math.max(0, Math.min(fillTarget, MAX_PLAYERS) - humans)
@@ -446,34 +543,62 @@ export function ensureBots(state) {
   for (let i = bots.length; i < want; i++) {
     const taken = new Set([...state.players.values()].map((q) => q.name))
     const botName = BOT_NAMES.find((n) => !taken.has(n)) ?? `Unit ${state.nextId}`
-    join(state, { name: botName, bot: true })
+    join(state, { name: botName, bot: true }, rng)
   }
 }
 
-function findBestDownwardColumn(match, bx, groundRow) {
-  let bestCol = bx
-  let bestDist = Infinity
+// Rows a bot's route may climb to get round a shelf, and how far down it must reach.
+const ROUTE_UP = 3
+const ROUTE_DEPTH = 6
 
-  for (let dist = 1; dist < WIDTH - 1; dist++) {
-    for (const dir of [-1, 1]) {
-      const col = bx + dir * dist
-      if (col < 1 || col >= WIDTH - 1) continue
+const inCloud = (p, x, y) => p.hazards.some((h) => Math.hypot(x + 0.5 - h.x, y + 0.5 - h.y) <= h.r)
 
-      const b0 = match.grid[groundRow * WIDTH + col]
-      if (b0 !== BLOCK_BEDROCK && b0 !== BLOCK_GAS) {
-        const b1 = groundRow + 1 < DEPTH ? match.grid[(groundRow + 1) * WIDTH + col] : BLOCK_VAULT
-        const deepClear = b1 !== BLOCK_BEDROCK && b1 !== BLOCK_GAS
-        const score = dist + (deepClear ? 0 : 4)
-        if (score < bestDist) {
-          bestDist = score
-          bestCol = col
-        }
-      }
+// What a route is after: ground ROUTE_DEPTH rows down, or a geode for the super drill.
+const DEEPER = (block, y, bottom) => y >= bottom
+const GEODE = (block) => block === BLOCK_GEODE
+
+// One step along the shortest route from a bot's cell to the nearest cell `want`
+// accepts, no more than ROUTE_DEPTH rows down, digging through anything breakable.
+// Bedrock and the vault are walls; gas pockets and live gas clouds are walls too
+// unless `gas`; and the route never rises unless `climb`, since climbing costs
+// jetpack fuel a bot may not have. Breadth-first, like blastworks' stepTo, so a
+// bot sees the way out of a pocket rather than only the column beneath it.
+function route(p, want, gas, climb) {
+  const sx = Math.max(1, Math.min(WIDTH - 2, Math.floor(p.x + 0.5)))
+  const sy = Math.floor(p.y + 0.5)
+  const top = Math.max(0, sy - ROUTE_UP)
+  const bottom = Math.min(sy + ROUTE_DEPTH, VAULT_Y - 1)
+  const start = sy * WIDTH + sx
+  const seen = new Set([start])
+  const queue = [[start, null]]
+  for (let head = 0; head < queue.length; head++) {
+    const [i, first] = queue[head]
+    const x = i % WIDTH
+    const y = Math.floor(i / WIDTH)
+    if (first !== null && want(p.grid[i], y, bottom)) return first
+    for (const [dx, dy] of climb ? [[0, 1], [-1, 0], [1, 0], [0, -1]] : [[0, 1], [-1, 0], [1, 0]]) {
+      const nx = x + dx
+      const ny = y + dy
+      if (nx < 1 || nx > WIDTH - 2 || ny < top || ny > bottom) continue
+      const j = ny * WIDTH + nx
+      if (seen.has(j)) continue
+      seen.add(j)
+      const block = p.grid[j]
+      if (block === BLOCK_BEDROCK || block === BLOCK_VAULT) continue
+      // Without the super drill, obsidian is as good as bedrock.
+      if (block === BLOCK_OBSIDIAN && p.superDrillTimer === 0) continue
+      if (!gas && (block === BLOCK_GAS || inCloud(p, nx, ny))) continue
+      queue.push([j, first ?? [dx, dy]])
     }
-    if (bestDist < Infinity && dist >= bestDist + 2) break
   }
+  return null
+}
 
-  return bestCol
+// Blocks per second the void is falling right now: it speeds up with time and depth.
+function voidSpeed(match) {
+  const postGraceSec = Math.max(0, match.elapsed - GRACE_MS) / 1000
+  const depth = Math.max(0, match.voidY)
+  return Math.min(MAX_VOID_SPEED, BASE_VOID_SPEED + postGraceSec * VOID_ACCEL + depth * VOID_DEPTH_ACCEL)
 }
 
 export function driveBots(match, rng = Math.random) {
@@ -484,39 +609,14 @@ export function driveBots(match, rng = Math.random) {
     if (match.elapsed < (p.thinkAt || 0)) continue
     p.thinkAt = match.elapsed + BOT_REACT_MS + Math.floor(rng() * 30)
 
-    const cx = p.x + 0.5
-    const cy = p.y + 0.5
-    const footY = p.y + 1.0
-    const torsoRow = Math.floor(cy)
-    const groundRow = Math.floor(footY + 0.05)
-    const bx = Math.max(1, Math.min(WIDTH - 2, Math.floor(cx)))
+    const sx = Math.max(1, Math.min(WIDTH - 2, Math.floor(p.x + 0.5)))
+    const sy = Math.floor(p.y + 0.5)
+    // No pausing to let the drill cool: the void does not wait, and riding the heat
+    // into a lockout still digs further than idling at the redline.
+    const canDrill = !p.overheated
 
-    // Anti-stuck tracker
-    if (p.lastX !== undefined && p.lastY !== undefined) {
-      if (Math.hypot(p.x - p.lastX, p.y - p.lastY) < 0.08) {
-        p.stuckTicks = (p.stuckTicks || 0) + 1
-      } else {
-        p.stuckTicks = 0
-      }
-    }
-    p.lastX = p.x
-    p.lastY = p.y
-
-    // 1. Gas hazard evasion: steer away and thruster hop if inside or close to gas cloud
-    let inGasHazard = false
-    for (const h of match.hazards) {
-      if (Math.hypot(cx - h.x, cy - h.y) < h.r + 1.2) {
-        inGasHazard = true
-        p.input.dx = cx < h.x ? -1 : 1
-        p.input.thrust = p.fuel > 0.25
-        p.input.drill = false
-        break
-      }
-    }
-    if (inGasHazard) continue
-
-    // 2. Vault approach: touch down to win
-    if (groundRow >= VAULT_Y) {
+    // Vault approach: touch down to win
+    if (Math.floor(p.y + 1.05) >= VAULT_Y) {
       p.input.aim = Math.PI / 2
       p.input.drill = false
       p.input.thrust = false
@@ -524,86 +624,41 @@ export function driveBots(match, rng = Math.random) {
       continue
     }
 
-    // 3. Unstuck impulse: if stuck against a ledge, jump with thruster and angle drill
-    if ((p.stuckTicks || 0) >= 3) {
+    // Without the super drill, go for a geode in reach first, if that needs neither
+    // gas nor a climb. Then down and around gas; failing that straight through it,
+    // since gas costs heat but a climb costs time the void does not give. Climbing
+    // is last. With the super drill running, everything below is one pulse: dig down.
+    const step =
+      (p.superDrillTimer === 0 && route(p, GEODE, false, false)) ||
+      route(p, DEEPER, false, false) ||
+      route(p, DEEPER, true, false) ||
+      route(p, DEEPER, true, true)
+    if (!step) {
+      // Nothing leads down from here at all: jump, and look again from somewhere else.
       p.input.thrust = p.fuel > 0.15
-      const unstuckDir = p.slot % 2 === 0 ? -1 : 1
-      p.input.dx = unstuckDir
-      p.input.aim = unstuckDir > 0 ? 0.25 : Math.PI - 0.25
-      p.input.drill = !p.overheated && p.heat < 0.82
+      p.input.dx = rng() < 0.5 ? -1 : 1
+      p.input.drill = false
       continue
     }
 
-    const groundBlock = match.grid[groundRow * WIDTH + bx]
-
-    // 4. Downward excavation / descent
-    if (
-      groundBlock === BLOCK_DIRT ||
-      groundBlock === BLOCK_STONE ||
-      groundBlock === BLOCK_GEODE
-    ) {
-      // Destructible block underfoot: drill downward, manage heat
-      p.input.aim = Math.PI / 2
-      p.input.drill = !p.overheated && p.heat < 0.82
+    const [dx, dy] = step
+    // The drill runs into anything solid. On the super drill it also stays on in a
+    // fall, since it makes no heat: the bot cuts the next block before landing on
+    // it, instead of stopping on every block to think again.
+    const solidAhead = p.grid[(sy + dy) * WIDTH + sx + dx] !== BLOCK_AIR
+    p.input.drill = canDrill && (solidAhead || (dy > 0 && p.superDrillTimer > 0))
+    if (dx !== 0) {
+      // Sideways: walk, cutting through whatever is in the way.
+      p.input.dx = dx
+      p.input.aim = dx > 0 ? 0 : Math.PI
       p.input.thrust = false
-      // Center driller on block column
-      const colCenter = bx + 0.5
-      const offset = colCenter - cx
-      p.input.dx = Math.abs(offset) > 0.18 ? Math.sign(offset) * 0.5 : 0
-    } else if (groundBlock === BLOCK_AIR) {
-      // Free fall downward
-      p.input.aim = Math.PI / 2
-      p.input.dx = 0
-      p.input.thrust = p.vy > 10 && p.fuel > 0.35
-
-      // Start drilling early if approaching solid block
-      const nextDown = groundRow + 1 < DEPTH ? match.grid[(groundRow + 1) * WIDTH + bx] : BLOCK_AIR
-      if (
-        nextDown === BLOCK_DIRT ||
-        nextDown === BLOCK_STONE ||
-        nextDown === BLOCK_GEODE
-      ) {
-        p.input.drill = !p.overheated && p.heat < 0.82
-      } else {
-        p.input.drill = false
-      }
-    } else if (groundBlock === BLOCK_BEDROCK || groundBlock === BLOCK_GAS) {
-      // Impassable bedrock or gas hazard underfoot: path horizontally to find open downward column
-      const targetCol = findBestDownwardColumn(match, bx, groundRow)
-      const steerDir = targetCol < bx ? -1 : (targetCol > bx ? 1 : (p.slot % 2 === 0 ? -1 : 1))
-
-      p.input.dx = steerDir
-
-      const sideCol = Math.max(0, Math.min(WIDTH - 1, bx + steerDir))
-      const torsoObstacle = match.grid[torsoRow * WIDTH + sideCol]
-      const footObstacle = match.grid[groundRow * WIDTH + sideCol]
-
-      if (
-        torsoObstacle === BLOCK_DIRT ||
-        torsoObstacle === BLOCK_STONE ||
-        torsoObstacle === BLOCK_GEODE
-      ) {
-        // Clear horizontal obstacle in path
-        p.input.aim = steerDir > 0 ? 0.15 : Math.PI - 0.15
-        p.input.drill = !p.overheated && p.heat < 0.82
-        p.input.thrust = false
-      } else if (
-        footObstacle === BLOCK_DIRT ||
-        footObstacle === BLOCK_STONE ||
-        footObstacle === BLOCK_GEODE
-      ) {
-        // Clear diagonal obstacle in path
-        p.input.aim = steerDir > 0 ? Math.PI / 4 : 3 * Math.PI / 4
-        p.input.drill = !p.overheated && p.heat < 0.82
-        p.input.thrust = false
-      } else if (torsoObstacle === BLOCK_BEDROCK || torsoObstacle === BLOCK_GAS) {
-        // Bedrock wall in front: jetpack hop over it
-        p.input.thrust = p.fuel > 0.15
-        p.input.drill = false
-      } else {
-        p.input.drill = false
-        p.input.thrust = false
-      }
+    } else {
+      // Down or up: square up under the column first. A body resting on the lip
+      // of the hole beside it otherwise never falls in.
+      const offset = sx - p.x
+      p.input.dx = Math.abs(offset) < 0.05 ? 0 : Math.max(-1, Math.min(1, offset / 0.6))
+      p.input.aim = dy > 0 ? Math.PI / 2 : -Math.PI / 2
+      p.input.thrust = dy < 0 && p.fuel > 0.05 // climbing needs the jetpack; a fall never brakes
     }
   }
 }
@@ -647,24 +702,24 @@ export function touchesVault(grid, p) {
 }
 
 // --- Gas Pocket Detonation ------------------------------------------------
-function detonateGasPocket(match, bx, by) {
+function detonateGasPocket(p, bx, by) {
   const idx = by * WIDTH + bx
-  match.grid[idx] = BLOCK_AIR
-  match.hp[idx] = 0
-  match.deltas.push({ i: idx, t: BLOCK_AIR })
+  p.grid[idx] = BLOCK_AIR
+  p.hp[idx] = 0
+  p.deltas.push({ i: idx, t: BLOCK_AIR })
 
   const hx = bx + 0.5
   const hy = by + 0.5
-  match.hazards.push({
+  p.hazards.push({
     x: hx,
     y: hy,
     r: GAS_HAZARD_RADIUS,
     ttl: GAS_HAZARD_TTL_MS,
   })
 
-  // Radial explosive shockwave, knockback, heat surge, and fuel scorch
-  for (const p of match.players.values()) {
-    if (!p.alive) continue
+  // Radial explosive shockwave, knockback, heat surge, and fuel scorch. Only the
+  // shaft's owner can be caught in it: nobody else stands in this shaft.
+  if (p.alive) {
     const pcx = p.x + 0.5
     const pcy = p.y + 0.5
     const dx = pcx - hx
@@ -700,26 +755,46 @@ function detonateGasPocket(match, bx, by) {
       const ny = by + dy
       if (nx < 1 || nx >= WIDTH - 1 || ny < 3 || ny >= VAULT_Y) continue
       const nIdx = ny * WIDTH + nx
-      const neighbor = match.grid[nIdx]
+      const neighbor = p.grid[nIdx]
       if (neighbor === BLOCK_DIRT) {
-        match.grid[nIdx] = BLOCK_AIR
-        match.hp[nIdx] = 0
-        match.deltas.push({ i: nIdx, t: BLOCK_AIR })
+        p.grid[nIdx] = BLOCK_AIR
+        p.hp[nIdx] = 0
+        p.deltas.push({ i: nIdx, t: BLOCK_AIR })
       } else if (neighbor === BLOCK_GAS) {
-        match.grid[nIdx] = BLOCK_AIR
-        match.hp[nIdx] = 0
+        p.grid[nIdx] = BLOCK_AIR
+        p.hp[nIdx] = 0
         toChain.push({ x: nx, y: ny })
       }
     }
   }
 
   for (const c of toChain) {
-    detonateGasPocket(match, c.x, c.y)
+    detonateGasPocket(p, c.x, c.y)
+  }
+}
+
+// --- Sabotage -------------------------------------------------------------
+// A shattered crystal jams one living rival, picked at random. One grief at a
+// time: a fresh one replaces whatever the target was already under.
+function sabotage(match, p, rng) {
+  const rivals = [...match.players.values()].filter((q) => q !== p && q.alive)
+  if (rivals.length === 0) return
+  const target = rivals[Math.floor(rng() * rivals.length)]
+  const type = pickGrief(rng)
+  target.grief = { type, ttl: GRIEF_MS[type], by: p.name }
+}
+
+// Which grief a shattered crystal sends, weighted by GRIEF_WEIGHT.
+export function pickGrief(rng) {
+  let roll = rng() * Object.values(GRIEF_WEIGHT).reduce((sum, w) => sum + w, 0)
+  for (const [type, weight] of Object.entries(GRIEF_WEIGHT)) {
+    roll -= weight
+    if (roll < 0) return type
   }
 }
 
 // --- Drilling Raycast -----------------------------------------------------
-function executeDrillPulse(match, p) {
+function executeDrillPulse(match, p, rng) {
   const cx = p.x + 0.5
   const cy = p.y + 0.5
   const aim = p.input.aim
@@ -738,33 +813,37 @@ function executeDrillPulse(match, p) {
     if (bx === Math.floor(cx) && by === Math.floor(cy)) continue
 
     const idx = by * WIDTH + bx
-    const block = match.grid[idx]
+    const block = p.grid[idx]
     if (block !== BLOCK_AIR) {
       if (block === BLOCK_BEDROCK || block === BLOCK_VAULT) {
         break
       }
+      // Obsidian stops a normal drill dead, and even the super drill only wears it
+      // down one pulse at a time.
+      if (block === BLOCK_OBSIDIAN && !isSuper) break
 
-      const dmg = isSuper ? match.hp[idx] : 1
+      const dmg = isSuper && block !== BLOCK_OBSIDIAN ? p.hp[idx] : 1
 
-      match.hp[idx] = Math.max(0, match.hp[idx] - dmg)
+      p.hp[idx] = Math.max(0, p.hp[idx] - dmg)
 
-      if (match.hp[idx] === 0) {
+      if (p.hp[idx] === 0) {
         const oldType = block
         if (oldType === BLOCK_GAS) {
-          detonateGasPocket(match, bx, by)
+          detonateGasPocket(p, bx, by)
         } else {
-          match.grid[idx] = BLOCK_AIR
-          match.deltas.push({ i: idx, t: BLOCK_AIR })
+          p.grid[idx] = BLOCK_AIR
+          p.deltas.push({ i: idx, t: BLOCK_AIR })
 
-          if (oldType === BLOCK_GEODE) {
+          if (oldType === BLOCK_GEODE || oldType === BLOCK_SABOTAGE) {
             p.heat = 0
             p.overheated = false
             p.overheatTimer = 0
-            p.superDrillTimer = SUPER_DRILL_DURATION_MS
           }
+          if (oldType === BLOCK_GEODE) p.superDrillTimer = SUPER_DRILL_DURATION_MS
+          if (oldType === BLOCK_SABOTAGE) sabotage(match, p, rng)
         }
       } else {
-        match.deltas.push({ i: idx, t: block, hp: match.hp[idx] })
+        p.deltas.push({ i: idx, t: block, hp: p.hp[idx] })
       }
       break
     }
@@ -773,34 +852,43 @@ function executeDrillPulse(match, p) {
 
 // --- Tick Simulation ------------------------------------------------------
 export function tick(match, dtMs = TICK_MS, rng = Math.random) {
-  ensureBots(match)
+  ensureBots(match, rng)
   if (match.players.size > 0 && !canRun(match)) return
+
+  // Once per tick, not per snapshot: every socket is sent its own frame of it.
+  match.seq++
+
+  // The lobby. Nothing moves and the void holds until enough people are in, or
+  // someone asks for bots. The grace period starts when the match does.
+  if (match.phase === 'waiting') {
+    const humans = [...match.players.values()].filter((p) => !p.bot).length
+    if (humans < MIN_PLAYERS && !match.botsWanted && !match.botsOnly) return
+    match.phase = 'playing'
+  }
+
+  // A decided match stands still: the clear time, the void and every driller stop
+  // on the frame it ended, and stay that way through the results screen.
+  if (match.phase === 'over') return
 
   driveBots(match, rng)
 
-  match.deltas = []
   const dtSec = dtMs / 1000
 
   // 1. Advance Crush Void
   match.elapsed += dtMs
   if (match.elapsed > GRACE_MS) {
-    const postGraceSec = (match.elapsed - GRACE_MS) / 1000
-    const depth = Math.max(0, match.voidY)
-    const speed = Math.min(MAX_VOID_SPEED, BASE_VOID_SPEED + postGraceSec * VOID_ACCEL + depth * VOID_DEPTH_ACCEL)
-    match.voidY += speed * dtSec
+    match.voidY += voidSpeed(match) * dtSec
   }
 
-  // 2. Update Hazards
-  for (let i = match.hazards.length - 1; i >= 0; i--) {
-    const h = match.hazards[i]
-    h.ttl -= dtMs
-    if (h.ttl <= 0) {
-      match.hazards.splice(i, 1)
-    }
-  }
-
-  // 3. Update Players
+  // 2. Update Players, each in their own shaft
   for (const p of match.players.values()) {
+    p.deltas = []
+    for (const h of p.hazards) h.ttl -= dtMs
+    p.hazards = p.hazards.filter((h) => h.ttl > 0)
+    if (p.grief) {
+      p.grief.ttl -= dtMs
+      if (p.grief.ttl <= 0) p.grief = null
+    }
     if (!p.alive) continue
 
     // Void crush check
@@ -811,7 +899,7 @@ export function tick(match, dtMs = TICK_MS, rng = Math.random) {
 
     // Hazard cloud interaction: thermal induction and turbulence
     let inHazard = false
-    for (const h of match.hazards) {
+    for (const h of p.hazards) {
       const pcx = p.x + 0.5
       const pcy = p.y + 0.5
       const dist = Math.hypot(pcx - h.x, pcy - h.y)
@@ -858,11 +946,13 @@ export function tick(match, dtMs = TICK_MS, rng = Math.random) {
 
     // Drilling execution
     if (p.input.drill && !p.overheated) {
-      const interval = p.superDrillTimer > 0 ? SUPER_DRILL_PULSE_INTERVAL : DRILL_PULSE_INTERVAL
+      const base = p.superDrillTimer > 0 ? SUPER_DRILL_PULSE_INTERVAL : DRILL_PULSE_INTERVAL
+      // Chill doubles whichever interval is running: it slows a super drill, never cancels it.
+      const interval = p.grief?.type === 'chill' ? base * 2 : base
       p.drillTimer = (p.drillTimer || 0) + dtMs
       while (p.drillTimer >= interval) {
         p.drillTimer -= interval
-        executeDrillPulse(match, p)
+        executeDrillPulse(match, p, rng)
       }
     } else {
       p.drillTimer = 0
@@ -892,7 +982,7 @@ export function tick(match, dtMs = TICK_MS, rng = Math.random) {
       const targetCol = Math.floor(newX + 0.9)
       let blocked = false
       for (let r = minRow; r <= maxRow; r++) {
-        if (isSolid(match.grid, targetCol, r)) {
+        if (isSolid(p.grid, targetCol, r)) {
           blocked = true
           break
         }
@@ -909,7 +999,7 @@ export function tick(match, dtMs = TICK_MS, rng = Math.random) {
       const targetCol = Math.floor(newX + 0.1)
       let blocked = false
       for (let r = minRow; r <= maxRow; r++) {
-        if (isSolid(match.grid, targetCol, r)) {
+        if (isSolid(p.grid, targetCol, r)) {
           blocked = true
           break
         }
@@ -934,7 +1024,7 @@ export function tick(match, dtMs = TICK_MS, rng = Math.random) {
       const targetRow = Math.floor(newY + 1.0)
       let blocked = false
       for (let c = minCol; c <= maxCol; c++) {
-        if (isSolid(match.grid, c, targetRow)) {
+        if (isSolid(p.grid, c, targetRow)) {
           blocked = true
           break
         }
@@ -951,7 +1041,7 @@ export function tick(match, dtMs = TICK_MS, rng = Math.random) {
       const targetRow = Math.floor(newY + 0.1)
       let blocked = false
       for (let c = minCol; c <= maxCol; c++) {
-        if (isSolid(match.grid, c, targetRow)) {
+        if (isSolid(p.grid, c, targetRow)) {
           blocked = true
           break
         }
@@ -971,10 +1061,10 @@ export function tick(match, dtMs = TICK_MS, rng = Math.random) {
     }
   }
 
-  // 4. Win / Loss Resolution
+  // 3. Win / Loss Resolution
   if (match.phase === 'playing') {
     for (const p of match.players.values()) {
-      if (p.alive && touchesVault(match.grid, p)) {
+      if (p.alive && touchesVault(p.grid, p)) {
         match.phase = 'over'
         match.winner = p.id
         match.winReason = 'vault'
@@ -983,22 +1073,17 @@ export function tick(match, dtMs = TICK_MS, rng = Math.random) {
     }
 
     if (match.phase === 'playing') {
-      const alive = [...match.players.values()].filter(p => p.alive)
-      const hasBots = [...match.players.values()].some(p => p.bot)
-      if (alive.length === 0) {
-        match.phase = 'over'
-        match.winner = null
-      } else if (!hasBots && match.players.size > 1 && alive.length === 1) {
-        match.phase = 'over'
-        match.winner = alive[0].id
-        match.winReason = 'survival'
-      }
+      const all = [...match.players.values()]
+      settle(match, all.some((p) => p.bot), all.filter((p) => !p.bot).length)
     }
   }
 }
 
 // --- Snapshot Serialization -----------------------------------------------
-export function snapshot(match) {
+// A frame for one viewer: their own shaft's changes and gas clouds, plus every
+// driller's position and grief. No viewer (the admin panel) means no terrain.
+export function snapshot(match, viewerId) {
+  const viewer = match.players.get(viewerId)
   const players = []
   for (const p of match.players.values()) {
     players.push({
@@ -1019,11 +1104,12 @@ export function snapshot(match) {
       kills: 0,
       deaths: p.alive ? 0 : 1,
       overheated: p.overheated,
-      superDrill: p.superDrillTimer > 0
+      superDrill: p.superDrillTimer > 0,
+      grief: p.grief ? { type: p.grief.type, ttl: p.grief.ttl, by: p.grief.by } : null
     })
   }
 
-  const hazards = match.hazards.map(h => ({
+  const hazards = (viewer?.hazards ?? []).map(h => ({
     x: Number(h.x.toFixed(2)),
     y: Number(h.y.toFixed(2)),
     r: Number(h.r.toFixed(2)),
@@ -1032,7 +1118,7 @@ export function snapshot(match) {
 
   return {
     t: 'snap',
-    seq: match.seq++,
+    seq: match.seq,
     voidY: Number(match.voidY.toFixed(2)),
     phase: match.phase,
     winner: match.winner,
@@ -1041,7 +1127,7 @@ export function snapshot(match) {
     botFill: match.botFill ?? 0,
     botsOnly: Boolean(match.botsOnly),
     players,
-    deltas: match.deltas,
+    deltas: viewer?.deltas ?? [],
     hazards,
     board: match.board ?? []
   }

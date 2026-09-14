@@ -11,10 +11,12 @@ import {
   tick,
   snapshot,
   encodeMap,
-  sanitizeName,
   canRun,
   wantBots,
   BOT_FILL_TO,
+  MAX_PLAYERS,
+  WIDTH,
+  DEPTH,
   TICK_MS,
 } from './voiddrillers.js'
 import { boardFor } from './board.js'
@@ -23,14 +25,13 @@ import { keeper } from './board-store.js'
 const HOST = process.env.HOST || '127.0.0.1'
 const PORT = Number(process.env.PORT) || 8086
 const RESET_DELAY_MS = 5000
-const MAX_PLAYERS = 8
 
 // The operator console's shared secret. A lab control, not a security boundary:
 // the protocol is deliberately plain ws:// so it can be read in a packet
 // capture, which means this key can be read there too.
 const ADMIN_KEY = process.env.ADMIN_KEY || 'admin'
 
-let match = make({ seed: Date.now(), botFill: BOT_FILL_TO, botsWanted: true })
+let match = make({ seed: Date.now(), botFill: BOT_FILL_TO })
 let overSince = 0
 
 // Map player ID -> WebSocket
@@ -55,49 +56,25 @@ const wss = new WebSocketServer({
   port: PORT,
   maxPayload: 4096,
   perMessageDeflate: false,
-  handleProtocols: (protocols) => (protocols.has('voiddrillers.v1') ? 'voiddrillers.v1' : [...protocols][0] || false),
 })
 
+const welcome = (p) =>
+  JSON.stringify({ t: 'welcome', id: p.id, slot: p.slot, width: WIDTH, depth: DEPTH, map: encodeMap(p.grid) })
+
+// A fresh match, with everyone still connected carried into it.
 function restartMatch() {
   overSince = 0
-  const activeSockets = []
-  for (const client of wss.clients) {
-    if (client.readyState === WebSocket.OPEN && client.player) {
-      activeSockets.push({
-        ws: client,
-        id: client.player.id,
-        name: client.player.name,
-      })
-    }
-  }
-
-  const prevBotFill = match.botFill ?? BOT_FILL_TO
-  const prevBotsOnly = match.botsOnly ?? false
-  const prevBotsWanted = match.botsWanted ?? true
-
-  match = make({
-    seed: Date.now(),
-    botFill: prevBotFill,
-    botsOnly: prevBotsOnly,
-    botsWanted: prevBotsWanted,
-  })
+  const carried = [...wss.clients].filter((c) => c.readyState === WebSocket.OPEN && c.player)
+  // A driller who chose bots keeps them; otherwise the next match waits in the lobby.
+  match = make({ seed: Date.now(), botFill: match.botFill, botsOnly: match.botsOnly, botsWanted: match.botsWanted })
   match.board = keep.top()
   sockets.clear()
 
-  for (const { ws, id, name } of activeSockets) {
-    const p = join(match, { id, name })
+  for (const ws of carried) {
+    const p = join(match, { id: ws.player.id, name: ws.player.name })
     ws.player = p
     sockets.set(p.id, ws)
-    ws.send(
-      JSON.stringify({
-        t: 'welcome',
-        id: p.id,
-        slot: p.slot,
-        width: match.width,
-        depth: match.depth,
-        map: encodeMap(match.grid),
-      }),
-    )
+    ws.send(welcome(p))
   }
 }
 
@@ -140,59 +117,21 @@ wss.on('connection', (ws) => {
     }
 
     if (msg?.t === 'join' && !ws.player) {
-      // If server was empty and in 'over' phase, fresh start for first joining player
-      if (match.phase === 'over' && match.players.size === 0) {
-        match = make({
-          seed: Date.now(),
-          botFill: match.botFill ?? BOT_FILL_TO,
-          botsWanted: true,
-          botsOnly: match.botsOnly ?? false,
-        })
-        match.board = keep.top()
-        overSince = 0
-      }
-
-      if (match.players.size >= MAX_PLAYERS) {
-        ws.send(JSON.stringify({ t: 'full' }))
-        ws.close()
-        return
-      }
-
-      const name = sanitizeName(msg.name)
-      const player = join(match, { name })
+      // An empty server sitting on a finished match starts fresh for whoever arrives.
+      if (match.phase === 'over' && match.players.size === 0) restartMatch()
+      // join() stands a bot down to make room, and sanitizes the name.
+      const player = join(match, { name: msg.name })
       if (!player) {
         ws.send(JSON.stringify({ t: 'full' }))
         ws.close()
         return
       }
-
       ws.player = player
       sockets.set(player.id, ws)
-      ws.send(
-        JSON.stringify({
-          t: 'welcome',
-          id: player.id,
-          slot: player.slot,
-          width: match.width,
-          depth: match.depth,
-          map: encodeMap(match.grid),
-        }),
-      )
+      ws.send(welcome(player))
     } else if (msg?.t === 'input' && ws.player) {
-      const cleanInput = {}
-      if (typeof msg.dx === 'number' && Number.isFinite(msg.dx)) {
-        cleanInput.dx = msg.dx
-      }
-      if (typeof msg.thrust === 'boolean') {
-        cleanInput.thrust = msg.thrust
-      }
-      if (typeof msg.drill === 'boolean') {
-        cleanInput.drill = msg.drill
-      }
-      if (typeof msg.aim === 'number' && Number.isFinite(msg.aim)) {
-        cleanInput.aim = msg.aim
-      }
-      setInput(match, ws.player.id, cleanInput)
+      // setInput type-checks every field itself.
+      setInput(match, ws.player.id, msg)
     } else if (msg?.t === 'ready' && ws.player) {
       wantBots(match)
     } else if (msg?.t === 'restart') {
@@ -243,10 +182,11 @@ setInterval(() => {
     overSince = 0
   }
 
-  const frame = JSON.stringify(snapshot(match))
+  // One frame per socket: each driller is sent their own shaft's changes. Built
+  // and sent in this same turn, because deltas ride in by live reference.
   for (const client of wss.clients) {
     if (client.readyState === WebSocket.OPEN) {
-      client.send(frame)
+      client.send(JSON.stringify(snapshot(match, client.player?.id)))
     }
   }
 }, TICK_MS)
