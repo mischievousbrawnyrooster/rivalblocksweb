@@ -107,6 +107,7 @@ export default function CipherRun() {
   const [hasJoined, setHasJoined] = useState(false)
   const [showDrawer, setShowDrawer] = useState(false)
   const [selectedTier, setSelectedTier] = useState(1)
+  const [myVote, setMyVote] = useState(null)
 
   // Local typing buffer
   const [cursor, setCursor] = useState(0)
@@ -119,11 +120,24 @@ export default function CipherRun() {
 
   const wsRef = useRef(null)
   const snapRef = useRef(null)
+  const protocolRef = useRef(protocol)
   const canvasRef = useRef(null)
   const inputRef = useRef(null)
   const spriteImagesRef = useRef([])
   const interpProgressRef = useRef(new Map())
   const particlesRef = useRef([])
+
+  useEffect(() => {
+    protocolRef.current = protocol
+  }, [protocol])
+
+  // Cast vote for tier (1: Short, 2: Medium, 3: Long)
+  const handleVote = useCallback((tier) => {
+    setMyVote(tier)
+    if (wsRef.current?.readyState === WebSocket.OPEN) {
+      wsRef.current.send(JSON.stringify({ t: 'vote', tier }))
+    }
+  }, [])
 
   // Preload all sprite sheet variations
   useEffect(() => {
@@ -181,6 +195,7 @@ export default function CipherRun() {
           setMyId(msg.id)
           setMySlot(msg.slot)
           if (msg.protocol) {
+            protocolRef.current = msg.protocol
             setProtocol(msg.protocol)
             setCharStates(new Array(msg.protocol.text.length).fill('pending'))
             setCursor(0)
@@ -191,6 +206,21 @@ export default function CipherRun() {
         } else if (msg.t === 'snap') {
           snapRef.current = msg
           setSnap(msg)
+
+          // Sync protocol when round resolves to a new protocol
+          if (msg.protocol?.id && msg.protocol.id !== protocolRef.current?.id) {
+            const fullProto = PROTOCOLS.find((p) => p.id === msg.protocol.id) || msg.protocol
+            protocolRef.current = fullProto
+            setProtocol(fullProto)
+            if (fullProto.text) {
+              setCharStates(new Array(fullProto.text.length).fill('pending'))
+              setCursor(0)
+            }
+          }
+
+          if (msg.phase !== 'voting') {
+            setMyVote(null)
+          }
 
           const me = msg.players?.find((p) => p.id === myId)
           if (me) {
@@ -230,6 +260,16 @@ export default function CipherRun() {
     (e) => {
       const ws = wsRef.current
       if (!ws || ws.readyState !== WebSocket.OPEN || !protocol?.text) return
+
+      // Pre-round consensus voting hotkeys
+      if (snap?.phase === 'voting') {
+        if (e.key === '1' || e.key === '2' || e.key === '3') {
+          e.preventDefault()
+          handleVote(Number(e.key))
+          return
+        }
+      }
+
       if (snap?.phase !== 'racing' || glitchActive) return
 
       const text = protocol.text
@@ -302,7 +342,7 @@ export default function CipherRun() {
         ws.send(JSON.stringify({ t: 'input', key, cursor }))
       }
     },
-    [protocol, cursor, snap?.phase, glitchActive, charStates],
+    [protocol, cursor, snap?.phase, glitchActive, charStates, handleVote],
   )
 
   // Attach global keyboard listener
@@ -523,7 +563,7 @@ export default function CipherRun() {
             onClick={() => setShowDrawer(!showDrawer)}
             className="border border-line bg-surface px-4 py-2 text-xs font-mono uppercase tracking-wider text-fg transition-colors hover:border-flare"
           >
-            {showDrawer ? 'Close Protocols' : 'Select Protocol (18)'}
+            {showDrawer ? 'Close Protocols' : 'Select Protocol (151)'}
           </button>
           <button
             type="button"
@@ -538,23 +578,34 @@ export default function CipherRun() {
       {/* Protocol Selection Drawer */}
       {showDrawer && (
         <div className="my-6 border border-line bg-surface p-5 transition-all">
-          <div className="flex items-center justify-between border-b border-line pb-3">
-            <h3 className="rule-label">Mainframe Protocol Archive</h3>
-            <div className="flex gap-2">
-              {[1, 2, 3].map((tier) => (
+          <div className="flex flex-wrap items-center justify-between gap-3 border-b border-line pb-3">
+            <h3 className="rule-label">Mainframe Protocol Archive (151 Protocols)</h3>
+            <div className="flex flex-wrap gap-2">
+              {[
+                { tier: 1, label: 'Tier 1 Short (50)' },
+                { tier: 2, label: 'Tier 2 Medium (50)' },
+                { tier: 3, label: 'Tier 3 Long (50)' },
+                { tier: 4, label: 'Easter Egg (1)' },
+              ].map((tab) => (
                 <button
-                  key={tier}
+                  key={tab.tier}
                   type="button"
-                  onClick={() => setSelectedTier(tier)}
-                  className={`px-3 py-1 text-xs font-mono uppercase ${selectedTier === tier ? 'bg-flare text-on-flare' : 'bg-bg text-muted'}`}
+                  onClick={() => setSelectedTier(tab.tier)}
+                  className={`px-3 py-1 text-xs font-mono uppercase transition-colors ${
+                    selectedTier === tab.tier ? 'bg-flare text-on-flare font-bold' : 'bg-bg text-muted hover:text-fg'
+                  }`}
                 >
-                  Tier {tier}
+                  {tab.label}
                 </button>
               ))}
             </div>
           </div>
-          <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-            {PROTOCOLS.filter((p) => p.tier === selectedTier).map((p) => (
+          <div className="mt-4 grid max-h-96 overflow-y-auto pr-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
+            {PROTOCOLS.filter((p) => {
+              if (selectedTier === 4) return p.id === 151
+              if (selectedTier === 1) return p.tier === 1 && p.id <= 50
+              return p.tier === selectedTier
+            }).map((p) => (
               <button
                 key={p.id}
                 type="button"
@@ -562,9 +613,18 @@ export default function CipherRun() {
                   handleRestart(p.id)
                   setShowDrawer(false)
                 }}
-                className={`flex flex-col rounded border p-3 text-left transition-colors ${protocol?.id === p.id ? 'border-flare bg-bg' : 'border-line/60 bg-bg/50 hover:border-line'}`}
+                className={`flex flex-col rounded border p-3 text-left transition-colors ${
+                  protocol?.id === p.id
+                    ? 'border-flare bg-bg shadow-sm'
+                    : 'border-line/60 bg-bg/50 hover:border-line'
+                }`}
               >
-                <span className="font-mono text-xs text-flare font-bold">{p.title}</span>
+                <div className="flex items-center justify-between w-full">
+                  <span className="font-mono text-xs text-flare font-bold">{p.title}</span>
+                  <span className="text-[10px] font-mono text-muted">
+                    {p.text.trim().split(/\s+/).length} words
+                  </span>
+                </div>
                 <p className="mt-2 line-clamp-2 text-xs leading-relaxed text-muted">{p.text}</p>
               </button>
             ))}
@@ -669,6 +729,112 @@ export default function CipherRun() {
             </div>
           </div>
 
+          {/* Vote Deck during phase === 'voting' */}
+          {snap?.phase === 'voting' && (
+            <div className="border-b border-line bg-[#0c121e] p-5 font-mono">
+              <div className="flex flex-wrap items-center justify-between gap-2 border-b border-line/60 pb-3 text-xs">
+                <div className="flex items-center gap-2">
+                  <span className="inline-block h-2 w-2 rounded-full bg-flare animate-ping" />
+                  <span className="font-bold text-flare uppercase tracking-wider">
+                    PROTOCOL CONSENSUS WINDOW // VOTE CLOSES IN [ {snap.voteTimer ?? 5}s ]
+                  </span>
+                </div>
+                <div className="text-[11px] text-muted">
+                  PRESS <kbd className="rounded bg-bg px-1.5 py-0.5 text-fg border border-line">1</kbd> <kbd className="rounded bg-bg px-1.5 py-0.5 text-fg border border-line">2</kbd> <kbd className="rounded bg-bg px-1.5 py-0.5 text-fg border border-line">3</kbd> OR CLICK TO VOTE
+                </div>
+              </div>
+
+              {/* 3 Difficulty Cards */}
+              <div className="mt-4 grid gap-3 sm:grid-cols-3">
+                {[
+                  {
+                    tier: 1,
+                    hotkey: '1',
+                    name: 'SHORT BREACH',
+                    words: '15 to 25 words',
+                    desc: 'Fast Infiltration',
+                    count: snap.votes?.short || 0,
+                  },
+                  {
+                    tier: 2,
+                    hotkey: '2',
+                    name: 'MEDIUM OVERRIDE',
+                    words: '40 to 60 words',
+                    desc: 'Kernel Bus Control',
+                    count: snap.votes?.medium || 0,
+                  },
+                  {
+                    tier: 3,
+                    hotkey: '3',
+                    name: 'LONG MAINFRAME',
+                    words: '85 to 125 words',
+                    desc: 'Black Ice Penetration',
+                    count: snap.votes?.long || 0,
+                  },
+                ].map((card) => {
+                  const total = snap.votes?.total || 0
+                  const pct = total > 0 ? Math.round((card.count / total) * 100) : 0
+                  const isVoted = myVote === card.tier
+
+                  return (
+                    <button
+                      key={card.tier}
+                      type="button"
+                      onClick={() => handleVote(card.tier)}
+                      className={`relative flex flex-col rounded border p-4 text-left transition-all ${
+                        isVoted
+                          ? 'border-flare bg-flare/10 shadow-sm ring-1 ring-flare'
+                          : 'border-line/60 bg-surface hover:border-line hover:bg-bg/60'
+                      }`}
+                    >
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-2">
+                          <span className={`text-sm ${isVoted ? 'text-flare font-bold' : 'text-muted'}`}>
+                            {isVoted ? '◉' : '○'}
+                          </span>
+                          <span className="font-bold text-xs text-fg tracking-wide">
+                            [{card.hotkey}] {card.name}
+                          </span>
+                        </div>
+                        <span className="rounded bg-bg px-2 py-0.5 text-[10px] font-bold text-flare border border-line">
+                          {card.count} {card.count === 1 ? 'VOTE' : 'VOTES'}
+                        </span>
+                      </div>
+
+                      <div className="mt-2 text-[11px] text-muted">
+                        <div>{card.words}</div>
+                        <div className="text-[10px] text-slate-400">{card.desc}</div>
+                      </div>
+
+                      {/* Vote share progress bar */}
+                      <div className="mt-3">
+                        <div className="flex justify-between text-[10px] text-muted mb-1 font-mono">
+                          <span>CONSENSUS</span>
+                          <span>{pct}%</span>
+                        </div>
+                        <div className="h-1.5 w-full rounded-full bg-bg overflow-hidden border border-line/40">
+                          <div
+                            className={`h-full transition-all duration-300 ${isVoted ? 'bg-flare' : 'bg-slate-500'}`}
+                            style={{ width: `${pct}%` }}
+                          />
+                        </div>
+                      </div>
+                    </button>
+                  )
+                })}
+              </div>
+            </div>
+          )}
+
+          {/* Easter Egg Devotion Banner */}
+          {snap?.easterEgg && (
+            <div className="bg-flare/20 border-b-2 border-flare px-5 py-3 text-center font-mono animate-pulse">
+              <span className="text-xs sm:text-sm font-bold text-flare tracking-widest">
+                [!] ANOMALOUS OVERRIDE DETECTED // PROTOCOL 151 SUBLIMINAL DEVOTION CASCADE [!]
+              </span>
+            </div>
+          )}
+
           {/* Countdown Banner */}
           {snap?.phase === 'countdown' && (
             <div className="bg-flare/10 border-b border-flare/30 px-5 py-3 text-center font-mono">
@@ -690,7 +856,11 @@ export default function CipherRun() {
           {/* Monospace Character Buffer */}
           <div
             onClick={() => inputRef.current?.focus()}
-            className="min-h-[160px] p-6 font-mono text-lg leading-relaxed tracking-wide select-none cursor-text bg-[#090d16]"
+            className={`min-h-[160px] p-6 font-mono text-lg leading-relaxed tracking-wide select-none cursor-text ${
+              snap?.easterEgg
+                ? 'bg-[#150a04] border-t border-flare/50 shadow-inner'
+                : 'bg-[#090d16]'
+            }`}
           >
             {protocol?.text?.split('').map((ch, idx) => {
               const state = charStates[idx]
