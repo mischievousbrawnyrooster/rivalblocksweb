@@ -117,8 +117,9 @@ The project contains a static marketing SPA and six authoritative multiplayer ga
 - **Monkeytype Standard**: 5 characters per normalized word (`(correctChars / 5) / (elapsedMinutes)`).
 - **Glitch Breaker Lockout**: 3 consecutive typos trigger 350ms static freeze (`LOCKOUT_MS = 350`).
 - **Error Recovery**: Backspace recovery clears typo state; Spacebar advances past word errors with uncorrected penalty.
-- **Curated Protocols**: 18 curated protocols across 3 difficulty tiers (Quick, Kernel, Black Ice).
-- **Chibi Cyber Sprinters**: Procedural anime runner with dynamic stride cadence scaling with WPM, word-dash impulse, and stumble states.
+- **151 Curated Protocols**: 50 Short (15 to 25 words), 50 Medium (40 to 60 words), 50 Long (85 to 125 words), plus Protocol 151 Easter Egg (Subliminal Devotion Directive repeating "I LOVE RIVALBLOCKS." 20 times).
+- **Authoritative Pre-Round Voting**: 5-second pre-round voting phase (`VOTE_DURATION_MS = 5000`) before race countdown, with real-time consensus percentages, home-row hotkeys (`1`, `2`, `3`), random tie resolution, and a 2% Easter Egg roll.
+- **Chibi Cyber Sprinters**: Procedural anime runner with 6 sprinter variations, dynamic stride cadence scaling with WPM, word-dash impulse, stumble states, and celebratory cheer states.
 
 ---
 
