@@ -17,6 +17,7 @@ npm run fracture # Fracture Line     127.0.0.1:8082  ← /fracture-ws
 npm run blast    # Blastworks, last man standing  :8083  ← /blast-ws
 npm run blast:dm # Blastworks, deathmatch         :8084  ← /blast-dm-ws
 npm run blockout3d # Blockout Royale 3D            :8085  ← /blockout3d-ws
+npm run drillers # Void Drillers                   :8086  ← /voiddrillers-ws
 npm test         # node --test over src/lib and server/*.test.js
 npm run build    # static output to dist/
 ```
@@ -52,10 +53,14 @@ Three layers with a deliberate, enforced split:
 | `server/server.js` | Connection lifecycle, message parsing, broadcast | Any game decision |
 | `server/blockout3d.js` | Every rule and all match state | Sockets, Node APIs, *any* import |
 | `server/blockout3d-server.js` | Connection lifecycle, parsing, broadcast | Any game decision |
+| `server/voiddrillers.js` | Every rule and all match state | Sockets, Node APIs, *any* import |
+| `server/voiddrillers-server.js` | Connection lifecycle, parsing, broadcast | Any game decision |
 | `server/board.js` | Leaderboard merging and ranking | Node APIs, imports, I/O, a clock |
-| `server/board-store.js` | Reading and writing the five board files | Any ranking decision |
+| `server/board-store.js` | Reading and writing the board files | Any ranking decision |
 | `src/pages/Play.jsx` | Rendering and input | Simulation, prediction, rule checks |
 | `src/pages/Blockout3D.jsx` | Scene, camera, input, HUD | Simulation, prediction, rule checks |
+| `src/pages/VoidDrillers.jsx` | Canvas, camera, particles, HUD | Simulation, prediction, rule checks |
+
 
 `game.js` has zero imports on purpose — that purity is why all ~60 tests live against it and why `server.js` and `Play.jsx` have none. Put new logic there, not in the socket wrapper.
 

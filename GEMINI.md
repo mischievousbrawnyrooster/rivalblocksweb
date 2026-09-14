@@ -14,6 +14,7 @@ npm.cmd run game     # Blockout Royale              127.0.0.1:8081  ← /ws
 npm.cmd run fracture # Fracture Line                127.0.0.1:8082  ← /fracture-ws
 npm.cmd run blast    # Blastworks (Last Man)        127.0.0.1:8083  ← /blast-ws
 npm.cmd run blast:dm # Blastworks (Deathmatch)      127.0.0.1:8084  ← /blast-dm-ws
+npm.cmd run drillers # Void Drillers                127.0.0.1:8086  ← /voiddrillers-ws
 npm.cmd run build    # static production build to dist/
 ```
 
@@ -32,17 +33,18 @@ node --test --test-name-pattern="cooldown" server/game.test.js
 
 ## Codebase Structure & Architectural Split
 
-The project contains a static marketing SPA and four authoritative multiplayer games sharing one build.
+The project contains a static marketing SPA and five authoritative multiplayer games sharing one build.
 
 ### Strict Three-Layer Architecture
 
 | Component / Layer | Files | Responsibilities | Constraints (Must NEVER contain) |
 |---|---|---|---|
-| **Rules Engine** | `server/game.js`, `server/fracture.js`, `server/blastworks.js`, `server/blockout3d.js` | Authoritative match state, movement, collision, elimination, powerups, tick logic | **Zero external imports, zero Node APIs, zero sockets, zero timers, zero I/O**. Completely pure functions. |
-| **Network Adapter** | `server/server.js`, `server/fracture-server.js`, `server/blastworks-server.js` | WebSocket lifecycle, frame parsing, validation, snapshot broadcasts | **Zero game decisions or simulation logic**. Only relays client input and broadcasts snapshots. |
+| **Rules Engine** | `server/game.js`, `server/fracture.js`, `server/blastworks.js`, `server/blockout3d.js`, `server/voiddrillers.js` | Authoritative match state, movement, collision, elimination, powerups, tick logic | **Zero external imports, zero Node APIs, zero sockets, zero timers, zero I/O**. Completely pure functions. |
+| **Network Adapter** | `server/server.js`, `server/fracture-server.js`, `server/blastworks-server.js`, `server/voiddrillers-server.js` | WebSocket lifecycle, frame parsing, validation, snapshot broadcasts | **Zero game decisions or simulation logic**. Only relays client input and broadcasts snapshots. |
 | **Shared Pure Logic** | `server/board.js` | Leaderboard merging, ranking, K/D math | **Runs in both Node.js and the browser**. No Node APIs, no clock (`Date.now` passed in). |
-| **Storage Layer** | `server/board-store.js` | Reading/writing the 4 leaderboard JSON files | **Single-writer per file**. No locking needed. Corrupted files fall back to empty boards. |
-| **Client UI** | `src/pages/Play.jsx`, `src/pages/Fracture.jsx`, `src/pages/Blastworks.jsx` | Canvas / DOM rendering, keyboard/mouse input uplink | **No client-side simulation, prediction, or rollback**. Pure rendering of authoritative server snapshots. |
+| **Storage Layer** | `server/board-store.js` | Reading/writing the leaderboard JSON files | **Single-writer per file**. No locking needed. Corrupted files fall back to empty boards. |
+| **Client UI** | `src/pages/Play.jsx`, `src/pages/Fracture.jsx`, `src/pages/Blastworks.jsx`, `src/pages/Blockout3D.jsx`, `src/pages/VoidDrillers.jsx` | Canvas / DOM rendering, keyboard/mouse input uplink | **No client-side simulation, prediction, or rollback**. Pure rendering of authoritative server snapshots. |
+
 
 ---
 
@@ -103,7 +105,15 @@ The project contains a static marketing SPA and four authoritative multiplayer g
 - **Wire Optimization**: 845 tiles across 5 floors are encoded into a compact single-character string (`CHAR = { solid: '.', warn: '!', gone: '_' }`), reducing bandwidth from 300 KB/s to 25 KB/s.
 - **Kill Attribution (Ruling R2)**: `p.fallBy` is reset on self-inflicted falls (walking into an existing hole), preventing old shoves from erroneously crediting kills minutes later.
 
+### Void Drillers (2D Side Descent)
+- **Excavation Shaft**: 20 columns wide by 260 blocks deep (`WIDTH = 20`, `DEPTH = 260`). Destructible strata include dirt (1 hit), stone (3 hits), gas pockets (damaging aerosol hazard), and geode crystals (heat flush + 3s super drill).
+- **Continuous Physics**: Downward gravity (14.0 blocks/s²), terminal fall velocity (12.0 blocks/s²), jetpack thrusters (-18.0 blocks/s²) consuming fuel with ground recharge.
+- **Thermal Dynamics**: Drilling adds heat (+0.25/s), cooling dissipates heat (-0.30/s), and reaching 100% triggers a 1.8s overheat breaker lockout.
+- **Crush Void**: Descends from -4.0 after a 4000 ms grace period, accelerating with depth to crush slow drillers. First player touching the Extraction Vault at y=250 wins.
+- **Delta Wire Protocol**: Full map transmitted once on join via run-length encoded string; 30 Hz snapshots transmit only dynamic entities and incremental block deltas.
+
 ---
+
 
 ## Design, Styling & Copy Rules
 
