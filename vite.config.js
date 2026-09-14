@@ -60,6 +60,7 @@ export default defineConfig({
       // starting '/ws' is swallowed by the Blockout rule above.
       '/blockout3d-ws': { target: 'ws://127.0.0.1:8085', ws: true },
       '/voiddrillers-ws': { target: 'ws://127.0.0.1:8086', ws: true },
+      '/cipherrun-ws': { target: 'ws://127.0.0.1:8087', ws: true },
     },
   },
 })

@@ -65,6 +65,12 @@ export const MARKS = {
       `<polygon points="6,12 26,12 16,27" fill="${FLARE}"/>` +
       `<line x1="16" y1="12" x2="16" y2="24" stroke="${GROUND}" stroke-width="3"/>`,
   ),
+
+  // Cipher Run: terminal prompt caret and cursor dash.
+  'cipher-run': wrap(
+    `<path d="M6 8 L16 16 L6 24" stroke="${FLARE}" stroke-width="4" stroke-linecap="round" stroke-linejoin="round" fill="none"/>` +
+      `<rect x="18" y="21" width="8" height="4" fill="${PAPER}"/>`,
+  ),
 }
 
 /**

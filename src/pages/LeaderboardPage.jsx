@@ -16,6 +16,7 @@ const PLAY_PATH = {
   fracture: '/play/fracture-line',
   blastworks: '/play/blastworks',
   voiddrillers: '/play/void-drillers',
+  cipherrun: '/play/cipher-run',
 }
 
 /** The play route for a board, so a name on the table is one click from a match. */
@@ -32,10 +33,10 @@ export default function LeaderboardPage() {
           <p className="rule-label">Every title</p>
           <h1 className="display mt-2 text-4xl sm:text-5xl">Leaderboard</h1>
           <p className="mt-5 max-w-xl leading-relaxed text-muted">
-            Every round of Blockout Royale, Blockout Royale 3D, and Void
-            Drillers, and every match of Fracture Line and Blastworks, on every
-            server. A result goes on the board the moment it finishes and stays
-            there. Nothing is cleared between sessions.
+            Every round of Blockout Royale, Blockout Royale 3D, Void Drillers,
+            and Cipher Run, and every match of Fracture Line and Blastworks, on
+            every server. A result goes on the board the moment it finishes and
+            stays there. Nothing is cleared between sessions.
           </p>
         </div>
       </header>

@@ -343,6 +343,65 @@ export const games = [
       { seed: 56, caption: 'The Vault: touchdown on the extraction beacon platform' },
     ],
   },
+  {
+    slug: 'cipher-run',
+    playPath: '/play/cipher-run',
+    playBlurb:
+      'Decrypt secure mainframe protocols against rival hackers. Accurate keystrokes advance your chibi sprinter down the data highway before watchdog lockouts trip.',
+    title: 'Cipher Run',
+    tagline: 'Terminal Decryption Race',
+    status: 'online',
+    port: 8087,
+    wsPath: '/cipherrun-ws',
+    coverImage: '/art/cipher-run.jpg',
+    art: {
+      variant: 'blockout',
+      seed: 87,
+    },
+    genre: 'Terminal Decryption Race',
+    players: '1 to 8',
+    summary:
+      'An authoritative cyberpunk terminal decryption sprint. Decrypt mainframe firewalls word-by-word against rival operators or test your speed in solo time-attack trials.',
+    blurb:
+      'Mainframe intrusion countermeasures are active. Compete against rivals and automated daemons to decrypt classified protocols before system watchdogs trigger total lockout.',
+    controls:
+      'Type highlighted characters in sequence. Press Backspace to correct mistakes. Hit Spacebar to advance across words with uncorrected errors.',
+    features: [
+      {
+        title: 'Monkeytype standard WPM',
+        body:
+          'Normalized five-character word counts calculate authoritative Net WPM, Gross WPM, accuracy percentage, and millisecond clear times.',
+      },
+      {
+        title: 'Chibi Cyber Sprinters',
+        body:
+          'Live anime runners sprint across the race deck. Stride frequency scales dynamically with your typing speed, and completing words triggers forward dash boosts.',
+      },
+      {
+        title: 'Glitch Breaker Lockout',
+        body:
+          'Three consecutive typos trigger a 350-millisecond static freeze. Precision matters as much as raw speed.',
+      },
+      {
+        title: 'Curated Breach Protocols',
+        body:
+          'Eighteen in-fiction protocols spanning three difficulty tiers: Quick Breaches, Kernel Overrides, and deep Black Ice Mainframes.',
+      },
+      {
+        title: 'Humanized AI Daemons',
+        body:
+          'Autonomous bot racers simulate realistic human typing rhythms, natural cadence variations, and occasional typo recovery.',
+      },
+    ],
+    serverNote:
+      'Keystroke intervals, WPM math, and glitch lockouts are validated authoritatively on our server.',
+    shots: [
+      { seed: 18, caption: 'Handshake bypass: racing across opening network gateways' },
+      { seed: 36, caption: 'Kernel override: rapid alphanumeric decryption under firewall pressure' },
+      { seed: 54, caption: 'Glitch lockout: recovering from terminal static interference' },
+      { seed: 72, caption: 'Mainframe breach: breaking the checkered tape at 100 WPM' },
+    ],
+  },
 ]
 
 export const getGame = (slug) => games.find((g) => g.slug === slug)
