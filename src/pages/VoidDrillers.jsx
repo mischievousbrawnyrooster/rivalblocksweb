@@ -1244,6 +1244,7 @@ export default function VoidDrillers() {
                       {p.name}
                     </span>
                     {isMe && <span className="rule-label shrink-0">you</span>}
+                    {p.bot && <span className="rule-label shrink-0">bot</span>}
                     {p.overheated && (
                       <span className="text-[0.625rem] text-danger font-mono uppercase tracking-wider">
                         Lockout

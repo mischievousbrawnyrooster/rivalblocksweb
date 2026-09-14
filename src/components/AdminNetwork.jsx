@@ -7,6 +7,7 @@ const FEEDS = [
   { path: '/blast-dm-ws', label: 'Blastworks DM' },
   { path: '/ws', label: 'Blockout Royale' },
   { path: '/blockout3d-ws', label: 'Blockout Royale 3D' },
+  { path: '/voiddrillers-ws', label: 'Void Drillers' },
 ]
 
 /** Pretty-prints a frame, with the long arrays folded down to a summary. */

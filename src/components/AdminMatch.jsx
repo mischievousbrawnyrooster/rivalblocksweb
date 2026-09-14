@@ -209,6 +209,12 @@ export default function AdminMatch({ adminKey }) {
         controllable
         adminKey={adminKey}
       />
+      <MatchPanel
+        title="Void Drillers"
+        path="/voiddrillers-ws"
+        controllable
+        adminKey={adminKey}
+      />
     </div>
   )
 }

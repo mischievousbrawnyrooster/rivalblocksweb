@@ -72,7 +72,7 @@ export function useMatchSocket(path, adminKey) {
   useEffect(() => {
     const id = setInterval(() => {
       const ring = ringRef.current
-      const latest = [...ring].reverse().find((f) => f.t === 'state')
+      const latest = [...ring].reverse().find((f) => f.t === 'state' || f.t === 'snap')
       if (latest) {
         try {
           setState(JSON.parse(latest.raw))

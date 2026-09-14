@@ -44,7 +44,15 @@ import {
   GAS_KNOCKBACK_FORCE,
   GAS_HEAT_SURGE,
   GAS_FUEL_BURN,
-  GAS_CLOUD_HEAT_RATE
+  GAS_CLOUD_HEAT_RATE,
+  MAX_PLAYERS,
+  BOT_FILL_TO,
+  BOT_NAMES,
+  BOT_REACT_MS,
+  canRun,
+  wantBots,
+  ensureBots,
+  driveBots
 } from './voiddrillers.js'
 
 test('shaft generation initializes correct dimensions and boundary bedrock', () => {
@@ -647,3 +655,109 @@ test('leave removes driller from match', () => {
   assert.equal(m.players.has('p1'), false)
   assert.equal(m.players.size, 1)
 })
+
+test('canRun requires humans unless botsOnly is enabled', () => {
+  const m = make({ seed: 101 })
+  assert.equal(canRun(m), false, 'empty match cannot run')
+
+  const bot = join(m, { name: 'Bot1', bot: true })
+  assert.equal(canRun(m), false, 'bot-only match cannot run without botsOnly')
+
+  m.botsOnly = true
+  assert.equal(canRun(m), true, 'bot-only match can run when botsOnly is true')
+
+  m.botsOnly = false
+  const human = join(m, { name: 'Human' })
+  assert.equal(canRun(m), true, 'match with human can run')
+})
+
+test('ensureBots tops up arena to botFill and assigns bot names', () => {
+  const m = make({ seed: 202 })
+  m.botFill = BOT_FILL_TO
+  wantBots(m)
+  assert.equal(m.botsWanted, true)
+
+  const human = join(m, { name: 'SoloPilot' })
+  ensureBots(m)
+
+  assert.equal(m.players.size, BOT_FILL_TO)
+  const bots = [...m.players.values()].filter((p) => p.bot)
+  assert.equal(bots.length, BOT_FILL_TO - 1)
+
+  for (const b of bots) {
+    assert.equal(b.bot, true)
+    assert.equal(typeof b.name, 'string')
+  }
+})
+
+test('arriving human players displace bots down to botFill', () => {
+  const m = make({ seed: 303 })
+  m.botFill = BOT_FILL_TO
+  wantBots(m)
+  join(m, { name: 'PlayerA' })
+  ensureBots(m)
+  assert.equal(m.players.size, BOT_FILL_TO)
+
+  // Second human arrives
+  join(m, { name: 'PlayerB' })
+  ensureBots(m)
+  assert.equal(m.players.size, BOT_FILL_TO)
+  assert.equal([...m.players.values()].filter((p) => !p.bot).length, 2)
+  assert.equal([...m.players.values()].filter((p) => p.bot).length, BOT_FILL_TO - 2)
+
+  // When human leaves, bots stand down if no humans remain
+  for (const p of [...m.players.values()]) {
+    if (!p.bot) leave(m, p.id)
+  }
+  ensureBots(m)
+  assert.equal(m.players.size, 0, 'bots stood down after humans left')
+})
+
+test('driveBots guides bot driller downwards with drill activation and heat pacing', () => {
+  const m = make({ seed: 404 })
+  m.botsOnly = true
+  m.botFill = 1
+  const bot = join(m, { name: 'DiggerBot', bot: true })
+  bot.x = 5.0
+  bot.y = 2.0 // standing on platform
+  const underY = Math.floor(bot.y + 1.0) + 1
+  m.grid[underY * WIDTH + 5] = BLOCK_DIRT
+  m.hp[underY * WIDTH + 5] = DIRT_HP
+
+  tick(m, BOT_REACT_MS)
+
+  assert.equal(bot.input.aim, Math.PI / 2, 'bot aims downward')
+  assert.equal(bot.input.drill, true, 'bot drills destructible terrain')
+})
+
+test('bot touching extraction vault platform wins match', () => {
+  const m = make({ seed: 505 })
+  m.botsOnly = true
+  m.botFill = 1
+  const bot = join(m, { name: 'VaultBot', bot: true })
+  bot.x = 5.0
+  bot.y = VAULT_Y - 1.0
+
+  tick(m, TICK_MS)
+
+  assert.equal(m.phase, 'over')
+  assert.equal(m.winner, bot.id)
+  assert.equal(m.winReason, 'vault')
+})
+
+test('snapshot exposes bot tags and admin properties', () => {
+  const m = make({ seed: 606 })
+  m.botFill = BOT_FILL_TO
+  m.botsOnly = true
+  const bot = join(m, { name: 'Robo', bot: true })
+
+  const snap = snapshot(m)
+  assert.equal(snap.botFill, BOT_FILL_TO)
+  assert.equal(snap.botsOnly, true)
+  assert.equal(snap.arena, 'strata-shaft')
+  assert.equal(snap.players[0].bot, true)
+  assert.equal(snap.players[0].hp, 100)
+  assert.equal(snap.players[0].kills, 0)
+  assert.equal(snap.players[0].deaths, 0)
+})
+

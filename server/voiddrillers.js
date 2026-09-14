@@ -56,6 +56,10 @@ export const GAS_KNOCKBACK_FORCE = 8.0 // blocks/sec knockback impulse
 export const GAS_HEAT_SURGE = 0.50 // instant heat burst on detonation
 export const GAS_FUEL_BURN = 0.25 // jetpack fuel burned by blast
 export const GAS_CLOUD_HEAT_RATE = 0.45 // heat accumulation per sec while inside cloud
+export const MAX_PLAYERS = 8
+export const BOT_FILL_TO = 4
+export const BOT_NAMES = ['Bore', 'Quarry', 'Piston', 'Chisel', 'Grit', 'Rivet', 'Auger']
+export const BOT_REACT_MS = 120 // ~8 bot decisions per sec
 
 export const BLOCK_CHARS = ['A', 'D', 'S', 'B', 'G', 'C', 'V']
 export const CHAR_TO_BLOCK = {
@@ -345,19 +349,31 @@ export function make(options = {}) {
     winReason: null,
     deltas: [],
     hazards: [],
-    board: options.board ?? []
+    board: options.board ?? [],
+    botFill: options.botFill ?? 0,
+    botsOnly: options.botsOnly ?? false,
+    botsWanted: options.botsWanted ?? false,
+    nextId: 1
   }
 }
 
 // --- Player Management ----------------------------------------------------
 export function join(match, playerInfo = {}) {
-  const id = playerInfo.id || `p-${Math.random().toString(36).slice(2, 8)}`
+  const isBot = Boolean(playerInfo.bot)
+  if (!isBot && match.players.size >= MAX_PLAYERS) {
+    const bot = [...match.players.values()].find((p) => p.bot)
+    if (bot) leave(match, bot.id)
+  }
+  if (match.players.size >= MAX_PLAYERS) return null
+
+  const id = playerInfo.id || (isBot ? `bot-${match.nextId++}` : `p-${match.nextId++}`)
   const name = sanitizeName(playerInfo.name)
   const slot = match.nextSlot++
   const spawnX = 2.0 + (slot % 8) * 2.0
   const p = {
     id,
     name,
+    bot: isBot,
     slot,
     x: spawnX,
     y: SPAWN_Y,
@@ -371,6 +387,7 @@ export function join(match, playerInfo = {}) {
     overheatTimer: 0,
     superDrillTimer: 0,
     drillTimer: 0,
+    thinkAt: 0,
     input: {
       dx: 0,
       thrust: false,
@@ -399,6 +416,147 @@ export function leave(match, playerId) {
 }
 
 export const removePlayer = leave
+
+// --- Bot AI & Lifecycle ---------------------------------------------------
+export const canRun = (state) =>
+  Boolean(state.botsOnly || [...state.players.values()].some((p) => !p.bot))
+
+export function wantBots(state) {
+  state.botsWanted = true
+  return true
+}
+
+export function ensureBots(state) {
+  if (!canRun(state)) {
+    for (const bot of [...state.players.values()].filter((p) => p.bot)) leave(state, bot.id)
+    state.botsWanted = false
+    return
+  }
+  if (!state.botsWanted && !state.botsOnly) {
+    for (const bot of [...state.players.values()].filter((p) => p.bot)) leave(state, bot.id)
+    return
+  }
+  const fillTarget = state.botFill ?? (state.botsOnly ? BOT_FILL_TO : 0)
+  const humans = [...state.players.values()].filter((p) => !p.bot).length
+  const bots = [...state.players.values()].filter((p) => p.bot)
+  const want = Math.max(0, Math.min(fillTarget, MAX_PLAYERS) - humans)
+
+  for (let i = bots.length; i > want; i--) leave(state, bots[i - 1].id)
+  for (let i = bots.length; i < want; i++) {
+    const taken = new Set([...state.players.values()].map((q) => q.name))
+    const botName = BOT_NAMES.find((n) => !taken.has(n)) ?? `Unit ${state.nextId}`
+    join(state, { name: botName, bot: true })
+  }
+}
+
+export function driveBots(match, rng = Math.random) {
+  if (match.phase !== 'playing') return
+
+  for (const p of match.players.values()) {
+    if (!p.bot || !p.alive) continue
+    if (match.elapsed < (p.thinkAt || 0)) continue
+    p.thinkAt = match.elapsed + BOT_REACT_MS + Math.floor(rng() * 40)
+
+    const cx = p.x + 0.5
+    const footY = p.y + 1.0
+    const bx = Math.max(1, Math.min(WIDTH - 2, Math.floor(cx)))
+    const by = Math.floor(footY)
+    const underY = by + 1
+
+    // 1. Gas hazard evasion: steer away and thruster hop if inside or close to gas cloud
+    let inGasHazard = false
+    for (const h of match.hazards) {
+      if (Math.hypot(cx - h.x, p.y + 0.5 - h.y) < h.r + 1.2) {
+        inGasHazard = true
+        p.input.dx = cx < h.x ? -1 : 1
+        p.input.thrust = p.fuel > 0.25
+        p.input.drill = false
+        break
+      }
+    }
+    if (inGasHazard) continue
+
+    // 2. Vault approach: touch down to win
+    if (underY >= VAULT_Y) {
+      p.input.aim = Math.PI / 2
+      p.input.drill = false
+      p.input.thrust = false
+      p.input.dx = 0
+      continue
+    }
+
+    // 3. Subterranean navigation
+    const underBlock = match.grid[underY * WIDTH + bx]
+
+    if (underBlock === BLOCK_AIR) {
+      // Free fall downward
+      p.input.aim = Math.PI / 2
+      p.input.drill = false
+      p.input.dx = 0
+      p.input.thrust = p.vy > 11 && p.fuel > 0.3
+    } else if (
+      underBlock === BLOCK_DIRT ||
+      underBlock === BLOCK_STONE ||
+      underBlock === BLOCK_GEODE
+    ) {
+      // Destructible block underfoot: drill downward, manage heat
+      p.input.aim = Math.PI / 2
+      p.input.drill = !p.overheated && p.heat < 0.82
+      p.input.dx = 0
+      p.input.thrust = false
+    } else if (underBlock === BLOCK_BEDROCK || underBlock === BLOCK_GAS) {
+      // Impassable bedrock or hazardous gas underfoot: steer around laterally
+      let leftDist = Infinity
+      for (let x = bx - 1; x >= 1; x--) {
+        const b = match.grid[underY * WIDTH + x]
+        if (b !== BLOCK_BEDROCK && b !== BLOCK_GAS) {
+          leftDist = bx - x
+          break
+        }
+      }
+      let rightDist = Infinity
+      for (let x = bx + 1; x <= WIDTH - 2; x++) {
+        const b = match.grid[underY * WIDTH + x]
+        if (b !== BLOCK_BEDROCK && b !== BLOCK_GAS) {
+          rightDist = x - bx
+          break
+        }
+      }
+
+      const steerDir =
+        leftDist < rightDist
+          ? -1
+          : rightDist < leftDist
+            ? 1
+            : p.slot % 2 === 0
+              ? -1
+              : 1
+
+      p.input.dx = steerDir
+
+      const sideCol = Math.max(0, Math.min(WIDTH - 1, bx + steerDir))
+      const sideBlock = match.grid[by * WIDTH + sideCol]
+
+      if (
+        sideBlock === BLOCK_DIRT ||
+        sideBlock === BLOCK_STONE ||
+        sideBlock === BLOCK_GEODE
+      ) {
+        // Clear side obstruction
+        p.input.aim = steerDir > 0 ? 0.3 : Math.PI - 0.3
+        p.input.drill = !p.overheated && p.heat < 0.82
+        p.input.thrust = false
+      } else if (sideBlock === BLOCK_BEDROCK || sideBlock === BLOCK_GAS) {
+        // Wall blocked by bedrock/gas: jump with jetpack
+        p.input.thrust = p.fuel > 0.2
+        p.input.drill = false
+      } else {
+        p.input.drill = false
+        p.input.thrust = false
+      }
+    }
+  }
+}
 
 export function setInput(match, playerId, input = {}) {
   const p = match.players.get(playerId)
@@ -564,7 +722,12 @@ function executeDrillPulse(match, p) {
 }
 
 // --- Tick Simulation ------------------------------------------------------
-export function tick(match, dtMs) {
+export function tick(match, dtMs = TICK_MS, rng = Math.random) {
+  ensureBots(match)
+  if (match.players.size > 0 && !canRun(match)) return
+
+  driveBots(match, rng)
+
   match.deltas = []
   const dtSec = dtMs / 1000
 
@@ -790,6 +953,7 @@ export function snapshot(match) {
     players.push({
       id: p.id,
       name: p.name,
+      bot: Boolean(p.bot),
       slot: p.slot,
       x: Number(p.x.toFixed(2)),
       y: Number(p.y.toFixed(2)),
@@ -800,6 +964,9 @@ export function snapshot(match) {
       aim: Number(p.input.aim.toFixed(2)),
       drilling: Boolean(p.input.drill && !p.overheated),
       alive: p.alive,
+      hp: p.alive ? 100 : 0,
+      kills: 0,
+      deaths: p.alive ? 0 : 1,
       overheated: p.overheated,
       superDrill: p.superDrillTimer > 0
     })
@@ -818,6 +985,9 @@ export function snapshot(match) {
     voidY: Number(match.voidY.toFixed(2)),
     phase: match.phase,
     winner: match.winner,
+    arena: 'strata-shaft',
+    botFill: match.botFill ?? 0,
+    botsOnly: Boolean(match.botsOnly),
     players,
     deltas: match.deltas,
     hazards,

@@ -12,6 +12,9 @@ import {
   snapshot,
   encodeMap,
   sanitizeName,
+  canRun,
+  wantBots,
+  BOT_FILL_TO,
   TICK_MS,
 } from './voiddrillers.js'
 import { boardFor } from './board.js'
@@ -27,7 +30,7 @@ const MAX_PLAYERS = 8
 // capture, which means this key can be read there too.
 const ADMIN_KEY = process.env.ADMIN_KEY || 'admin'
 
-let match = make({ seed: Date.now() })
+let match = make({ seed: Date.now(), botFill: BOT_FILL_TO, botsWanted: true })
 let overSince = 0
 
 // Map player ID -> WebSocket
@@ -39,7 +42,7 @@ match.board = keep.top()
 const played = () =>
   [...match.players.values()].map((p) => ({
     name: p.name,
-    bot: false,
+    bot: Boolean(p.bot),
     won: p.id === match.winner,
     kills: 0,
     deaths: p.alive ? 0 : 1,
@@ -67,7 +70,16 @@ function restartMatch() {
     }
   }
 
-  match = make({ seed: Date.now() })
+  const prevBotFill = match.botFill ?? BOT_FILL_TO
+  const prevBotsOnly = match.botsOnly ?? false
+  const prevBotsWanted = match.botsWanted ?? true
+
+  match = make({
+    seed: Date.now(),
+    botFill: prevBotFill,
+    botsOnly: prevBotsOnly,
+    botsWanted: prevBotsWanted,
+  })
   match.board = keep.top()
   sockets.clear()
 
@@ -107,16 +119,21 @@ wss.on('connection', (ws) => {
     }
 
     if (admin) {
-      if (msg.t === 'kick' && typeof msg.id === 'string') {
-        const target = sockets.get(msg.id)
-        sockets.delete(msg.id)
-        leave(match, msg.id)
+      if (msg.t === 'kick' && (typeof msg.id === 'string' || typeof msg.id === 'number')) {
+        const id = String(msg.id)
+        const target = sockets.get(id)
+        sockets.delete(id)
+        leave(match, id)
         if (target) {
           target.player = null
           target.close()
         }
       } else if (msg.t === 'restart') {
         restartMatch()
+      } else if (msg.t === 'botsonly' && typeof msg.on === 'boolean') {
+        match.botsOnly = msg.on
+      } else if (msg.t === 'bots' && typeof msg.n === 'number') {
+        match.botFill = Math.max(0, Math.min(MAX_PLAYERS, msg.n))
       }
       return
     }
@@ -124,7 +141,12 @@ wss.on('connection', (ws) => {
     if (msg?.t === 'join' && !ws.player) {
       // If server was empty and in 'over' phase, fresh start for first joining player
       if (match.phase === 'over' && match.players.size === 0) {
-        match = make({ seed: Date.now() })
+        match = make({
+          seed: Date.now(),
+          botFill: match.botFill ?? BOT_FILL_TO,
+          botsWanted: true,
+          botsOnly: match.botsOnly ?? false,
+        })
         match.board = keep.top()
         overSince = 0
       }
@@ -170,6 +192,8 @@ wss.on('connection', (ws) => {
         cleanInput.aim = msg.aim
       }
       setInput(match, ws.player.id, cleanInput)
+    } else if (msg?.t === 'ready' && ws.player) {
+      wantBots(match)
     } else if (msg?.t === 'restart') {
       if (match.phase === 'over' || admin) {
         restartMatch()
@@ -197,7 +221,12 @@ setInterval(() => {
   const now = Date.now()
   const dt = Math.min(now - last, TICK_MS * 5)
   last = now
-  tick(match, dt)
+
+  if (!canRun(match) && match.players.size === 0) {
+    // Idle server with no players and botsOnly disabled
+  } else {
+    tick(match, dt)
+  }
 
   if (keep.bank(match.phase === 'over', played)) {
     match.board = keep.top()
