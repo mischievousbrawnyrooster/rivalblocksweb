@@ -114,6 +114,13 @@ is nothing to lock. `BOARD_DIR` says where they live (`./data` in dev,
   victory screen, not the board. Blockout Royale 3D banks per round as well,
   for the same reason, and unlike flat Blockout it banks real kills and deaths
   — a stomp, a sinkhole and a landing all have an author.
+- **What a title's board keeps is declared once, in `BOARDS`.** `fights` hides
+  K/D where nobody is killed, and `bests` lists the best scores with their
+  column headings. `combine` reads the same entries: kills and deaths add up
+  only from titles that fight, and a best score stays filed under its own title
+  (`row.bests[file]`), because a Cipher Run finish and a Void Drillers clear are
+  not the same clock. A new best score is a `bests` entry, not a new column in
+  `Leaderboard.jsx`.
 
 ## Invariants that fail silently
 
@@ -164,21 +171,22 @@ is nothing to lock. `BOARD_DIR` says where they live (`./data` in dev,
 
 - **Each game announces a WebSocket subprotocol, and the name is load-bearing.**
   `new WebSocket(url, 'blockout.v1' | 'fracture.v1' | 'blastworks.v1' |
-  'blockout3d.v1')` in the four pages. Nothing in the app reads it back — no
+  'blockout3d.v1' | 'voiddrillers.v1' | 'cipherrun.v1')` in the six pages. Nothing in the app reads it back — no
   server sets `handleProtocols`, so `ws` echoes the first name offered and the
   handshake completes either way. It exists for the capture: Wireshark keys its
   `ws.protocol` dissector table on the negotiated string, and
-  `deploy/rivalblocks.lua` registers against exactly these four. Rename one
+  `deploy/rivalblocks.lua` registers against exactly these six. Rename one
   without renaming it there and nothing errors anywhere; the game just stops
   being named. Both halves move together.
   The name is only ever stated in the handshake, so it cannot name a capture
   that missed it or one taken before this existed. Two fallbacks cover that,
   both heuristics: the path in the upgrade request (`/ws`, `/fracture-ws`,
-  `/blast-ws`, `/blast-dm-ws`, `/blockout3d-ws`), remembered per TCP stream,
-  and failing that our JSON shape on ports 8081-8085. **The path is the only
+  `/blast-ws`, `/blast-dm-ws`, `/blockout3d-ws`, `/voiddrillers-ws`,
+  `/cipherrun-ws`), remembered per TCP stream, and failing that our JSON shape
+  on ports 8081-8087. **The path is the only
   one of the three that survives a proxy** — captured at the browser every game
   shares one port, 5173 in dev and 80 deployed, so a capture taken there is
-  named by its paths or not at all. Adding a sixth proxy path means adding it
+  named by its paths or not at all. Adding another proxy path means adding it
   to the dissector too.
   The obvious route for the port fallback, Wireshark's `ws.port` table, was
   measured doing nothing: text frames are routed by the `websocket.text_type`
@@ -285,11 +293,22 @@ is nothing to lock. `BOARD_DIR` says where they live (`./data` in dev,
 
 ### Cipher Run (Typing Decryption Race)
 - **Monkeytype standard**: 5 characters per normalized word (`(correctChars / 5) / (elapsedMinutes)`).
-- **Glitch Breaker Lockout**: 3 consecutive typos trigger 350ms static freeze (`LOCKOUT_MS = 350`).
-- **Error Recovery**: Backspace recovery clears typo state; Spacebar advances past word errors with uncorrected penalty.
+- **Glitch Breaker Lockout**: 3 consecutive typos trigger 350ms static freeze (`LOCKOUT_MS = 350`). The freeze resets the count, so the next one takes another 3.
+- **Typos must be backspaced**: a typo advances the cursor and stays red until erased. Space is an ordinary key with no word jump, and the breach only counts with zero typos left. Accuracy counts every correct keypress, even ones later erased; net WPM counts only letters still correct.
+- **The page never judges a key.** It forwards each key and draws `cursor` and `wrong` from the snapshot, which the server also sends straight back to the typist after every accepted key. The page used to keep its own buffer, and it drifted from the server the moment a key landed inside a freeze.
+- **Ctrl+Backspace erases the word** (Alt+Backspace on a Mac), sent as `{key:'Backspace', word:true}`. The server walks it back like a text editor: spaces behind the cursor first, then the word.
+- **A lone operator waits in the lobby.** A race starts at `MIN_PLAYERS` operators, or at once when one presses Start with bots (`{t:'ready'}` sets `botsWanted`). The request clears when the last operator leaves.
+- **Runners move by clean words, not by the cursor.** A snapshot's `progress` is words finished with no typo left in them over total words, so typing ahead past typos does not move the chibi.
+- **Race messages share one fixed-height status line** over the terminal, most urgent first, so a message coming or going never moves the text being typed.
+- **A protocol picked from the archive skips the vote.** `{t:'pick'}` ends a vote in progress at once, or waits for the next race if one is under way, and a restart carries it over. Only the admin can restart; results move on by themselves after `POST_RACE_GRACE_MS`, counted on the match clock (`nextRaceIn`).
 - **151 Curated Protocols**: 50 Short (15 to 25 words), 50 Medium (40 to 60 words), 50 Long (85 to 125 words), plus Protocol 151 Easter Egg (Subliminal Devotion Directive repeating "I LOVE RIVALBLOCKS." 20 times).
 - **Authoritative Pre-Round Voting**: 5-second pre-round voting phase (`VOTE_DURATION_MS = 5000`) before race countdown, with real-time consensus percentages, home-row hotkeys (`1`, `2`, `3`), random tie resolution, and a 2% Easter Egg roll.
 - **Chibi Cyber Sprinters**: Procedural anime runner with 6 sprinter variations, dynamic stride cadence scaling with WPM, word-dash impulse, stumble states, and celebratory cheer states.
+
+### Void Drillers (Per-Player Shaft Race)
+- **Once the match clock runs, nobody new spawns.** A person arriving mid-round spectates it and is dealt into the next, and bots are only dealt in while `elapsed === 0`. The void passes the spawn row a few seconds in, so anything placed later is crushed on arrival.
+- **Only a vault touchdown is a clear time.** A win by outlasting a rival (`winReason: 'survival'`) banks a win with no time, or a rival walking out a second in would set the record.
+- **Gas knockback lives in `kx`, not `vx`.** `vx` is rebuilt from walking input every tick, so a push written there was erased before it moved anyone. `kx` rides on top of walking and dies away.
 
 ## Design rules inherited from the site
 
@@ -314,7 +333,7 @@ These are non-negotiable and predate the game:
 
 ## Deployment
 
-Single node, two tiers: nginx serves `dist/` and proxies five WebSocket paths to five Node processes on loopback, all five from one systemd template unit (`rivalblocks@<instance>`). nginx also serves `/board/` straight from `BOARD_DIR`. Full sequence in `deploy/DEPLOY.md`.
+Single node, two tiers: nginx serves `dist/` and proxies seven WebSocket paths to seven Node processes on loopback, all from one systemd template unit (`rivalblocks@<instance>`). nginx also serves `/board/` straight from `BOARD_DIR`. Full sequence in `deploy/DEPLOY.md`.
 
 **No proxy path but `/ws` itself may begin with `/ws`.** nginx and vite both match by prefix, so `/ws-fracture` is silently swallowed by the Blockout rule and connects the player to the wrong game.
 
