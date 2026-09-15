@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 import Leaderboard from '../components/Leaderboard.jsx'
-import SidebarAd from '../components/SidebarAd.jsx'
+import { boardFor } from '../../server/board.js'
 import { useTitle } from '../lib/useTitle.js'
 import { useFavicon } from '../lib/useFavicon.js'
 import { makeCamera, orbit, worldDir, poseFor } from '../lib/followCamera.js'
@@ -503,10 +503,9 @@ export default function Blockout3D() {
               a match ends. */}
           <div className="mt-8 flex items-baseline justify-between">
             <p className="rule-label">Leaderboard</p>
-            <p className="rule-label">Won · K/D</p>
           </div>
           <div className="mt-3">
-            <Leaderboard entries={hud?.board ?? []} you={me?.name ?? null} />
+            <Leaderboard entries={hud?.board ?? []} you={me?.name ?? null} spec={boardFor('blockout3d')} />
           </div>
           <p className="mt-3 text-xs text-muted">
             <Link to="/leaderboard" className="underline underline-offset-4 hover:text-fg">
@@ -537,8 +536,6 @@ export default function Blockout3D() {
               <dd className="font-mono text-xs">mouse</dd>
             </div>
           </dl>
-
-          <SidebarAd className="mt-8" />
         </div>
       </div>
 

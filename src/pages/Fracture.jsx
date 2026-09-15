@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 import Leaderboard from '../components/Leaderboard.jsx'
-import SidebarAd from '../components/SidebarAd.jsx'
+import { boardFor } from '../../server/board.js'
 import BlockArt from '../components/BlockArt.jsx'
 import { games } from '../data/games.js'
 import { ads as IN_GAME_ADS } from '../data/ads.js'
@@ -1421,10 +1421,9 @@ export default function Fracture() {
               a match ends. */}
           <div className="mt-8 flex items-baseline justify-between">
             <p className="rule-label">Leaderboard</p>
-            <p className="rule-label">Won · K/D</p>
           </div>
           <div className="mt-3">
-            <Leaderboard entries={hud?.board ?? []} you={me?.name ?? null} />
+            <Leaderboard entries={hud?.board ?? []} you={me?.name ?? null} spec={boardFor('fracture')} />
           </div>
           <p className="mt-3 text-xs text-muted">
             <Link to="/leaderboard" className="underline underline-offset-4 hover:text-fg">
@@ -1459,8 +1458,6 @@ export default function Fracture() {
               <dd className="font-mono text-xs">E</dd>
             </div>
           </dl>
-
-          <SidebarAd className="mt-8" />
         </div>
       </div>
 

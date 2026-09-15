@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 import Leaderboard from '../components/Leaderboard.jsx'
-import SidebarAd from '../components/SidebarAd.jsx'
+import { boardFor } from '../../server/board.js'
 import { useTitle } from '../lib/useTitle.js'
 import { useFavicon } from '../lib/useFavicon.js'
 import { makeWallTiles, styleFor } from '../lib/wallTiles.js'
@@ -662,10 +662,9 @@ export default function Play() {
               a match ends. */}
           <div className="mt-8 flex items-baseline justify-between">
             <p className="rule-label">Leaderboard</p>
-            <p className="rule-label">Won · K/D</p>
           </div>
           <div className="mt-3">
-            <Leaderboard entries={game?.board ?? []} you={me?.name ?? null} />
+            <Leaderboard entries={game?.board ?? []} you={me?.name ?? null} spec={boardFor('blockout')} />
           </div>
           <p className="mt-3 text-xs text-muted">
             <Link to="/leaderboard" className="underline underline-offset-4 hover:text-fg">
@@ -723,8 +722,6 @@ export default function Play() {
           >
             Use
           </button>
-
-          <SidebarAd className="mt-8" />
         </div>
       </div>
 

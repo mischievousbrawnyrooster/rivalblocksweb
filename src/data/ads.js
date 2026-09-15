@@ -89,9 +89,3 @@ export function getNextAd() {
   return ad
 }
 
-/** Returns a random ad from the catalog. */
-export function getRandomAd(excludeId = null) {
-  const pool = excludeId ? ads.filter((a) => a.id !== excludeId) : ads
-  return pool[Math.floor(Math.random() * pool.length)] ?? ads[0]
-}
-
