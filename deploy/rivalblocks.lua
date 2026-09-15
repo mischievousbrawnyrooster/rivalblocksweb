@@ -1,6 +1,6 @@
 -- Wireshark dissector for the RivalBlocks game protocols.
 --
--- Without this, a capture of any of the four games shows a column of
+-- Without this, a capture of any of the games shows a column of
 -- undifferentiated "WebSocket" rows and you read the JSON by eye. With it the
 -- Protocol column names the game and every message field becomes a display
 -- filter, so a class can ask "show me every shot fired" and get an answer.
@@ -20,13 +20,14 @@
 --      needs a client new enough to send it.
 --
 --   2. By the path in the upgrade request -- /ws, /fracture-ws, /blast-ws,
---      /blast-dm-ws, /blockout3d-ws. Needs the handshake in the capture but
+--      /blast-dm-ws, /blockout3d-ws, /voiddrillers-ws, /cipherrun-ws. Needs
+--      the handshake in the capture but
 --      nothing whatsoever from the client, so it reads captures taken before
 --      any of this existed. It is also the only signal that survives a proxy:
 --      capture at the browser and every game shares one port, 5173 in dev and
 --      80 deployed, but the path still differs.
 --
---   3. By port. A frame on 8081..8085 that looks like our JSON is claimed
+--   3. By port. A frame on 8081..8087 that looks like our JSON is claimed
 --      without a handshake at all, which is what reads a capture started in
 --      the middle of a session. Only true on the loopback hop to the match
 --      server, where the ports are the real ones.
@@ -41,6 +42,8 @@ local games = {
   { key = 'fracture.v1',   id = 'fracture',   title = 'Fracture Line',      col = 'FRACTURE',   ports = { 8082 } },
   { key = 'blastworks.v1', id = 'blastworks', title = 'Blastworks',         col = 'BLASTWORKS', ports = { 8083, 8084 } },
   { key = 'blockout3d.v1', id = 'blockout3d', title = 'Blockout Royale 3D', col = 'BLOCKOUT3D', ports = { 8085 } },
+  { key = 'voiddrillers.v1', id = 'voiddrillers', title = 'Void Drillers', col = 'VOIDDRILLERS', ports = { 8086 } },
+  { key = 'cipherrun.v1',  id = 'cipherrun',  title = 'Cipher Run',         col = 'CIPHERRUN',  ports = { 8087 } },
 }
 
 -- Every field is declared for every game rather than only the ones that game
@@ -66,6 +69,8 @@ local inputs = {
   fracture   = { join=1, input=1, use=1, dash=1, build=1, ready=1 },
   blastworks = { join=1, input=1, bomb=1, action=1, detonate=1, ready=1 },
   blockout3d = { join=1, input=1, jump=1, use=1, ready=1, click=1 },
+  voiddrillers = { join=1, input=1, ready=1 },
+  cipherrun  = { join=1, input=1, vote=1, avatar=1, ready=1, pick=1 },
 }
 
 local admin = { admin=1, kick=1, restart=1, botsonly=1, bots=1, arena=1 }
@@ -81,6 +86,8 @@ local by_path = {
   ['/blast-ws']      = 'blastworks',
   ['/blast-dm-ws']   = 'blastworks',
   ['/blockout3d-ws'] = 'blockout3d',
+  ['/voiddrillers-ws'] = 'voiddrillers',
+  ['/cipherrun-ws']  = 'cipherrun',
 }
 
 local f_stream = Field.new('tcp.stream')
@@ -163,8 +170,9 @@ local function build(game)
 
     -- Snapshots are the bulk of the bytes and none of the intent. Summarise
     -- them so the input messages stay findable by eye in the packet list.
-    if t == 'state' then
-      pinfo.cols.info = 'state snapshot (' .. len .. ' bytes)'
+    -- Void Drillers and Cipher Run name theirs 'snap'.
+    if t == 'state' or t == 'snap' then
+      pinfo.cols.info = t .. ' snapshot (' .. len .. ' bytes)'
       return len
     end
 
