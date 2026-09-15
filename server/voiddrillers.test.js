@@ -1267,6 +1267,97 @@ test('a bots-only match skips the lobby', () => {
   assert.equal(m.phase, 'playing')
 })
 
+test('someone joining after a restart never takes a carried driller id', () => {
+  const m = make({ seed: 24 })
+  const carried = join(m, { id: 'p-1', name: 'Ada' }) // kept from the last match
+  const arrival = join(m, { name: 'Bea' })
+
+  assert.notEqual(arrival.id, carried.id)
+  assert.equal(m.players.get(carried.id), carried, 'the carried driller is still theirs')
+  assert.equal(m.players.size, 2)
+})
+
+test('someone arriving mid-match watches that round instead of spawning into the void', () => {
+  const m = make({ seed: 25 })
+  for (let i = 0; i < MIN_PLAYERS; i++) join(m, { name: `Driller ${i}` })
+  tick(m, TICK_MS)
+  assert.equal(m.phase, 'playing')
+
+  const late = join(m, { name: 'Late' })
+  assert.equal(late.alive, false)
+  assert.equal(snapshot(m, late.id).players.find((p) => p.id === late.id).spectating, true)
+
+  tick(m, TICK_MS)
+  assert.equal(m.phase, 'playing', 'a spectator neither ends nor decides the round')
+})
+
+test('a spectator does not stand a bot down from a race already running', () => {
+  const m = make({ seed: 26, botFill: BOT_FILL_TO })
+  join(m, { name: 'Ada' })
+  wantBots(m)
+  tick(m, TICK_MS)
+  const bots = () => [...m.players.values()].filter((p) => p.bot).length
+  const racing = bots()
+
+  join(m, { name: 'Late' })
+  tick(m, TICK_MS)
+
+  assert.equal(bots(), racing)
+})
+
+test('a win by outlasting a rival is reported as survival, not as a vault clear', () => {
+  const m = make({ seed: 27 })
+  const ada = join(m, { name: 'Ada' })
+  const bea = join(m, { name: 'Bea' })
+  tick(m, TICK_MS)
+  leave(m, bea.id)
+
+  const snap = snapshot(m, ada.id)
+  assert.equal(snap.winner, ada.id)
+  assert.equal(snap.winReason, 'survival')
+})
+
+test('a gas blast beside a driller throws them clear of it, and the push dies away', () => {
+  const m = playing({ seed: 28 })
+  const p = join(m, { name: 'Ada' })
+  const y = 20
+  for (let x = 1; x < WIDTH - 1; x++) {
+    p.grid[y * WIDTH + x] = BLOCK_AIR
+    p.grid[(y + 1) * WIDTH + x] = BLOCK_BEDROCK
+  }
+  Object.assign(p, { x: 8, y, vx: 0, vy: 0 })
+  p.grid[y * WIDTH + 9] = BLOCK_GAS
+  p.hp[y * WIDTH + 9] = GAS_HP
+  p.input = { dx: 0, thrust: false, drill: true, aim: 0 }
+  const ticks = (ms) => {
+    for (let t = 0; t < ms; t += TICK_MS) tick(m, TICK_MS, () => 0.5)
+  }
+
+  ticks(300)
+  assert.equal(p.grid[y * WIDTH + 9], BLOCK_AIR, 'the gas went off')
+  assert.ok(p.x < 8, `a blast on the right did not push the driller left (x ${p.x})`)
+
+  p.input.drill = false
+  ticks(2000)
+  const rest = p.x
+  ticks(500)
+  assert.equal(p.x, rest, 'the push never died away')
+})
+
+test('bots are dealt in before the clock starts, never into a round under way', () => {
+  const m = make({ seed: 29, botFill: BOT_FILL_TO })
+  join(m, { name: 'Ada' })
+  const bea = join(m, { name: 'Bea' })
+  wantBots(m)
+  tick(m, TICK_MS)
+  const bots = () => [...m.players.values()].filter((p) => p.bot).length
+  const dealt = bots()
+
+  leave(m, bea.id)
+  tick(m, TICK_MS)
+  assert.equal(bots(), dealt, 'a bot joined mid-round, where the void is already past its spawn')
+})
+
 // --- Bots racing the void -----------------------------------------------------
 
 // Lays rows of a driller's shaft from strings, top row first, one character per
@@ -1358,7 +1449,9 @@ test('a bot out of fuel blasts through gas rather than plan a climb round it', (
     '#dddddddddddddddddd#',
   ])
   bot.fuel = 0
-  run(m, 3000)
+  // The blast throws the bot back against the wall, and standing in its cloud
+  // locks the drill once before the last dig: a lockout's worth longer than a clean run.
+  run(m, 4000)
   assert.equal(bot.y >= 29, true, `the bot got past the gas (y=${bot.y.toFixed(2)})`)
 })
 

@@ -66,6 +66,7 @@ export const SUPER_DRILL_DURATION_MS = 5000 // ms (extended to 5s)
 export const GAS_HAZARD_RADIUS = 2.4
 export const GAS_HAZARD_TTL_MS = 3000
 export const GAS_KNOCKBACK_FORCE = 8.0 // blocks/sec knockback impulse
+export const GAS_KNOCKBACK_DECAY = 6 // per sec: a blast's sideways throw halves in about a tenth of a second
 export const GAS_HEAT_SURGE = 0.50 // instant heat burst on detonation
 export const GAS_FUEL_BURN = 0.25 // jetpack fuel burned by blast
 export const GAS_CLOUD_HEAT_RATE = 0.45 // heat accumulation per sec while inside cloud
@@ -458,8 +459,14 @@ export function join(match, playerInfo = {}, rng = Math.random) {
   }
   if (match.players.size >= MAX_PLAYERS) return null
 
-  const id = playerInfo.id || (isBot ? `bot-${match.nextId++}` : `p-${match.nextId++}`)
+  // A restart carries people in under their old ids while the counter starts
+  // again from 1, so an id already in the roster is skipped, never reused.
+  let id = playerInfo.id
+  while (!id || match.players.has(id)) id = `${isBot ? 'bot' : 'p'}-${match.nextId++}`
   const name = sanitizeName(playerInfo.name)
+  // Once the clock runs the void is moving: a person arriving now would spawn
+  // into it, so they watch this round and are dealt into the next.
+  const spectating = !isBot && match.elapsed > 0
   const slot = match.nextSlot++
   // Any column between the walls, drawn at random rather than handed out in join order.
   const spawnX = 1 + Math.floor(rng() * (WIDTH - 2))
@@ -479,10 +486,12 @@ export function join(match, playerInfo = {}, rng = Math.random) {
     y: SPAWN_Y,
     vx: 0,
     vy: 0,
+    kx: 0, // sideways throw from a gas blast, on top of walking; dies away
     fuel: 1.0,
     heat: 0,
     grounded: true,
-    alive: true,
+    alive: !spectating,
+    spectating,
     overheated: false,
     overheatTimer: 0,
     superDrillTimer: 0,
@@ -535,12 +544,15 @@ export function ensureBots(state, rng = Math.random) {
   // Nobody racing and nobody asked to watch: every bot stands down.
   if (!canRun(state)) state.botsWanted = false
   const fillTarget = state.botsWanted || state.botsOnly ? state.botFill : 0
-  const humans = [...state.players.values()].filter((p) => !p.bot).length
+  // A spectator is not racing, so no bot stands down for them mid-round.
+  const humans = [...state.players.values()].filter((p) => !p.bot && !p.spectating).length
   const bots = [...state.players.values()].filter((p) => p.bot)
   const want = Math.max(0, Math.min(fillTarget, MAX_PLAYERS) - humans)
 
   for (let i = bots.length; i > want; i--) leave(state, bots[i - 1].id)
-  for (let i = bots.length; i < want; i++) {
+  // Bots are dealt in only before the clock starts: the void passes the spawn row a
+  // few seconds in, so a bot added to a round under way is crushed on arrival.
+  for (let i = bots.length; i < want && state.elapsed === 0; i++) {
     const taken = new Set([...state.players.values()].map((q) => q.name))
     const botName = BOT_NAMES.find((n) => !taken.has(n)) ?? `Unit ${state.nextId}`
     join(state, { name: botName, bot: true }, rng)
@@ -731,7 +743,8 @@ function detonateGasPocket(p, bx, by) {
       const falloff = 1 - dist / GAS_HAZARD_RADIUS
       const force = GAS_KNOCKBACK_FORCE * Math.max(0.4, falloff)
 
-      p.vx += normX * force
+      // Into kx, not vx: vx is rebuilt from walking input every tick.
+      p.kx += normX * force
       p.vy += normY * force
       p.grounded = false
 
@@ -973,7 +986,10 @@ export function tick(match, dtMs = TICK_MS, rng = Math.random) {
     }
 
     // Horizontal Movement & AABB Collision
-    p.vx = p.input.dx * WALK_SPEED
+    // Walking, plus whatever a gas blast is still throwing the driller.
+    p.vx = p.input.dx * WALK_SPEED + p.kx
+    p.kx *= Math.exp(-GAS_KNOCKBACK_DECAY * dtSec)
+    if (Math.abs(p.kx) < 0.05) p.kx = 0
     const newX = p.x + p.vx * dtSec
 
     if (p.vx > 0) {
@@ -990,6 +1006,7 @@ export function tick(match, dtMs = TICK_MS, rng = Math.random) {
       if (blocked) {
         p.x = targetCol - 0.9
         p.vx = 0
+        p.kx = 0
       } else {
         p.x = newX
       }
@@ -1007,6 +1024,7 @@ export function tick(match, dtMs = TICK_MS, rng = Math.random) {
       if (blocked) {
         p.x = targetCol + 0.9
         p.vx = 0
+        p.kx = 0
       } else {
         p.x = newX
       }
@@ -1100,6 +1118,7 @@ export function snapshot(match, viewerId) {
       aim: Number(p.input.aim.toFixed(2)),
       drilling: Boolean(p.input.drill && !p.overheated),
       alive: p.alive,
+      spectating: Boolean(p.spectating),
       hp: p.alive ? 100 : 0,
       kills: 0,
       deaths: p.alive ? 0 : 1,
@@ -1122,6 +1141,7 @@ export function snapshot(match, viewerId) {
     voidY: Number(match.voidY.toFixed(2)),
     phase: match.phase,
     winner: match.winner,
+    winReason: match.winReason, // 'vault' | 'survival' | null: only a vault win has a clear time
     elapsed: match.elapsed,
     arena: 'strata-shaft',
     botFill: match.botFill ?? 0,

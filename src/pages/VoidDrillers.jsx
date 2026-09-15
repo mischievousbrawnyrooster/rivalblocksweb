@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
-import SidebarAd from '../components/SidebarAd.jsx'
 import BannerAd from '../components/BannerAd.jsx'
 import Leaderboard from '../components/Leaderboard.jsx'
+import { boardFor } from '../../server/board.js'
 import { useTitle } from '../lib/useTitle.js'
 import { useFavicon } from '../lib/useFavicon.js'
 // Pure, like board.js: the shaft's shape, block ids and map decoder come from
@@ -88,10 +88,14 @@ function statusLine(snap, myId) {
   if (snap.phase === 'over') {
     if (snap.winner) {
       const winnerName = snap.players?.find((p) => p.id === snap.winner)?.name ?? 'A driller'
+      if (snap.winReason === 'survival') return `${winnerName} outlasted every rival. Restarting shortly.`
       const clearSec = snap.elapsed ? ` in ${(snap.elapsed / 1000).toFixed(1)}s` : ''
       return `${winnerName} reached the extraction vault${clearSec}. Restarting shortly.`
     }
     return 'The crush void swallowed the shaft. No survivors. Restarting shortly.'
+  }
+  if (me?.spectating) {
+    return 'Match under way. You drop in next round. Drag the shaft or minimap to watch.'
   }
   if (me && !me.alive) {
     return 'Crushed by the void. Drag the shaft or minimap to spectate.'
@@ -349,11 +353,12 @@ export default function VoidDrillers() {
   const handleCanvasPointerDown = useCallback(
     (e) => {
       if (e.button !== 0) return
+      // Captured either way, so the release reaches the canvas even off it: a drag
+      // keeps going, and a drill held down stops when the button comes up.
+      e.currentTarget.setPointerCapture(e.pointerId)
       const me = snapRef.current?.players?.find((p) => p.id === myIdRef.current)
       if (me && !me.alive) {
         const pt = toCanvas(e.currentTarget, e)
-        // Captured, so the drag keeps going when the pointer leaves the canvas.
-        e.currentTarget.setPointerCapture(e.pointerId)
         dragRef.current = { y: pt.y, cam: cameraYRef.current, onMap: pt.x > SHAFT_WIDTH_PX }
         freeCamRef.current = spectateCamera(dragRef.current, pt)
         return
@@ -626,6 +631,7 @@ export default function VoidDrillers() {
           const pcx = px + pw / 2
           const pcy = py + ph / 2
           const slotColor = PLAYER_COLORS[p.slot % PLAYER_COLORS.length]
+          if (p.spectating) continue // watching this round, not in it
           // Rivals race shafts of their own: drawn as ghosts over yours, touching nothing.
           const ghost = p.id !== myIdRef.current
           ctx.globalAlpha = ghost ? 0.25 : 1
@@ -886,6 +892,7 @@ export default function VoidDrillers() {
           const isMe = p.id === myIdRef.current
           const col = PLAYER_COLORS[p.slot % PLAYER_COLORS.length]
 
+          if (p.spectating) continue
           if (!p.alive) {
             ctx.fillStyle = '#6b7280'
             ctx.font = 'bold 9px monospace'
@@ -1050,7 +1057,8 @@ export default function VoidDrillers() {
 
         const iWon = snap.winner === myIdRef.current
         const winnerObj = snap.players?.find((p) => p.id === snap.winner)
-        const clearSec = snap.elapsed ? (snap.elapsed / 1000).toFixed(1) : null
+        // A clear time only for a vault touchdown; outlasting a rival has none.
+        const clearSec = snap.winReason === 'vault' && snap.elapsed ? (snap.elapsed / 1000).toFixed(1) : null
 
         ctx.textAlign = 'center'
         ctx.fillStyle = '#ff6b1a'
@@ -1060,7 +1068,11 @@ export default function VoidDrillers() {
         ctx.fillStyle = '#f8fafc'
         ctx.font = 'bold 22px ui-sans-serif, system-ui, sans-serif'
         if (iWon) {
-          ctx.fillText('YOU REACHED THE VAULT', bx + bannerW / 2, by + 62)
+          ctx.fillText(
+            snap.winReason === 'vault' ? 'YOU REACHED THE VAULT' : 'YOU OUTLASTED THEM',
+            bx + bannerW / 2,
+            by + 62,
+          )
           if (clearSec) {
             ctx.fillStyle = '#ff6b1a'
             ctx.font = 'bold 16px monospace'
@@ -1080,7 +1092,7 @@ export default function VoidDrillers() {
         ctx.fillStyle = '#94a3b8'
         ctx.font = '13px monospace'
         ctx.fillText('Next excavation descent starting shortly...', bx + bannerW / 2, by + 106)
-      } else if (me && !me.alive && snap?.phase === 'playing') {
+      } else if (me && !me.alive && !me.spectating && snap?.phase === 'playing') {
         const warnW = 360
         const warnH = 64
         const wx = (SHAFT_WIDTH_PX - warnW) / 2
@@ -1192,7 +1204,7 @@ export default function VoidDrillers() {
   // ---------- Active Game View ----------
   const me = hud?.players?.find((p) => p.id === myId)
   const players = hud?.players ?? []
-  const sortedPlayers = [...players].sort((a, b) => b.y - a.y)
+  const sortedPlayers = players.filter((p) => !p.spectating).sort((a, b) => b.y - a.y)
 
   return (
     <section className="mx-auto max-w-6xl px-5 py-12">
@@ -1217,7 +1229,7 @@ export default function VoidDrillers() {
         <div className="mt-4 border border-line bg-surface p-5">
           <p className="rule-label">Lobby</p>
           <p className="mt-2 text-sm leading-relaxed text-muted">
-            The void holds until a rival drops in. Anyone who joins later takes a bot’s place.
+            The void holds until a rival drops in. Anyone arriving mid-match watches that round and drops in on the next.
           </p>
           <button
             type="button"
@@ -1243,6 +1255,10 @@ export default function VoidDrillers() {
             onPointerUp={handleCanvasPointerUp}
             onLostPointerCapture={() => {
               dragRef.current = null
+              if (mouseDownRef.current) {
+                mouseDownRef.current = false
+                sendInput()
+              }
             }}
             className={`w-full border border-line bg-bg aspect-[640/700] select-none ${me && !me.alive ? 'cursor-grab active:cursor-grabbing' : 'cursor-crosshair'}`}
           />
@@ -1334,7 +1350,7 @@ export default function VoidDrillers() {
           <div>
             <p className="rule-label">Leaderboard</p>
             <div className="mt-2 border-t border-line pt-3">
-              <Leaderboard entries={hud?.board ?? []} you={me?.name ?? null} />
+              <Leaderboard entries={hud?.board ?? []} you={me?.name ?? null} spec={boardFor('voiddrillers')} />
             </div>
           </div>
 
@@ -1393,8 +1409,6 @@ export default function VoidDrillers() {
               </li>
             </ul>
           </div>
-
-          <SidebarAd className="mt-4" />
         </div>
       </div>
 

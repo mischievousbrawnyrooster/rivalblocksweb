@@ -40,14 +40,17 @@ const sockets = new Map()
 const keep = keeper(boardFor('voiddrillers'))
 match.board = keep.top()
 
+// Someone who only watched this round was not in it, so is not banked.
 const played = () =>
-  [...match.players.values()].map((p) => ({
+  [...match.players.values()].filter((p) => !p.spectating).map((p) => ({
     name: p.name,
     bot: Boolean(p.bot),
     won: p.id === match.winner,
     kills: 0,
     deaths: p.alive ? 0 : 1,
-    time: p.id === match.winner ? match.elapsed : null,
+    // Only a vault touchdown is a clear time. Outlasting a rival wins without one,
+    // or a rival walking out a second in would set the record.
+    time: p.id === match.winner && match.winReason === 'vault' ? match.elapsed : null,
   }))
 
 // WebSocket server with maxPayload bound to 4096 bytes and cleartext perMessageDeflate disabled
