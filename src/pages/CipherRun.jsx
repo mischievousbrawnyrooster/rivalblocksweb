@@ -2,7 +2,8 @@ import { useEffect, useState, useRef, useCallback } from 'react'
 import { Link } from 'react-router-dom'
 import { useTitle } from '../lib/useTitle.js'
 import Leaderboard from '../components/Leaderboard.jsx'
-import { PROTOCOLS } from '../../server/cipherrun.js'
+import { boardFor } from '../../server/board.js'
+import { PROTOCOLS, MAX_PLAYERS } from '../../server/cipherrun.js'
 
 const SEND_INTERVAL_MS = 25
 const SLOT_COLORS = [
@@ -15,10 +16,16 @@ const SLOT_COLORS = [
   '#84cc16', // 6: Lime
   '#3b82f6', // 7: Electric Blue
 ]
-const SLOT_ICONS = ['◈', '✶', 'Ψ', '≡', '⊔', '✚', '◎', '⊗']
+// Colours for the status line over the terminal. Written out whole so Tailwind finds them.
+const STATUS_TONE = {
+  flare: 'border-flare/30 bg-flare/10 text-flare',
+  rose: 'border-rose-500 bg-rose-950/60 text-rose-300',
+  amber: 'border-amber-500/70 bg-amber-950/50 text-amber-300',
+  emerald: 'border-emerald-500/70 bg-emerald-950/50 text-emerald-300',
+}
 
 // Sprite Sheet variations (1376 x 768)
-export const SPRITE_VARIATIONS = [
+const SPRITE_VARIATIONS = [
   {
     id: 'hacker',
     name: 'Street Hacker',
@@ -69,30 +76,45 @@ export const SPRITE_VARIATIONS = [
   },
 ]
 
-// Sprite Sheet coordinates from 1376 x 768 layout
-const RUN_FRAMES = [
-  { sx: 50, sy: 20, sw: 160, sh: 175 },
-  { sx: 275, sy: 20, sw: 160, sh: 175 },
-  { sx: 500, sy: 20, sw: 160, sh: 175 },
-  { sx: 730, sy: 20, sw: 160, sh: 175 },
-  { sx: 960, sy: 20, sw: 160, sh: 175 },
-  { sx: 1190, sy: 20, sw: 160, sh: 175 },
-]
+// Frame boxes on the 1376 x 768 sheets, measured from the art so no figure is
+// clipped. All six sheets share this layout. Every frame is drawn at one scale
+// with its feet on the lane baseline, so a pose is never stretched to fit a box.
+const SPRITE_SCALE = 0.22
+
+const RUN_FRAMES = [116, 301, 493, 688, 884, 1075].map((sx) => ({ sx, sy: 15, sw: 172, sh: 179 }))
 
 const DASH_FRAMES = [
-  { sx: 430, sy: 220, sw: 230, sh: 170 },
-  { sx: 740, sy: 220, sw: 230, sh: 170 },
+  { sx: 392, sy: 215, sw: 296, sh: 170 },
+  { sx: 705, sy: 215, sw: 260, sh: 170 },
 ]
 
 const STUMBLE_FRAMES = [
-  { sx: 470, sy: 420, sw: 190, sh: 160 },
-  { sx: 720, sy: 420, sw: 200, sh: 160 },
+  { sx: 506, sy: 408, sw: 186, sh: 171 },
+  { sx: 702, sy: 408, sw: 226, sh: 171 },
 ]
 
 const CHEER_FRAMES = [
-  { sx: 510, sy: 580, sw: 170, sh: 175 },
-  { sx: 730, sy: 580, sw: 180, sh: 175 },
+  { sx: 489, sy: 579, sw: 203, sh: 188 },
+  { sx: 710, sy: 579, sw: 180, sh: 188 },
 ]
+
+/** One frame of a 1376 x 768 sprite sheet as a plain element, for the runner picker. */
+function SpriteFrame({ src, frame = RUN_FRAMES[0], height }) {
+  const s = height / frame.sh
+  return (
+    <div
+      aria-hidden="true"
+      style={{
+        width: frame.sw * s,
+        height,
+        backgroundImage: `url(${src})`,
+        backgroundSize: `${1376 * s}px ${768 * s}px`,
+        backgroundPosition: `-${frame.sx * s}px -${frame.sy * s}px`,
+        backgroundRepeat: 'no-repeat',
+      }}
+    />
+  )
+}
 
 export default function CipherRun() {
   useTitle('Cipher Run')
@@ -100,7 +122,6 @@ export default function CipherRun() {
   const [status, setStatus] = useState('connecting') // connecting | live | closed | full
   const [protocol, setProtocol] = useState(PROTOCOLS[0])
   const [myId, setMyId] = useState(null)
-  const [mySlot, setMySlot] = useState(0)
   const [name, setName] = useState('Operator')
   const [selectedAvatar, setSelectedAvatar] = useState(0)
   const [showSprinters, setShowSprinters] = useState(false)
@@ -109,12 +130,7 @@ export default function CipherRun() {
   const [selectedTier, setSelectedTier] = useState(1)
   const [myVote, setMyVote] = useState(null)
 
-  // Local typing buffer
-  const [cursor, setCursor] = useState(0)
-  const [charStates, setCharStates] = useState([]) // Array of 'correct' | 'error' | 'pending'
-  const [typedChars, setTypedChars] = useState({}) // { [index]: string } for mistyped character rendering
   const [dashTimer, setDashTimer] = useState(0)
-  const [glitchActive, setGlitchActive] = useState(false)
 
   // Remote snapshot state
   const [snap, setSnap] = useState(null)
@@ -123,14 +139,10 @@ export default function CipherRun() {
   const snapRef = useRef(null)
   const protocolRef = useRef(protocol)
   const canvasRef = useRef(null)
-  const inputRef = useRef(null)
   const spriteImagesRef = useRef([])
   const interpProgressRef = useRef(new Map())
-  const particlesRef = useRef([])
-
-  useEffect(() => {
-    protocolRef.current = protocol
-  }, [protocol])
+  const myIdRef = useRef(null)
+  const lastCursorRef = useRef(0)
 
   // Cast vote for tier (1: Short, 2: Medium, 3: Long)
   const handleVote = useCallback((tier) => {
@@ -150,24 +162,12 @@ export default function CipherRun() {
     spriteImagesRef.current = images
   }, [])
 
-  // Initialize character states when protocol text changes
-  useEffect(() => {
-    if (protocol?.text) {
-      setCharStates(new Array(protocol.text.length).fill('pending'))
-      setTypedChars({})
-      setCursor(0)
-    }
-  }, [protocol])
-
   // WebSocket Connection
-  const connect = useCallback((playerName, chosenProtocolId = null, avatarIndex = selectedAvatar) => {
+  const connect = useCallback((playerName, avatarIndex = 0) => {
     setStatus('connecting')
-    let failedPrimary = false
     const scheme = window.location.protocol === 'https:' ? 'wss' : 'ws'
-    const primaryUrl = `${scheme}://${window.location.host}/cipherrun-ws`
-    const fallbackUrl = 'ws://127.0.0.1:8087'
 
-    function openSocket(url, isFallback = false) {
+    function openSocket(url) {
       const ws = new WebSocket(url, 'cipherrun.v1')
       wsRef.current = ws
 
@@ -178,7 +178,6 @@ export default function CipherRun() {
           JSON.stringify({
             t: 'join',
             name: playerName || 'Operator',
-            protocolId: chosenProtocolId,
             avatar: avatarIndex,
           }),
         )
@@ -194,78 +193,65 @@ export default function CipherRun() {
         }
 
         if (msg.t === 'welcome') {
+          myIdRef.current = msg.id
           setMyId(msg.id)
-          setMySlot(msg.slot)
           if (msg.protocol) {
             protocolRef.current = msg.protocol
             setProtocol(msg.protocol)
-            setCharStates(new Array(msg.protocol.text.length).fill('pending'))
-            setTypedChars({})
-            setCursor(0)
           }
           setHasJoined(true)
         } else if (msg.t === 'full') {
           setStatus('full')
         } else if (msg.t === 'snap') {
-          const protocolChanged = msg.protocol?.id && msg.protocol.id !== protocolRef.current?.id
-          const roundStarted = msg.phase === 'countdown' && snapRef.current?.phase === 'voting'
-
           snapRef.current = msg
           setSnap(msg)
 
-          if (protocolChanged || roundStarted) {
+          if (msg.protocol?.id && msg.protocol.id !== protocolRef.current?.id) {
             const fullProto = PROTOCOLS.find((p) => p.id === msg.protocol.id) || msg.protocol
             protocolRef.current = fullProto
             setProtocol(fullProto)
-            if (fullProto.text) {
-              setCharStates(new Array(fullProto.text.length).fill('pending'))
-              setTypedChars({})
-              setCursor(0)
-            }
           }
 
           if (msg.phase !== 'voting') {
             setMyVote(null)
           }
 
-          const me = msg.players?.find((p) => p.id === myId)
+          // Dash when the server moves my cursor past a cleanly typed space
+          const me = msg.players?.find((p) => p.id === myIdRef.current)
           if (me) {
-            setGlitchActive(Boolean(me.glitch))
+            const landed = me.cursor - 1
+            if (
+              me.cursor > lastCursorRef.current &&
+              protocolRef.current?.text?.[landed] === ' ' &&
+              !me.wrong?.some(([i]) => i === landed)
+            ) {
+              setDashTimer(Date.now() + 320)
+            }
+            lastCursorRef.current = me.cursor
           }
         }
       }
 
-      ws.onerror = () => {
-        if (!isFallback && !failedPrimary) {
-          failedPrimary = true
-          ws.close()
-          openSocket(fallbackUrl, true)
-        } else {
-          ws.close()
-        }
-      }
-
+      // No fallback address: Vite in dev and nginx deployed both proxy this path,
+      // and a direct 127.0.0.1 would dial the player's own machine.
+      ws.onerror = () => ws.close()
       ws.onclose = () => {
         if (wsRef.current !== ws) return
-        if (!isFallback && !failedPrimary) {
-          failedPrimary = true
-          openSocket(fallbackUrl, true)
-          return
-        }
         setStatus((s) => (s === 'full' ? s : 'closed'))
       }
     }
 
-    openSocket(primaryUrl, false)
+    openSocket(`${scheme}://${window.location.host}/cipherrun-ws`)
   }, [myId])
 
   useEffect(() => () => wsRef.current?.close(), [])
 
-  // Input Handling
+  // Input Handling. The server judges every key; the page only forwards it and
+  // draws what comes back, so its text can never drift from the server's.
   const handleKey = useCallback(
     (e) => {
       const ws = wsRef.current
-      if (!ws || ws.readyState !== WebSocket.OPEN || !protocol?.text) return
+      if (!ws || ws.readyState !== WebSocket.OPEN) return
 
       // Pre-round consensus voting hotkeys
       if (snap?.phase === 'voting') {
@@ -276,97 +262,16 @@ export default function CipherRun() {
         }
       }
 
-      const me = snap?.players?.find((p) => p.id === myId)
-      if (snap?.phase !== 'racing' || glitchActive || me?.finished) return
+      if (snap?.phase !== 'racing') return
 
-      const text = protocol.text
-      const key = e.key
-
-      if (key === 'Backspace') {
+      if (e.key === 'Backspace' || (e.key.length === 1 && !e.ctrlKey && !e.altKey && !e.metaKey)) {
         e.preventDefault()
-        if (cursor > 0) {
-          const nextCursor = cursor - 1
-          setCursor(nextCursor)
-          setCharStates((prev) => {
-            const next = [...prev]
-            next[nextCursor] = 'pending'
-            return next
-          })
-          setTypedChars((prev) => {
-            const next = { ...prev }
-            delete next[nextCursor]
-            return next
-          })
-          ws.send(JSON.stringify({ t: 'input', key: 'Backspace', cursor: nextCursor }))
-        }
-        return
-      }
-
-      // Spacebar Word Jump when skipping mistyped words
-      if (key === ' ') {
-        const wordStart = Math.max(0, text.lastIndexOf(' ', cursor - 1) + 1)
-        const hasWordErrors = charStates.slice(wordStart, cursor).some((s) => s === 'error')
-
-        if (hasWordErrors) {
-          e.preventDefault()
-          const nextSpace = text.indexOf(' ', cursor)
-          if (nextSpace !== -1) {
-            const target = nextSpace + 1
-            setCursor(target)
-            setCharStates((prev) => {
-              const next = [...prev]
-              for (let i = cursor; i < target; i++) {
-                if (next[i] === 'pending') next[i] = 'error'
-              }
-              return next
-            })
-            ws.send(JSON.stringify({ t: 'input', key: ' ', cursor: target }))
-            return
-          }
-        }
-      }
-
-      // Printable single characters
-      if (key.length === 1 && !e.ctrlKey && !e.altKey && !e.metaKey) {
-        e.preventDefault()
-        if (cursor >= text.length) return
-
-        const expected = text[cursor]
-        const isMatch = key === expected
-
-        setCharStates((prev) => {
-          const next = [...prev]
-          next[cursor] = isMatch ? 'correct' : 'error'
-          return next
-        })
-
-        setTypedChars((prev) => ({
-          ...prev,
-          [cursor]: key,
-        }))
-
-        const nextCursor = cursor + 1
-        setCursor(nextCursor)
-
-        if (isMatch) {
-          // Trigger dash boost on word boundaries
-          if (expected === ' ' || nextCursor >= text.length) {
-            setDashTimer(Date.now() + 320)
-            // Spawn little dust particles
-            particlesRef.current.push({
-              x: 0,
-              y: 0,
-              vx: -(20 + Math.random() * 30),
-              vy: -(10 + Math.random() * 20),
-              life: 0.35,
-            })
-          }
-        }
-
-        ws.send(JSON.stringify({ t: 'input', key, cursor }))
+        // Ctrl+Backspace (Alt+Backspace on a Mac) erases the whole word.
+        const word = e.key === 'Backspace' && (e.ctrlKey || e.altKey)
+        ws.send(JSON.stringify({ t: 'input', key: e.key, word }))
       }
     },
-    [protocol, cursor, snap?.phase, snap?.players, myId, glitchActive, charStates, typedChars, handleVote],
+    [snap?.phase, handleVote],
   )
 
   // Attach global keyboard listener
@@ -482,21 +387,21 @@ export default function CipherRun() {
           frame = RUN_FRAMES[runIdx]
         }
 
-        // Draw Chibi Sprinter
+        // Draw Chibi Sprinter centred on the runner, feet on the baseline
         if (spriteImg && spriteImg.complete && spriteImg.naturalWidth > 0) {
-          ctx.save()
+          const dw = frame.sw * SPRITE_SCALE
+          const dh = frame.sh * SPRITE_SCALE
           ctx.drawImage(
             spriteImg,
             frame.sx,
             frame.sy,
             frame.sw,
             frame.sh,
-            runnerX,
-            runnerY + 10,
-            42,
-            38,
+            runnerX + 21 - dw / 2,
+            runnerY + 48 - dh,
+            dw,
+            dh,
           )
-          ctx.restore()
         }
       })
 
@@ -515,11 +420,60 @@ export default function CipherRun() {
     }
   }
 
-  // Restart match or switch protocol
-  const handleRestart = (protoId = null) => {
+  // A pick from the archive: raced next, in place of the vote
+  const sendPick = (protocolId) => {
     if (wsRef.current?.readyState === WebSocket.OPEN) {
-      wsRef.current.send(JSON.stringify({ t: 'restart', protocolId: protoId }))
+      wsRef.current.send(JSON.stringify({ t: 'pick', protocolId }))
     }
+  }
+
+  // My typing state, exactly as the server last sent it
+  const me = snap?.players?.find((p) => p.id === myId)
+  const cursor = me?.cursor ?? 0
+  const wrong = new Map(me?.wrong)
+  const glitchActive = Boolean(me?.glitch)
+  const textLength = protocol?.text?.length ?? 0
+
+  // The one message over the terminal, most urgent first, as [tone, text]. It
+  // sits in a line of fixed height, so a message coming or going never moves
+  // the text being typed.
+  let notice = null
+  if (snap?.phase === 'countdown') {
+    notice = ['flare', `BREACH INITIALIZATION IN ${snap.countdown}s...`]
+  } else if (snap?.phase === 'racing') {
+    if (glitchActive) {
+      notice = ['rose', '⚠ FIREWALL BREAKER LOCKOUT // STATIC FREEZE [350ms]']
+    } else if (!me?.finished && textLength > 0 && cursor >= textLength && wrong.size > 0) {
+      notice = ['rose', `⚠ ${wrong.size} UNCORRECTED ${wrong.size === 1 ? 'TYPO' : 'TYPOS'} // BACKSPACE TO CLEAR BEFORE THE BREACH COUNTS`]
+    } else if (me?.finished) {
+      notice = ['emerald', '✓ BREACH SUCCESSFUL // AWAITING REMAINING OPERATORS OR TIMEOUT...']
+    } else if (snap.finishCountdown > 0) {
+      const by = snap.players?.find((p) => p.id === snap.winner)?.name || 'OPERATOR'
+      notice = ['amber', `[!] FIRST BREACH CONFIRMED BY ${by} // SYSTEM PURGE IN [ ${snap.finishCountdown}s ]`]
+    }
+  }
+
+  // A refused or dropped connection gets a screen of its own, with a way back in.
+  if (status === 'full' || status === 'closed') {
+    const full = status === 'full'
+    return (
+      <section className="mx-auto max-w-xl px-5 py-20 text-center">
+        <p className="rule-label">Cipher Run</p>
+        <h1 className="display mt-2 text-3xl">{full ? 'Every lane is taken' : 'Connection lost'}</h1>
+        <p className="mt-4 text-muted">
+          {full
+            ? `All ${MAX_PLAYERS} operator lanes are in use. Try again when one opens.`
+            : 'The race server stopped answering. Your lane has been released.'}
+        </p>
+        <button
+          type="button"
+          onClick={() => connect(name, selectedAvatar)}
+          className="mt-8 bg-flare px-7 py-3.5 text-xs font-bold uppercase tracking-[0.12em] text-on-flare transition-opacity hover:opacity-90"
+        >
+          {full ? 'Try again' : 'Reconnect'}
+        </button>
+      </section>
+    )
   }
 
   return (
@@ -589,13 +543,6 @@ export default function CipherRun() {
           >
             {showDrawer ? 'Close Protocols' : 'Select Protocol (151)'}
           </button>
-          <button
-            type="button"
-            onClick={() => handleRestart(protocol?.id)}
-            className="border border-line bg-surface px-4 py-2 text-xs font-mono uppercase tracking-wider text-muted transition-colors hover:text-fg"
-          >
-            Restart
-          </button>
         </div>
       </div>
 
@@ -634,11 +581,11 @@ export default function CipherRun() {
                 key={p.id}
                 type="button"
                 onClick={() => {
-                  handleRestart(p.id)
+                  sendPick(p.id)
                   setShowDrawer(false)
                 }}
                 className={`flex flex-col rounded border p-3 text-left transition-colors ${
-                  protocol?.id === p.id
+                  (snap?.picked ?? protocol?.id) === p.id
                     ? 'border-flare bg-bg shadow-sm'
                     : 'border-line/60 bg-bg/50 hover:border-line'
                 }`}
@@ -682,14 +629,10 @@ export default function CipherRun() {
                   }`}
                 >
                   <div
-                    className="mb-2 flex h-10 w-10 items-center justify-center rounded border font-mono text-base font-bold transition-transform"
-                    style={{
-                      borderColor: v.color,
-                      color: v.color,
-                      backgroundColor: `${v.color}18`,
-                    }}
+                    className="mb-2 flex h-16 w-16 items-center justify-center rounded border"
+                    style={{ borderColor: v.color, backgroundColor: `${v.color}18` }}
                   >
-                    {SLOT_ICONS[idx % SLOT_ICONS.length]}
+                    <SpriteFrame src={v.src} height={54} />
                   </div>
                   <span className="font-mono text-xs font-bold leading-tight text-fg">
                     {v.name}
@@ -713,7 +656,7 @@ export default function CipherRun() {
             />
             <button
               type="button"
-              onClick={() => connect(name)}
+              onClick={() => connect(name, selectedAvatar)}
               className="bg-flare px-6 py-2.5 text-xs font-bold uppercase tracking-wider text-on-flare transition-opacity hover:opacity-90"
             >
               Connect
@@ -750,8 +693,28 @@ export default function CipherRun() {
             <div className="flex gap-4 text-muted">
               <span>LENGTH: {protocol?.text?.length || 0} CHARS</span>
               <span>PHASE: {snap?.phase?.toUpperCase() || 'WAITING'}</span>
+              {snap?.picked && (
+                <span className="text-flare">NEXT: {PROTOCOLS.find((p) => p.id === snap.picked)?.title}</span>
+              )}
             </div>
           </div>
+
+          {/* Lobby: hold for a rival operator, or start against bots */}
+          {snap?.phase === 'waiting' && (
+            <div className="border-b border-line bg-[#0c121e] p-5 font-mono">
+              <p className="text-xs font-bold uppercase tracking-wider text-flare">Waiting for a rival operator</p>
+              <p className="mt-2 text-xs leading-relaxed text-muted">
+                The race holds until another operator connects. Start now and daemons take the empty lanes.
+              </p>
+              <button
+                type="button"
+                onClick={() => wsRef.current?.send(JSON.stringify({ t: 'ready' }))}
+                className="mt-4 bg-flare px-5 py-2.5 text-xs font-bold uppercase tracking-wider text-on-flare transition-opacity hover:opacity-90"
+              >
+                Start with bots
+              </button>
+            </div>
+          )}
 
           {/* Vote Deck during phase === 'voting' */}
           {snap?.phase === 'voting' && (
@@ -859,48 +822,19 @@ export default function CipherRun() {
             </div>
           )}
 
-          {/* Countdown Banner */}
-          {snap?.phase === 'countdown' && (
-            <div className="bg-flare/10 border-b border-flare/30 px-5 py-3 text-center font-mono">
-              <span className="text-sm font-bold text-flare animate-pulse">
-                BREACH INITIALIZATION IN {snap.countdown}s...
-              </span>
-            </div>
-          )}
-
-          {/* Glitch Lockout Banner */}
-          {glitchActive && (
-            <div className="bg-rose-950/60 border-b border-rose-500 px-5 py-2.5 text-center font-mono animate-bounce">
-              <span className="text-xs font-bold text-rose-300">
-                ⚠ FIREWALL BREAKER LOCKOUT // STATIC FREEZE [350ms]
-              </span>
-            </div>
-          )}
-
-          {/* Post-Winner Finish Allowance Countdown Banner */}
-          {snap?.phase === 'racing' && snap?.finishCountdown > 0 && (
-            <div className="bg-amber-950/50 border-b border-amber-500/70 px-5 py-2.5 text-center font-mono">
-              <div className="flex items-center justify-center gap-2">
-                <span className="inline-block h-2 w-2 rounded-full bg-amber-400 animate-ping" />
-                <span className="text-xs sm:text-sm font-bold text-amber-300 tracking-wider">
-                  [!] FIRST BREACH CONFIRMED BY {snap.players?.find((p) => p.id === snap.winner)?.name || 'OPERATOR'} // SYSTEM PURGE IN [ {snap.finishCountdown}s ]
-                </span>
-              </div>
-            </div>
-          )}
-
-          {/* Local Player Finished State Banner */}
-          {snap?.phase === 'racing' && snap?.players?.find((p) => p.id === myId)?.finished && (
-            <div className="bg-emerald-950/50 border-b border-emerald-500/70 px-5 py-2.5 text-center font-mono">
-              <span className="text-xs sm:text-sm font-bold text-emerald-300 tracking-wider">
-                ✓ BREACH SUCCESSFUL // AWAITING REMAINING OPERATORS OR TIMEOUT...
-              </span>
+          {/* Status line: always the same height while a race is on, so the text below never moves */}
+          {(snap?.phase === 'countdown' || snap?.phase === 'racing') && (
+            <div
+              className={`flex h-11 items-center justify-center overflow-hidden border-b px-5 text-center font-mono text-[11px] font-bold tracking-wider sm:text-xs ${
+                notice ? STATUS_TONE[notice[0]] : 'border-line'
+              }`}
+            >
+              {notice && <span className="line-clamp-2">{notice[1]}</span>}
             </div>
           )}
 
           {/* Monospace Character Buffer */}
           <div
-            onClick={() => inputRef.current?.focus()}
             className={`min-h-[160px] p-6 font-mono text-lg leading-relaxed tracking-wide select-none cursor-text whitespace-pre-wrap ${
               snap?.easterEgg
                 ? 'bg-[#150a04] border-t border-flare/50 shadow-inner'
@@ -908,28 +842,26 @@ export default function CipherRun() {
             }`}
           >
             {protocol?.text?.split('').map((ch, idx) => {
-              const state = charStates[idx]
-              const isCursor = idx === cursor
-              const displayChar = typedChars[idx] !== undefined ? typedChars[idx] : ch
+              const typed = wrong.get(idx)
 
-              if (state === 'correct') {
+              if (typed !== undefined) {
+                return (
+                  <span
+                    key={idx}
+                    className="bg-rose-950/80 text-rose-300 border-b-2 border-rose-500 font-bold"
+                  >
+                    {typed === ' ' ? '␣' : typed}
+                  </span>
+                )
+              }
+              if (idx < cursor) {
                 return (
                   <span key={idx} className="text-emerald-400">
                     {ch}
                   </span>
                 )
               }
-              if (state === 'error') {
-                return (
-                  <span
-                    key={idx}
-                    className="bg-rose-950/80 text-rose-300 border-b-2 border-rose-500 font-bold"
-                  >
-                    {displayChar === ' ' ? '␣' : displayChar}
-                  </span>
-                )
-              }
-              if (isCursor) {
+              if (idx === cursor) {
                 return (
                   <span
                     key={idx}
@@ -982,11 +914,18 @@ export default function CipherRun() {
         <div className="mt-8 border border-flare bg-surface p-6 font-mono">
           <div className="flex items-center justify-between border-b border-line pb-3">
             <h3 className="display text-xl text-flare">Match Complete // Standings</h3>
-            <span className="text-xs text-muted">NEXT PROTOCOL IN 6s</span>
+            <span className="text-xs text-muted">NEXT RACE IN {snap.nextRaceIn ?? 0}s</span>
           </div>
           <div className="mt-4 space-y-2">
+            {/* Finishers first, in the order they breached; then everyone else by how far they got */}
             {[...(snap?.players || [])]
-              .sort((a, b) => (b.wpm || 0) - (a.wpm || 0))
+              .sort((a, b) =>
+                a.finished !== b.finished
+                  ? (a.finished ? -1 : 1)
+                  : a.finished
+                    ? a.finishTime - b.finishTime
+                    : (b.progress || 0) - (a.progress || 0),
+              )
               .map((p, idx) => (
                 <div
                   key={p.id}
@@ -1020,7 +959,7 @@ export default function CipherRun() {
             Full Board →
           </Link>
         </div>
-        <Leaderboard entries={snap?.board || []} you={name} full={false} />
+        <Leaderboard entries={snap?.board || []} you={name} spec={boardFor('cipherrun')} />
       </div>
     </div>
   )

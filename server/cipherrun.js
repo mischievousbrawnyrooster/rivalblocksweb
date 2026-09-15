@@ -9,6 +9,8 @@ export const FINISH_ALLOWANCE_MS = 20000 // 20-second allowance for remaining pl
 export const LOCKOUT_MS = 350 // Terminal static freeze on consecutive errors
 export const CONSECUTIVE_ERROR_LIMIT = 3
 export const MAX_PLAYERS = 8
+export const MIN_PLAYERS = 2 // operators it takes to start a race without bots
+export const AVATARS = 6 // runner sprite sheets the page draws, numbered from 0
 export const BOT_FILL_TO = 4
 export const BOT_NAMES = ['ZeroCool', 'AcidBurn', 'Crash', 'Phantom', 'Vector', 'Cereal', 'Daemon']
 
@@ -19,19 +21,11 @@ export { PROTOCOLS }
 
 // --- Typing Mathematics (Monkeytype Standard) ------------------------------
 
-/** Standard WPM: (correct characters / 5) / (elapsed minutes) */
+/** WPM: (characters / 5) / (elapsed minutes). Net WPM counts correct characters, raw WPM every keystroke. */
 export function calculateWpm(correctChars, elapsedMs) {
   if (!elapsedMs || elapsedMs <= 0 || !correctChars || correctChars <= 0) return 0
   const minutes = elapsedMs / 60000
   const words = correctChars / 5
-  return Math.round((words / minutes) * 10) / 10
-}
-
-/** Raw / Gross WPM: (total keystrokes / 5) / (elapsed minutes) */
-export function calculateRawWpm(totalKeystrokes, elapsedMs) {
-  if (!elapsedMs || elapsedMs <= 0 || !totalKeystrokes || totalKeystrokes <= 0) return 0
-  const minutes = elapsedMs / 60000
-  const words = totalKeystrokes / 5
   return Math.round((words / minutes) * 10) / 10
 }
 
@@ -45,6 +39,28 @@ export function calculateAccuracy(correctChars, totalKeystrokes) {
 export function calculateProgress(cursor, totalLength) {
   if (!totalLength || totalLength <= 0) return 0
   return Math.min(100, Math.round((cursor / totalLength) * 1000) / 10)
+}
+
+/**
+ * Words finished with no typo left in them: what moves a runner up the track.
+ * A word counts once the cursor is past the space after it, or past the last
+ * letter of the text, so a runner steps forward a clean word at a time and
+ * rushing ahead with typos standing moves it nowhere.
+ */
+function wordsDone(text, cursor, errors) {
+  let done = 0
+  let letters = 0
+  let clean = true
+  for (let i = 0; i < Math.min(cursor, text.length); i++) {
+    if (errors.has(i)) clean = false
+    if (text[i] !== ' ') letters++
+    if (text[i] === ' ' || i === text.length - 1) {
+      if (clean && letters > 0) done++
+      clean = true
+      letters = 0
+    }
+  }
+  return done
 }
 
 // --- Name Sanitization ----------------------------------------------------
@@ -74,7 +90,6 @@ export function make(options = {}) {
     players: new Map(),
     nextSlot: 0,
     nextId: 1,
-    seq: 0,
     phase: 'waiting', // waiting | voting | countdown | racing | over
     countdown: COUNTDOWN_MS,
     voteTimer: VOTE_DURATION_MS,
@@ -87,45 +102,24 @@ export function make(options = {}) {
     overSince: 0,
     board: options.board ?? [],
     botFill: options.botFill ?? BOT_FILL_TO,
-    botsWanted: options.botsWanted ?? true,
+    botsWanted: options.botsWanted ?? false, // set by an operator pressing Start with bots
+    picked: PROTOCOLS.some((p) => p.id === options.picked) ? options.picked : null, // archive pick, raced next
     botsOnly: options.botsOnly ?? false,
-    mode: options.mode ?? 'race', // 'race' | 'solo'
   }
 }
 
 // --- Pre-Round Voting -----------------------------------------------------
+/** A vote for tier 1, 2 or 3, the only values the page sends. */
 export function castVote(match, playerId, tier) {
-  if (!match?.players?.has(playerId) || match.phase !== 'voting') return false
-
-  let tierNum
-  if (tier === 1 || tier === '1' || tier === 'short') tierNum = 1
-  else if (tier === 2 || tier === '2' || tier === 'medium') tierNum = 2
-  else if (tier === 3 || tier === '3' || tier === 'long') tierNum = 3
-  else return false
-
-  match.votes.set(playerId, tierNum)
+  if (!match.players.has(playerId) || match.phase !== 'voting' || ![1, 2, 3].includes(tier)) return false
+  match.votes.set(playerId, tier)
   return true
 }
 
 export function getVoteTallies(match) {
-  let short = 0
-  let medium = 0
-  let long = 0
-
-  if (match?.votes) {
-    for (const tier of match.votes.values()) {
-      if (tier === 1) short++
-      else if (tier === 2) medium++
-      else if (tier === 3) long++
-    }
-  }
-
-  return {
-    short,
-    medium,
-    long,
-    total: short + medium + long,
-  }
+  const votes = [...match.votes.values()]
+  const count = (tier) => votes.filter((v) => v === tier).length
+  return { short: count(1), medium: count(2), long: count(3), total: votes.length }
 }
 
 export function resolveVote(match, rng = Math.random) {
@@ -134,17 +128,27 @@ export function resolveVote(match, rng = Math.random) {
     p.correctKeystrokes = 0
     p.totalKeystrokes = 0
     p.consecutiveErrors = 0
-    p.totalErrors = 0
     p.lockoutUntil = 0
     p.finished = false
     p.finishTime = null
     p.finalWpm = 0
     p.finalAcc = 100
-    if (p.errors) p.errors.clear()
+    p.errors.clear()
   }
 
   match.winner = null
   match.finishTimer = 0
+  // A new race, so the next results screen gets a countdown of its own.
+  match.overSince = 0
+
+  // An archive pick decides the race outright: no vote count, no easter egg roll.
+  if (match.picked) {
+    const chosen = PROTOCOLS.find((p) => p.id === match.picked)
+    match.picked = null
+    match.protocol = chosen
+    match.easterEgg = chosen.category === 'easter_egg'
+    return { winningTier: chosen.tier, protocol: chosen, easterEgg: match.easterEgg }
+  }
 
   // Easter Egg roll: 2% probability
   if (rng() < 0.02) {
@@ -176,8 +180,30 @@ export function resolveVote(match, rng = Math.random) {
   return { winningTier, protocol: chosen, easterEgg: false }
 }
 
+/**
+ * An operator's pick from the protocol archive. It replaces the vote: a vote
+ * under way ends at once, and a race under way keeps its text and races the
+ * pick next.
+ */
+export function pickProtocol(match, playerId, protocolId) {
+  if (!match.players.has(playerId) || !PROTOCOLS.some((p) => p.id === protocolId)) return false
+  match.picked = protocolId
+  return true
+}
+
+/** A runner number the page has a sprite sheet for, or null. */
+const validAvatar = (v) => (Number.isInteger(v) && v >= 0 && v < AVATARS ? v : null)
+
+/** An operator switching runner. Refused unless it is one of the AVATARS sheets. */
+export function setAvatar(match, playerId, avatar) {
+  const p = match.players.get(playerId)
+  if (!p || validAvatar(avatar) === null) return false
+  p.avatar = avatar
+  return true
+}
+
 // --- Player Roster --------------------------------------------------------
-export function join(match, playerInfo = {}) {
+export function join(match, playerInfo = {}, rng = Math.random) {
   const isBot = Boolean(playerInfo.bot)
   if (!isBot && match.players.size >= MAX_PLAYERS) {
     const bot = [...match.players.values()].find((p) => p.bot)
@@ -185,15 +211,16 @@ export function join(match, playerInfo = {}) {
   }
   if (match.players.size >= MAX_PLAYERS) return null
 
-  const id = playerInfo.id || (isBot ? `bot-${match.nextId++}` : `p-${match.nextId++}`)
+  // A restart carries players in under their old ids while the counter starts
+  // again from 1, so an id already in the roster is skipped, never reused.
+  let id = playerInfo.id
+  while (!id || match.players.has(id)) id = `${isBot ? 'bot' : 'p'}-${match.nextId++}`
   const name = sanitizeName(playerInfo.name)
   const slot = match.nextSlot++
-  const avatar = typeof playerInfo.avatar === 'number' && Number.isFinite(playerInfo.avatar) && playerInfo.avatar >= 0
-    ? Math.floor(playerInfo.avatar) % 6
-    : (slot % 6)
+  const avatar = validAvatar(playerInfo.avatar) ?? slot % AVATARS
 
-  // Bot typing characteristics
-  const botWpm = isBot ? (55 + (slot % 4) * 14 + Math.floor(Math.random() * 8)) : null
+  // Bot typing characteristics, drawn from the injected rng so a seeded run repeats
+  const botWpm = isBot ? (55 + (slot % 4) * 14 + Math.floor(rng() * 8)) : null
 
   const p = {
     id,
@@ -207,8 +234,7 @@ export function join(match, playerInfo = {}) {
     correctKeystrokes: 0,
     totalKeystrokes: 0,
     consecutiveErrors: 0,
-    totalErrors: 0,
-    errors: new Set(),
+    errors: new Map(), // position -> the wrong key typed there
     lockoutUntil: 0,
     finished: false,
     finishTime: null,
@@ -223,14 +249,8 @@ export function join(match, playerInfo = {}) {
 export function leave(match, playerId) {
   match.players.delete(playerId)
   match.votes.delete(playerId)
-  if (match.players.size === 0) {
-    match.phase = 'waiting'
-  } else if (match.phase === 'racing' && match.winner) {
-    const living = [...match.players.values()]
-    if (living.length > 0 && living.every((p) => p.finished)) {
-      match.phase = 'over'
-    }
-  }
+  // A race whose last unfinished operator walked out is concluded by the next tick.
+  if (match.players.size === 0) match.phase = 'waiting'
 }
 
 // --- Keystroke Processing -------------------------------------------------
@@ -243,60 +263,42 @@ export function processInput(match, playerId, input = {}) {
 
   const text = match.protocol.text
   const key = String(input.key ?? '')
+  if (key !== 'Backspace' && key.length !== 1) return false
 
-  if (!p.errors) {
-    p.errors = new Set()
-  }
-
-  // 2. Backspace: Rewind cursor by 1 and clear error or correct state
+  // 2. Backspace: step back one letter, erasing the typo if one sits there.
+  // Correct keypresses stay counted, so accuracy is not taken back.
+  // With `word` (Ctrl+Backspace) it keeps stepping, as a text editor does: over
+  // any spaces just behind the cursor, then back to the start of that word.
   if (key === 'Backspace') {
-    if (p.cursor > 0) {
-      const targetPos = p.cursor - 1
-      p.cursor = targetPos
-      if (p.errors.has(targetPos)) {
-        p.errors.delete(targetPos)
-        p.consecutiveErrors = Math.max(0, p.consecutiveErrors - 1)
-      } else {
-        p.correctKeystrokes = Math.max(0, p.correctKeystrokes - 1)
-      }
+    const back = () => {
+      p.cursor -= 1
+      if (p.errors.delete(p.cursor)) p.consecutiveErrors = Math.max(0, p.consecutiveErrors - 1)
+    }
+    if (input.word === true) {
+      while (p.cursor > 0 && text[p.cursor - 1] === ' ') back()
+      while (p.cursor > 0 && text[p.cursor - 1] !== ' ') back()
+    } else if (p.cursor > 0) {
+      back()
     }
     return true
-  }
-
-  // 3. Spacebar Word Jump: If errors present within current word, skip to next word
-  if (key === ' ' && (p.consecutiveErrors > 0 || p.errors.size > 0)) {
-    const nextSpace = text.indexOf(' ', p.cursor)
-    if (nextSpace !== -1) {
-      const skippedCount = nextSpace + 1 - p.cursor
-      p.totalErrors += skippedCount
-      p.totalKeystrokes += skippedCount
-      p.cursor = nextSpace + 1
-      p.consecutiveErrors = 0
-      for (let i = 0; i <= nextSpace; i++) {
-        p.errors.delete(i)
-      }
-      return true
-    }
   }
 
   // Do not accept keystrokes beyond text boundary
   if (p.cursor >= text.length) return false
 
-  // 4. Character Matching
-  const expected = text[p.cursor]
+  // 3. Character Matching. Space is an ordinary key: only Backspace clears a typo.
   p.totalKeystrokes += 1
 
-  if (key === expected) {
+  if (key === text[p.cursor]) {
     p.correctKeystrokes += 1
     p.consecutiveErrors = 0
-    p.errors.delete(p.cursor)
     p.cursor += 1
 
     // Check breach completion (requires zero uncorrected errors)
     if (p.cursor >= text.length && p.errors.size === 0) {
       p.finished = true
       p.finishTime = match.elapsed
-      p.finalWpm = calculateWpm(p.correctKeystrokes, match.elapsed)
+      p.finalWpm = calculateWpm(text.length, match.elapsed)
       p.finalAcc = calculateAccuracy(p.correctKeystrokes, p.totalKeystrokes)
 
       if (!match.winner) {
@@ -313,31 +315,33 @@ export function processInput(match, playerId, input = {}) {
     return true
   }
 
-  // Typo occurred: record error at current position and advance cursor
-  p.totalErrors += 1
+  // Typo occurred: remember the wrong key so the page can show it, and advance past it
   p.consecutiveErrors += 1
-  p.errors.add(p.cursor)
+  p.errors.set(p.cursor, key)
   p.cursor += 1
 
-  // 5. Trigger Glitch Breaker on 3 consecutive errors
+  // 4. Trigger Glitch Breaker on 3 consecutive errors; the freeze starts a fresh count
   if (p.consecutiveErrors >= CONSECUTIVE_ERROR_LIMIT) {
     p.lockoutUntil = match.now + LOCKOUT_MS
+    p.consecutiveErrors = 0
   }
 
   return true
 }
 
 // --- Bot Driver -----------------------------------------------------------
-function ensureBots(match) {
+function ensureBots(match, rng) {
   const humans = [...match.players.values()].filter((p) => !p.bot).length
   if (humans === 0 && !match.botsOnly) {
+    // Nobody left who asked for bots: the next operator starts in the lobby.
+    match.botsWanted = false
     for (const b of [...match.players.values()].filter((p) => p.bot)) {
       leave(match, b.id)
     }
     return
   }
 
-  const fillTarget = match.botFill ?? BOT_FILL_TO
+  const fillTarget = match.botsWanted || match.botsOnly ? match.botFill : 0
   const bots = [...match.players.values()].filter((p) => p.bot)
   const want = Math.max(0, Math.min(fillTarget, MAX_PLAYERS) - humans)
 
@@ -345,7 +349,7 @@ function ensureBots(match) {
   for (let i = bots.length; i < want; i++) {
     const taken = new Set([...match.players.values()].map((q) => q.name))
     const botName = BOT_NAMES.find((n) => !taken.has(n)) ?? `Daemon ${match.nextId}`
-    join(match, { name: botName, bot: true })
+    join(match, { name: botName, bot: true }, rng)
   }
 }
 
@@ -376,21 +380,24 @@ export function driveBots(match, rng = Math.random) {
 // --- Simulation Tick ------------------------------------------------------
 export function tick(match, dtMs = TICK_MS, rng = Math.random) {
   match.now += dtMs
-  ensureBots(match)
+  ensureBots(match, rng)
 
   const humans = [...match.players.values()].filter((p) => !p.bot).length
 
   // Advance Phase
   if (match.phase === 'waiting') {
-    if (humans > 0 || match.botsOnly) {
+    // The lobby: hold for a rival operator unless someone asked for bots.
+    if (humans >= MIN_PLAYERS || match.botsWanted || match.botsOnly) {
       match.phase = 'voting'
       match.voteTimer = VOTE_DURATION_MS
       match.votes.clear()
       match.easterEgg = false
     }
-  } else if (match.phase === 'voting') {
+  }
+  if (match.phase === 'voting') {
     match.voteTimer = Math.max(0, match.voteTimer - dtMs)
-    if (match.voteTimer <= 0) {
+    // A pick from the archive has already decided it, so the vote ends at once.
+    if (match.voteTimer <= 0 || match.picked) {
       resolveVote(match, rng)
       match.phase = 'countdown'
       match.countdown = COUNTDOWN_MS
@@ -428,20 +435,23 @@ export function tick(match, dtMs = TICK_MS, rng = Math.random) {
 export function snapshot(match) {
   const players = []
   const textLen = match.protocol.text.length
+  const words = match.protocol.text.split(' ').filter(Boolean).length
 
   for (const p of match.players.values()) {
-    const wpm = p.finished ? p.finalWpm : calculateWpm(p.correctKeystrokes, match.elapsed)
-    const rawWpm = calculateRawWpm(p.totalKeystrokes, match.elapsed)
+    // Net WPM counts letters still correct on screen; accuracy counts every keypress
+    const wpm = p.finished ? p.finalWpm : calculateWpm(p.cursor - p.errors.size, match.elapsed)
+    const rawWpm = calculateWpm(p.totalKeystrokes, match.elapsed)
     const acc = p.finished ? p.finalAcc : calculateAccuracy(p.correctKeystrokes, p.totalKeystrokes)
-    const progress = calculateProgress(p.cursor, textLen)
+    const progress = calculateProgress(wordsDone(match.protocol.text, p.cursor, p.errors), words)
 
     players.push({
       id: p.id,
       name: p.name,
       slot: p.slot,
-      avatar: p.avatar ?? (p.slot % 6),
+      avatar: p.avatar,
       bot: p.bot,
       cursor: p.cursor,
+      wrong: [...p.errors], // [position, key] pairs the page draws in red
       progress,
       wpm,
       rawWpm,
@@ -454,7 +464,6 @@ export function snapshot(match) {
 
   return {
     t: 'snap',
-    seq: match.seq++,
     phase: match.phase,
     countdown: Math.ceil(match.countdown / 1000),
     voteTimer: Math.ceil(match.voteTimer / 1000),
@@ -463,6 +472,12 @@ export function snapshot(match) {
     elapsed: match.elapsed,
     winner: match.winner,
     finishCountdown: match.winner && match.phase === 'racing' ? Math.ceil(match.finishTimer / 1000) : 0,
+    // Seconds the results screen has left, on the same clock the server restarts by.
+    nextRaceIn:
+      match.phase === 'over'
+        ? Math.max(0, Math.ceil((POST_RACE_GRACE_MS - (match.now - (match.overSince || match.now))) / 1000))
+        : 0,
+    picked: match.picked,
     protocol: {
       id: match.protocol.id,
       title: match.protocol.title,

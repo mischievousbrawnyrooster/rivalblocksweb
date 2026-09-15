@@ -8,11 +8,11 @@ import {
   join,
   leave,
   castVote,
+  pickProtocol,
+  setAvatar,
   processInput,
   tick,
   snapshot,
-  sanitizeName,
-  PROTOCOLS,
   TICK_MS,
   BOT_FILL_TO,
   MAX_PLAYERS,
@@ -25,9 +25,7 @@ const HOST = process.env.HOST || '127.0.0.1'
 const PORT = Number(process.env.PORT) || 8087
 const ADMIN_KEY = process.env.ADMIN_KEY || 'admin'
 
-let currentProtocolIdx = 0
-let match = make({ protocolId: PROTOCOLS[currentProtocolIdx].id, botFill: BOT_FILL_TO, botsWanted: true })
-let overSince = 0
+let match = make({ botFill: BOT_FILL_TO })
 
 // Map player ID -> WebSocket
 const sockets = new Map()
@@ -40,8 +38,6 @@ const played = () =>
     name: p.name,
     bot: Boolean(p.bot),
     won: p.id === match.winner,
-    kills: 0,
-    deaths: 0,
     time: p.finished ? p.finishTime : null,
     wpm: p.finalWpm,
     acc: p.finalAcc,
@@ -52,16 +48,11 @@ const wss = new WebSocketServer({
   port: PORT,
   maxPayload: 4096,
   perMessageDeflate: false,
-  handleProtocols: (protocols) => (protocols.has('cipherrun.v1') ? 'cipherrun.v1' : [...protocols][0] || false),
 })
 
-function nextProtocol() {
-  currentProtocolIdx = (currentProtocolIdx + 1) % PROTOCOLS.length
-  return PROTOCOLS[currentProtocolIdx].id
-}
-
-function restartMatch(protocolId = null) {
-  overSince = 0
+// A fresh match with everyone still connected carried into it. `pick` is an
+// admin's protocol choice; a pick an operator queued mid-race carries over too.
+function restartMatch(pick = null) {
   const activeSockets = []
   for (const client of wss.clients) {
     if (client.readyState === WebSocket.OPEN && client.player) {
@@ -74,12 +65,13 @@ function restartMatch(protocolId = null) {
     }
   }
 
-  const pId = protocolId || nextProtocol()
   match = make({
-    protocolId: pId,
-    botFill: match.botFill ?? BOT_FILL_TO,
-    botsOnly: match.botsOnly ?? false,
-    botsWanted: match.botsWanted ?? true,
+    protocolId: match.protocol.id,
+    picked: pick ?? match.picked,
+    botFill: match.botFill,
+    botsOnly: match.botsOnly,
+    // An operator who chose bots keeps them; otherwise the next race waits in the lobby.
+    botsWanted: match.botsWanted,
   })
   match.board = keep.top()
   sockets.clear()
@@ -94,7 +86,6 @@ function restartMatch(protocolId = null) {
         t: 'welcome',
         id: p.id,
         slot: p.slot,
-        mode: match.mode,
         protocol: match.protocol,
       }),
     )
@@ -139,21 +130,11 @@ wss.on('connection', (ws) => {
     }
 
     if (msg?.t === 'join' && !ws.player) {
-      if (match.phase === 'over' && match.players.size === 0) {
-        restartMatch(typeof msg.protocolId === 'number' ? msg.protocolId : null)
-      }
+      // An empty server sitting on a finished race starts fresh for whoever arrives.
+      if (match.phase === 'over' && match.players.size === 0) restartMatch()
 
-      if (match.players.size >= MAX_PLAYERS) {
-        ws.send(JSON.stringify({ t: 'full' }))
-        ws.close()
-        return
-      }
-
-      const name = sanitizeName(msg.name)
-      const avatar = typeof msg.avatar === 'number' && Number.isFinite(msg.avatar) && msg.avatar >= 0
-        ? Math.floor(msg.avatar) % 6
-        : undefined
-      const player = join(match, { name, avatar })
+      // join() stands a bot down to make room, and checks the name and runner itself.
+      const player = join(match, { name: msg.name, avatar: msg.avatar })
       if (!player) {
         ws.send(JSON.stringify({ t: 'full' }))
         ws.close()
@@ -167,22 +148,20 @@ wss.on('connection', (ws) => {
           t: 'welcome',
           id: player.id,
           slot: player.slot,
-          mode: match.mode,
           protocol: match.protocol,
         }),
       )
     } else if (msg?.t === 'input' && ws.player) {
-      processInput(match, ws.player.id, msg)
+      // Send the frame straight back so the typist sees the verdict without waiting a tick
+      if (processInput(match, ws.player.id, msg)) ws.send(JSON.stringify(snapshot(match)))
     } else if (msg?.t === 'vote' && ws.player) {
       castVote(match, ws.player.id, msg.tier)
-    } else if (msg?.t === 'avatar' && ws.player && typeof msg.avatar === 'number' && Number.isFinite(msg.avatar)) {
-      ws.player.avatar = Math.floor(msg.avatar) % 6
+    } else if (msg?.t === 'pick' && ws.player) {
+      pickProtocol(match, ws.player.id, msg.protocolId)
+    } else if (msg?.t === 'avatar' && ws.player) {
+      setAvatar(match, ws.player.id, msg.avatar)
     } else if (msg?.t === 'ready' && ws.player) {
       match.botsWanted = true
-    } else if (msg?.t === 'restart') {
-      if (match.phase === 'over' || admin) {
-        restartMatch(typeof msg.protocolId === 'number' ? msg.protocolId : null)
-      }
     }
   })
 
@@ -210,14 +189,10 @@ setInterval(() => {
     match.board = keep.top()
   }
 
-  if (match.phase === 'over' && match.players.size > 0) {
-    if (!overSince) {
-      overSince = now
-    } else if (now - overSince >= POST_RACE_GRACE_MS) {
-      restartMatch()
-    }
-  } else {
-    overSince = 0
+  // Results stay up for POST_RACE_GRACE_MS on the match's own clock, the same
+  // one the countdown on the results screen reads.
+  if (match.phase === 'over' && match.players.size > 0 && match.now - match.overSince >= POST_RACE_GRACE_MS) {
+    restartMatch()
   }
 
   const frame = JSON.stringify(snapshot(match))

@@ -9,9 +9,10 @@ import {
   CONSECUTIVE_ERROR_LIMIT,
   MAX_PLAYERS,
   BOT_FILL_TO,
+  MIN_PLAYERS,
+  AVATARS,
   VOTE_DURATION_MS,
   calculateWpm,
-  calculateRawWpm,
   calculateAccuracy,
   calculateProgress,
   make,
@@ -21,6 +22,8 @@ import {
   getVoteTallies,
   resolveVote,
   processInput,
+  pickProtocol,
+  setAvatar,
   tick,
   snapshot,
 } from './cipherrun.js'
@@ -82,8 +85,8 @@ test('typing math calculates WPM, Raw WPM, and Accuracy to Monkeytype standard',
   assert.equal(calculateWpm(100, 30000), 40)
   assert.equal(calculateWpm(0, 5000), 0)
 
-  // Raw WPM counts all keystrokes: 60 keystrokes in 15 seconds = 48 Raw WPM
-  assert.equal(calculateRawWpm(60, 15000), 48)
+  // Raw WPM is the same sum over every keystroke: 60 keystrokes in 15 seconds = 48
+  assert.equal(calculateWpm(60, 15000), 48)
 
   // Accuracy: 50 correct out of 55 total keystrokes = ~90.9%
   assert.equal(calculateAccuracy(50, 55), 90.9)
@@ -133,6 +136,16 @@ test('join() and leave() handle player roster and slot assignment', () => {
   assert.equal(m.phase, 'waiting')
 })
 
+test('someone joining after a restart never takes a carried player id', () => {
+  const m = make()
+  const carried = join(m, { id: 'p-1', name: 'Alice' }) // kept from the last match
+  const arrival = join(m, { name: 'Bob' })
+
+  assert.notEqual(arrival.id, carried.id)
+  assert.equal(m.players.get(carried.id), carried, 'the carried player is still theirs')
+  assert.equal(m.players.size, 2)
+})
+
 test('processInput matches characters and advances cursor', () => {
   const m = make({ protocolId: 1 })
   const text = m.protocol.text
@@ -157,7 +170,6 @@ test('processInput handles typos, advances cursor, increments error counts, and 
   processInput(m, p.id, { key: '§', cursor: 0 })
   assert.equal(p.cursor, 1, 'cursor advances on typo')
   assert.equal(p.consecutiveErrors, 1)
-  assert.equal(p.totalErrors, 1)
   assert.equal(p.lockoutUntil, 0)
 
   // Typo 2 advances cursor to 2
@@ -169,7 +181,7 @@ test('processInput handles typos, advances cursor, increments error counts, and 
   // Typo 3 advances cursor to 3 and triggers Glitch Breaker Lockout
   processInput(m, p.id, { key: '§', cursor: 2 })
   assert.equal(p.cursor, 3)
-  assert.equal(p.consecutiveErrors, CONSECUTIVE_ERROR_LIMIT)
+  assert.equal(p.consecutiveErrors, 0, 'the freeze resets the count')
   assert.ok(p.lockoutUntil > m.now)
 
   // Keystrokes rejected during lockout
@@ -208,21 +220,110 @@ test('processInput Backspace rewinds cursor and clears errors', () => {
   assert.equal(p.cursor, 0)
 })
 
-test('processInput Spacebar jumps to next word when errors exist', () => {
-  const m = make({ protocolId: 1 })
-  const text = m.protocol.text
+test('Ctrl+Backspace erases back to the start of the word, then the word before it', () => {
+  const m = make({ botFill: 0, botsWanted: false })
+  m.protocol = { id: 99, title: 'Test', tier: 1, text: 'ab cd' }
   const p = join(m, { name: 'Alice' })
   m.phase = 'racing'
 
-  // Type first character correctly, then mistake '§'
-  processInput(m, p.id, { key: text[0], cursor: 0 })
-  processInput(m, p.id, { key: '§', cursor: 1 })
-  assert.equal(p.cursor, 2)
+  for (const key of ['a', 'b', ' ', 'c', 'x']) processInput(m, p.id, { key })
+  processInput(m, p.id, { key: 'Backspace', word: true })
+  assert.equal(p.cursor, 3)
+  assert.equal(p.errors.size, 0, 'the typo went with its word')
 
-  // Pressing Space jumps to the next word boundary (after the first space)
-  processInput(m, p.id, { key: ' ', cursor: 2 })
-  const nextWordIndex = text.indexOf(' ') + 1
-  assert.equal(p.cursor, nextWordIndex)
+  processInput(m, p.id, { key: 'Backspace', word: true })
+  assert.equal(p.cursor, 0, 'from the start of a word it takes the space and the word before')
+})
+
+test('Space in the middle of a word is just another wrong key, not a jump', () => {
+  const m = make({ botFill: 0, botsWanted: false })
+  m.protocol = { id: 99, title: 'Test', tier: 1, text: 'abc de' }
+  const p = join(m, { name: 'Alice' })
+  m.phase = 'racing'
+
+  for (const key of ['a', 'x', ' ']) processInput(m, p.id, { key })
+  assert.equal(p.cursor, 3)
+  assert.deepEqual([...p.errors.keys()], [1, 2])
+})
+
+test('a typo cannot be left behind by typing on past it', () => {
+  const m = make({ botFill: 0, botsWanted: false })
+  m.protocol = { id: 99, title: 'Test', tier: 1, text: 'ab cd' }
+  const p = join(m, { name: 'Alice' })
+  m.phase = 'racing'
+
+  for (const key of ['a', 'x', ' ', 'c', 'd']) processInput(m, p.id, { key })
+  assert.equal(p.cursor, 5)
+  assert.equal(p.finished, false, 'the typo must still be backspaced')
+})
+
+test('a freeze resets the typo count, so the next freeze takes another full run', () => {
+  const m = make({ botFill: 0, botsWanted: false })
+  const p = join(m, { name: 'Alice' })
+  m.phase = 'racing'
+  const typo = () => processInput(m, p.id, { key: '§' })
+
+  for (let i = 0; i < CONSECUTIVE_ERROR_LIMIT; i++) typo()
+  assert.ok(m.now < p.lockoutUntil)
+
+  m.now = p.lockoutUntil
+  for (let i = 1; i < CONSECUTIVE_ERROR_LIMIT; i++) typo()
+  assert.ok(m.now >= p.lockoutUntil, 'one short of the limit must not freeze again')
+  typo()
+  assert.ok(m.now < p.lockoutUntil)
+})
+
+test('accuracy counts every correct keypress, even one later erased', () => {
+  const m = make({ botFill: 0, botsWanted: false })
+  m.protocol = { id: 99, title: 'Test', tier: 1, text: 'ab' }
+  const p = join(m, { name: 'Alice' })
+  m.phase = 'racing'
+
+  for (const key of ['x', 'b', 'Backspace', 'Backspace', 'a', 'b']) processInput(m, p.id, { key })
+  assert.equal(p.finished, true)
+  assert.equal(p.finalAcc, calculateAccuracy(3, 4))
+})
+
+test('net WPM counts only the letters left correct', () => {
+  const m = make({ botFill: 0, botsWanted: false })
+  m.protocol = { id: 99, title: 'Test', tier: 1, text: 'abc' }
+  const p = join(m, { name: 'Alice' })
+  m.phase = 'racing'
+  m.elapsed = 6000
+
+  for (const key of ['a', 'b', 'Backspace', 'x']) processInput(m, p.id, { key })
+  assert.equal(snapshot(m).players[0].wpm, calculateWpm(1, m.elapsed))
+})
+
+test('snapshot carries each wrong letter and where it was typed', () => {
+  const m = make({ botFill: 0, botsWanted: false })
+  const p = join(m, { name: 'Alice' })
+  m.phase = 'racing'
+
+  processInput(m, p.id, { key: '§' })
+  assert.deepEqual(JSON.parse(JSON.stringify(snapshot(m))).players[0].wrong, [[0, '§']])
+})
+
+test('a runner moves by the words typed correctly, not by how far the cursor has got', () => {
+  const m = make({ botFill: 0, botsWanted: false })
+  m.protocol = { id: 99, title: 'Test', tier: 1, text: 'ab cd ef' }
+  join(m, { name: 'Alice' })
+  const p = [...m.players.values()][0]
+  m.phase = 'racing'
+
+  for (const key of ['a', 'x', ' ', 'c', 'd', ' ', 'e']) processInput(m, p.id, { key })
+  assert.equal(snapshot(m).players[0].progress, calculateProgress(1, 3), 'only "cd" is a whole, clean word')
+})
+
+test('processInput ignores anything that is not one character or Backspace', () => {
+  const m = make({ botFill: 0, botsWanted: false })
+  const p = join(m, { name: 'Alice' })
+  m.phase = 'racing'
+
+  assert.equal(processInput(m, p.id, { key: 'Shift' }), false)
+  assert.equal(processInput(m, p.id, {}), false)
+  assert.equal(p.totalKeystrokes, 0)
+  assert.equal(p.cursor, 0)
 })
 
 test('reaching the end of the text completes breach and declares winner', () => {
@@ -370,14 +471,15 @@ test('castVote records valid votes and rejects invalid tiers or unknown players'
   assert.equal(castVote(m, p1.id, 1), true)
   assert.equal(m.votes.get(p1.id), 1)
 
-  // Accepts string aliases
-  assert.equal(castVote(m, p1.id, 'medium'), true)
+  // A second vote replaces the first
+  assert.equal(castVote(m, p1.id, 2), true)
   assert.equal(m.votes.get(p1.id), 2)
 
-  assert.equal(castVote(m, p2.id, '3'), true)
+  assert.equal(castVote(m, p2.id, 3), true)
   assert.equal(m.votes.get(p2.id), 3)
 
-  // Rejects invalid tiers
+  // Rejects invalid tiers, strings included: the page only ever sends 1, 2 or 3
+  assert.equal(castVote(m, p1.id, '1'), false)
   assert.equal(castVote(m, p1.id, 0), false)
   assert.equal(castVote(m, p1.id, 4), false)
   assert.equal(castVote(m, p1.id, 'invalid'), false)
@@ -473,10 +575,10 @@ test('resolveVote triggers Protocol 151 when 2% easter egg roll passes', () => {
 })
 
 test('tick advances state machine waiting -> voting -> countdown -> racing', () => {
-  const m = make({ protocolId: 1 })
+  const m = make({ protocolId: 1, botsWanted: true })
   const p = join(m, { name: 'Alice' })
 
-  // First human triggers transition to voting
+  // An operator who asked for bots starts at once
   tick(m, TICK_MS)
   assert.equal(m.phase, 'voting')
   assert.ok(m.voteTimer <= VOTE_DURATION_MS)
@@ -495,8 +597,30 @@ test('tick advances state machine waiting -> voting -> countdown -> racing', () 
   assert.equal(m.countdown, 0)
 })
 
+test('a lone operator waits in the lobby until a rival connects', () => {
+  const m = make({ botFill: BOT_FILL_TO })
+  join(m, { name: 'Alice' })
+  tick(m, TICK_MS)
+  assert.equal(m.phase, 'waiting', 'one operator alone must wait')
+
+  for (let i = 1; i < MIN_PLAYERS; i++) join(m, { name: `Rival ${i}` })
+  tick(m, TICK_MS)
+  assert.equal(m.phase, 'voting')
+  assert.equal([...m.players.values()].some((p) => p.bot), false, 'no bots nobody asked for')
+})
+
+test('a lone operator who asks for bots starts at once, against them', () => {
+  const m = make({ botFill: BOT_FILL_TO })
+  join(m, { name: 'Alice' })
+  m.botsWanted = true
+  tick(m, TICK_MS)
+
+  assert.equal(m.phase, 'voting')
+  assert.equal(m.players.size, BOT_FILL_TO)
+})
+
 test('driveBots simulates realistic keystrokes advancing bot progress', () => {
-  const m = make({ protocolId: 1 })
+  const m = make({ protocolId: 1, botsWanted: true })
   m.protocol = { id: 99, title: 'Test', tier: 1, text: 'The quick brown fox jumps' }
   join(m, { name: 'Alice' })
   m.phase = 'racing'
@@ -528,7 +652,7 @@ test('snapshot produces JSON-safe public frame with progress and telemetry', () 
 })
 
 test('snapshot exposes voteTimer, votes tally, and easterEgg flag', () => {
-  const m = make({ protocolId: 1 })
+  const m = make({ protocolId: 1, botsWanted: true })
   const p = join(m, { name: 'Alice' })
   tick(m, TICK_MS) // enters voting
   castVote(m, p.id, 1)
@@ -560,5 +684,108 @@ test('snapshot exposes finishCountdown during allowance', () => {
   tick(m, 5000)
   s = snapshot(m)
   assert.equal(s.finishCountdown, 15)
+})
+
+test('a protocol picked from the archive ends the vote and is the one raced', () => {
+  const m = make({ botFill: 0 })
+  const p = join(m, { name: 'Alice' })
+  m.botsWanted = true
+  tick(m, TICK_MS)
+  assert.equal(m.phase, 'voting')
+
+  assert.equal(pickProtocol(m, p.id, 151), true)
+  tick(m, TICK_MS)
+  assert.equal(m.phase, 'countdown', 'nobody waits out a vote the pick already decided')
+  assert.equal(m.protocol.id, 151)
+  assert.equal(m.easterEgg, true)
+  assert.equal(m.picked, null, 'a pick is raced once')
+})
+
+test('a protocol picked mid-race waits for the next race', () => {
+  const m = make({ botFill: 0 })
+  const p = join(m, { name: 'Alice' })
+  m.phase = 'racing'
+  const racing = m.protocol.id
+
+  pickProtocol(m, p.id, 42)
+  assert.equal(m.protocol.id, racing, 'the race under way keeps its text')
+  assert.equal(snapshot(m).picked, 42)
+
+  // The server carries the pick into the match it makes next.
+  const next = make({ botFill: 0, botsWanted: true, picked: m.picked })
+  join(next, { name: 'Alice' })
+  tick(next, TICK_MS)
+  assert.equal(next.phase, 'countdown')
+  assert.equal(next.protocol.id, 42)
+})
+
+test('only a real protocol, picked by someone in the match, is taken', () => {
+  const m = make()
+  const p = join(m, { name: 'Alice' })
+  assert.equal(pickProtocol(m, p.id, PROTOCOLS.length + 1), false)
+  assert.equal(pickProtocol(m, 'nobody', 1), false)
+  assert.equal(m.picked, null)
+})
+
+test('the results screen counts down to the next race', () => {
+  const m = make({ botFill: 0 })
+  m.protocol = { id: 99, title: 'Test', tier: 1, text: 'Go' }
+  const p = join(m, { name: 'Alice' })
+  m.phase = 'racing'
+  processInput(m, p.id, { key: 'G' })
+  processInput(m, p.id, { key: 'o' })
+  assert.equal(m.phase, 'over')
+
+  tick(m, TICK_MS)
+  assert.equal(snapshot(m).nextRaceIn, Math.ceil(POST_RACE_GRACE_MS / 1000))
+  tick(m, 2000)
+  assert.equal(snapshot(m).nextRaceIn, Math.ceil((POST_RACE_GRACE_MS - 2000) / 1000))
+})
+
+test('each race gets its own results countdown, not the last one', () => {
+  const m = make({ botFill: 0 })
+  const go = { id: 99, title: 'Test', tier: 1, text: 'Go' }
+  const p = join(m, { name: 'Alice' })
+  const race = () => {
+    m.protocol = go
+    m.phase = 'racing'
+    processInput(m, p.id, { key: 'G' })
+    processInput(m, p.id, { key: 'o' })
+    tick(m, TICK_MS)
+  }
+
+  race()
+  tick(m, POST_RACE_GRACE_MS) // the first results screen runs out
+  resolveVote(m, () => 0.5) // and the next race begins on the same match
+  race()
+  assert.equal(snapshot(m).nextRaceIn, Math.ceil(POST_RACE_GRACE_MS / 1000))
+})
+
+test('a bot typing speed comes from the injected rng, so a seeded run repeats', () => {
+  const slow = join(make(), { name: 'Bot', bot: true }, () => 0)
+  const again = join(make(), { name: 'Bot', bot: true }, () => 0)
+  const fast = join(make(), { name: 'Bot', bot: true }, () => 0.99)
+  assert.equal(slow.botWpm, again.botWpm)
+  assert.ok(fast.botWpm > slow.botWpm)
+})
+
+test('an operator can only switch to one of the runners there are', () => {
+  const m = make()
+  const p = join(m, { name: 'Alice', avatar: 2 })
+  for (const bad of [-1, AVATARS, 1.5, 'x', Infinity]) {
+    assert.equal(setAvatar(m, p.id, bad), false, `accepted avatar ${bad}`)
+  }
+  assert.equal(p.avatar, 2)
+  assert.equal(setAvatar(m, p.id, AVATARS - 1), true)
+  assert.equal(p.avatar, AVATARS - 1)
+})
+
+test('a person arriving at a full match takes a bot lane rather than being turned away', () => {
+  const m = make()
+  for (let i = 1; i < MAX_PLAYERS; i++) join(m, { name: `Operator ${i}` })
+  join(m, { name: 'Daemon', bot: true })
+
+  assert.ok(join(m, { name: 'Late' }), 'turned away while a bot held a lane')
+  assert.equal([...m.players.values()].some((p) => p.bot), false)
 })
 
