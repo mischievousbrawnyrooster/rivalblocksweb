@@ -33,8 +33,8 @@ export default function LeaderboardPage() {
           <p className="rule-label">Every title</p>
           <h1 className="display mt-2 text-4xl sm:text-5xl">Leaderboard</h1>
           <p className="mt-5 max-w-xl leading-relaxed text-muted">
-            Every round of Blockout Royale, Blockout Royale 3D, Void Drillers,
-            and Cipher Run, and every match of Fracture Line and Blastworks, on
+            Every round of Blockout Royale and Blockout Royale 3D, and every
+            match of Fracture Line, Blastworks, Void Drillers and Cipher Run, on
             every server. A result goes on the board the moment it finishes and
             stays there. Nothing is cleared between sessions.
           </p>
@@ -77,7 +77,7 @@ export default function LeaderboardPage() {
                 </div>
                 <div className="mt-3 border-t border-line pt-3">
                   {ready ? (
-                    <Leaderboard entries={rank(spec.board?.players ?? [])} />
+                    <Leaderboard entries={rank(spec.board?.players ?? [])} spec={spec} />
                   ) : (
                     <p className="text-sm text-muted">Reading the standings…</p>
                   )}

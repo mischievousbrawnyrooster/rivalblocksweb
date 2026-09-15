@@ -175,7 +175,7 @@ export default function GameDetail() {
                   <p className="border-b border-line pb-3 text-sm">{spec.title}</p>
                   <div className="mt-4">
                     {ready ? (
-                      <Leaderboard entries={rank(spec.board?.players ?? [])} />
+                      <Leaderboard entries={rank(spec.board?.players ?? [])} spec={spec} />
                     ) : (
                       <p className="text-sm text-muted">Reading the standings…</p>
                     )}

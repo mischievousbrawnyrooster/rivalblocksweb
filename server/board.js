@@ -9,38 +9,57 @@
 // One file per match server, and one match server per file. That is the whole
 // concurrency design: no two processes ever write the same path, so there is
 // nothing to lock and nothing to lose.
+//
+// What each board keeps is said here once, for every table that draws one.
+// `fights` is whether anybody is killed: a title without it shows no K/D, and
+// its deaths (Void Drillers counts being crushed) stay out of the cross-title
+// totals. `bests` are the best scores it records, with their column headings:
+// `label` for the full table, `short` for the narrow strip.
 export const BOARDS = [
-  { file: 'board-blockout.json', game: 'blockout', mode: null, title: 'Blockout Royale' },
+  { file: 'board-blockout.json', game: 'blockout', mode: null, title: 'Blockout Royale', fights: false, bests: [] },
   {
     file: 'board-blockout3d.json',
     game: 'blockout3d',
     mode: null,
     title: 'Blockout Royale 3D',
+    fights: true,
+    bests: [],
   },
-  { file: 'board-fracture.json', game: 'fracture', mode: null, title: 'Fracture Line' },
+  { file: 'board-fracture.json', game: 'fracture', mode: null, title: 'Fracture Line', fights: true, bests: [] },
   {
     file: 'board-blastworks-lastman.json',
     game: 'blastworks',
     mode: 'lastman',
     title: 'Blastworks: Last man standing',
+    fights: true,
+    bests: [],
   },
   {
     file: 'board-blastworks-deathmatch.json',
     game: 'blastworks',
     mode: 'deathmatch',
     title: 'Blastworks: Deathmatch',
+    fights: true,
+    bests: [],
   },
   {
     file: 'board-voiddrillers.json',
     game: 'voiddrillers',
     mode: null,
     title: 'Void Drillers',
+    fights: false,
+    bests: [{ key: 'fastestTime', label: 'Fastest clear', short: 'Clear' }],
   },
   {
     file: 'board-cipherrun.json',
     game: 'cipherrun',
     mode: null,
     title: 'Cipher Run',
+    fights: false,
+    bests: [
+      { key: 'fastestTime', label: 'Fastest win', short: 'Time' },
+      { key: 'peakWpm', label: 'Peak WPM', short: 'WPM' },
+    ],
   },
 ]
 
@@ -115,9 +134,9 @@ export const rank = (players) =>
  * Undefeated is measured against one death rather than none, so the answer
  * stays a number instead of infinity and stays comparable to everyone else's.
  *
- * Null rather than zero when there is nothing to divide: Blockout Royale has
- * no kills and no deaths — you outlast people, you do not shoot them — and a
- * zero there would read as a terrible record rather than an absent one.
+ * Null rather than zero when there is nothing to divide: somebody with no fight
+ * on record anywhere would otherwise read as the worst record rather than an
+ * absent one. Titles with no killing at all hide the column instead (`fights`).
  */
 export const kd = (row) =>
   row.kills === 0 && row.deaths === 0 ? null : row.kills / Math.max(1, row.deaths)
@@ -180,26 +199,23 @@ export function merge(board, results, at) {
 export function combine(boards) {
   const players = []
   for (const board of boards ?? []) {
+    const spec = boardFor(board?.game, board?.mode ?? null)
     for (const p of board?.players ?? []) {
       const row = rowFor(players, p.name)
       row.wins += p.wins
-      row.kills += p.kills
-      row.deaths += p.deaths
       row.matches += p.matches
       row.last = Math.max(row.last, p.last)
-      // Fastest time across all boards: pick the lower of the two, ignoring
-      // null entries so a game without clear times cannot zero the record.
-      if (typeof p.fastestTime === 'number') {
-        row.fastestTime =
-          typeof row.fastestTime === 'number' ? Math.min(row.fastestTime, p.fastestTime) : p.fastestTime
+      if (spec?.fights) {
+        row.kills += p.kills
+        row.deaths += p.deaths
       }
-      if (typeof p.peakWpm === 'number') {
-        row.peakWpm =
-          typeof row.peakWpm === 'number' ? Math.max(row.peakWpm, p.peakWpm) : p.peakWpm
-      }
-      if (typeof p.avgAcc === 'number') {
-        row.avgAcc =
-          typeof row.avgAcc === 'number' ? Math.max(row.avgAcc, p.avgAcc) : p.avgAcc
+      // A best score stays filed under its own title: a Cipher Run finish and a
+      // Void Drillers clear are not the same clock, so they are never merged.
+      for (const { key } of spec?.bests ?? []) {
+        if (typeof p[key] !== 'number') continue
+        row.bests ??= {}
+        row.bests[spec.file] ??= {}
+        row.bests[spec.file][key] = p[key]
       }
     }
   }

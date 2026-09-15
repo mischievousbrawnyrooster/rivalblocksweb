@@ -363,33 +363,47 @@ test('a player with a clear time ranks above one without on equal wins', () => {
   assert.deepEqual(order, ['ada', 'zoe'])
 })
 
-test('combine takes the fastest time across boards', () => {
-  const a = merge(
-    emptyBoard('voiddrillers'),
-    [person('ada', { won: true, time: 60000 })],
-    at,
-  )
-  const b = merge(
-    emptyBoard('fracture'),
-    [person('ada', { won: true, time: 35000, kills: 5 })],
-    at,
-  )
-  const all = combine([a, b])
-  const ada = all.find((p) => p.name === 'ada')
-  assert.equal(ada.fastestTime, 35000, 'combine did not pick the faster time')
+test('combine keeps each best score under its own title rather than merging games', () => {
+  const drillers = merge(emptyBoard('voiddrillers'), [person('ada', { won: true, time: 54585 })], at)
+  const cipher = merge(emptyBoard('cipherrun'), [person('ada', { won: true, time: 13372, wpm: 81.1 })], at)
+
+  const ada = combine([drillers, cipher]).find((p) => p.name === 'ada')
+  assert.deepEqual(ada.bests, {
+    [boardFor('voiddrillers').file]: { fastestTime: 54585 },
+    [boardFor('cipherrun').file]: { fastestTime: 13372, peakWpm: 81.1 },
+  })
+  assert.equal(ada.fastestTime, null, 'a typing race and a drill clear were merged into one time')
   assert.equal(ada.wins, 2)
 })
 
-test('combine ignores null fastestTime values', () => {
-  const a = merge(emptyBoard('blockout'), [person('ada', { won: true })], at)
-  const b = merge(
-    emptyBoard('voiddrillers'),
-    [person('ada', { won: true, time: 45000 })],
-    at,
-  )
-  const all = combine([a, b])
-  const ada = all.find((p) => p.name === 'ada')
-  assert.equal(ada.fastestTime, 45000, 'a null dragged the time to NaN or zero')
+test('a title that keeps no best scores adds none to the cross-title row', () => {
+  const blockout = merge(emptyBoard('blockout'), [person('ada', { won: true })], at)
+  const drillers = merge(emptyBoard('voiddrillers'), [person('ada', { won: true, time: 45000 })], at)
+
+  const ada = combine([blockout, drillers]).find((p) => p.name === 'ada')
+  assert.deepEqual(Object.keys(ada.bests), [boardFor('voiddrillers').file])
+})
+
+test('kills and deaths only add up from titles that have fighting in them', () => {
+  // Void Drillers banks being crushed as a death, with no kill to set against it.
+  const drillers = merge(emptyBoard('voiddrillers'), [person('ada', { deaths: 4 })], at)
+  const fracture = merge(emptyBoard('fracture'), [person('ada', { kills: 9, deaths: 3 })], at)
+
+  const ada = combine([drillers, fracture])[0]
+  assert.equal(ada.deaths, 3)
+  assert.equal(kd(ada), 3)
+})
+
+test('every title says whether it keeps kills and deaths, and labels its best scores', () => {
+  for (const spec of BOARDS) {
+    assert.equal(typeof spec.fights, 'boolean', `${spec.file} does not say whether it fights`)
+    for (const best of spec.bests) {
+      assert.ok(best.key && best.label && best.short, `${spec.file} has an unlabelled best score`)
+    }
+  }
+  for (const game of ['blockout', 'voiddrillers', 'cipherrun']) {
+    assert.equal(boardFor(game).fights, false, `${game} has no killing, so it must not show K/D`)
+  }
 })
 
 test('formatClearTime renders sub-minute times in seconds', () => {
