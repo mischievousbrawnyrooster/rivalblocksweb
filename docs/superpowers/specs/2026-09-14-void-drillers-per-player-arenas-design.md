@@ -37,12 +37,12 @@ Bots get their own shafts identically to human players.
 |---|---|---|
 | `isSolid(grid, x, y)` | `match.grid` passed in | `p.grid` passed in (no signature change) |
 | `touchesVault(grid, p)` | `match.grid` | `p.grid` |
-| `detonateGasPocket(match, bx, by)` | `match.grid`, `match.hp`, `match.deltas`, `match.hazards` | Accept `p` as argument; read/write `p.grid`, `p.hp`, `p.deltas`, `p.hazards`. Knockback, heat surge and fuel burn hit `p` only: nobody else stands in this shaft |
+| `detonateGasPocket(match, bx, by)` | `match.grid`, `match.hp`, `match.deltas`, `match.hazards` | Accept `p` as argument; read/write `p.grid`, `p.hp`, `p.deltas`, `p.hazards` |
 | `executeDrillPulse(match, p)` | `match.grid`, `match.hp`, `match.deltas` | Read/write `p.grid`, `p.hp`, `p.deltas` |
 | `findBestDownwardColumn(match, bx, groundRow)` | `match.grid` | Accept `grid` parameter; pass `p.grid` |
 | `driveBots(match, rng)` | `match.grid` | Use `p.grid` for the bot being driven |
 | `tick(match, dtMs, rng)` | `match.grid` for collision | Use `p.grid` for each player's physics |
-| `snapshot(match, viewerId)` | `match.deltas`, `match.hazards` | Per-player deltas and hazards in snapshot |
+| `snapshot(match)` | `match.deltas`, `match.hazards` | Per-player deltas and hazards in snapshot |
 
 ### Match State Shape After Change
 
@@ -130,7 +130,8 @@ ghost positions for all players:
       "drilling": true, "alive": true, "hp": 100,
       "kills": 0, "deaths": 0,
       "overheated": false, "superDrill": false,
-      "grief": { "type": "fog", "ttl": 2100, "by": "Grace" }
+      "grief": { "type": "fog", "ttl": 2100 },
+      "griefBy": "Grace"
     },
     ...
   ],
@@ -138,20 +139,21 @@ ghost positions for all players:
 }
 ```
 
-**Key change**: The server sends one frame per socket instead of one shared
-frame. In the tick loop of `voiddrillers-server.js`:
+**Key change**: The server must send per-player snapshot frames instead of one
+shared frame. In the tick loop of `voiddrillers-server.js`:
 
 ```js
-for (const client of wss.clients) {
-  if (client.readyState !== WebSocket.OPEN) continue
-  client.send(JSON.stringify(snapshot(match, client.player?.id)))
+for (const [id, clientWs] of sockets) {
+  if (clientWs.readyState !== WebSocket.OPEN) continue
+  const p = match.players.get(id)
+  if (!p) continue
+  clientWs.send(JSON.stringify(snapshotFor(match, p)))
 }
+// Admin/spectator clients without a player get a snapshot without deltas
 ```
 
-`snapshot(match, viewerId)` follows Blockout 3D's signature. It carries the
-viewer's `p.deltas` and `p.hazards`; a socket with no player (the admin panel)
-gets empty ones. `seq` advances once per tick, not per `snapshot()` call, or a
-frame per socket would skip numbers.
+`snapshotFor(match, p)` returns the standard snapshot but with `p.deltas` and
+`p.hazards` instead of match-level ones.
 
 ---
 
@@ -172,9 +174,9 @@ local player's shaft:
 
 ### Minimap Dots
 
-The canvas already reserves `MINIMAP_WIDTH_PX = 80` pixels on the right side,
-and already draws each player as a colored pip at their y-depth under the void
-line. Only the styling changes:
+The canvas already reserves `MINIMAP_WIDTH_PX = 80` pixels on the right side.
+Each player (including the local player) is drawn as a colored dot at their
+y-depth on the minimap strip:
 
 - **Local player**: Solid dot, 6px, slot color
 - **Other players**: Outlined dot, 5px, slot color at 60% opacity
@@ -198,15 +200,15 @@ Added to `BLOCK_CHARS` as `'X'` and `CHAR_TO_BLOCK` as `{ X: BLOCK_SABOTAGE }`.
 ### Generation
 
 Sabotage crystals spawn in subterranean strata (y >= 11, y < VAULT_Y) at ~5%
-frequency, taken from gas: gas drops from 10% to 5% and geodes keep their 16%.
-They use `SABOTAGE_HP = 2` (same as geodes). In the vein generation:
+frequency, replacing some geode spawns. They use `SABOTAGE_HP = 2` (same as
+geodes). In the vein generation:
 
 ```
 if (r < 0.44)       DIRT
 else if (r < 0.74)  STONE
-else if (r < 0.79)  GAS        // was 0.84 (10%), now 5%
+else if (r < 0.79)  GAS        // was 0.84
 else if (r < 0.84)  SABOTAGE   // NEW: 5%
-else                GEODE      // unchanged: 16%
+else                GEODE      // was 16%, now 16%
 ```
 
 ### Drilling a Sabotage Crystal
@@ -247,12 +249,12 @@ existing one.
 ### Drill Chill Enforcement (Server-Side)
 
 The `chill` effect is the only grief that has a server-side mechanical impact.
-It doubles whichever interval is running, so a chilled super drill slows to
-110 ms rather than losing its boost outright:
+In `executeDrillPulse`, when checking `p.drillTimer`:
 
 ```js
-const base = p.superDrillTimer > 0 ? SUPER_DRILL_PULSE_INTERVAL : DRILL_PULSE_INTERVAL
-const interval = p.grief?.type === 'chill' ? base * 2 : base
+const interval = (p.grief?.type === 'chill')
+  ? DRILL_PULSE_INTERVAL * 2
+  : (p.superDrillTimer > 0 ? SUPER_DRILL_PULSE_INTERVAL : DRILL_PULSE_INTERVAL)
 ```
 
 Fog and tremor are purely client-side visual effects with no server impact.
@@ -262,21 +264,20 @@ Fog and tremor are purely client-side visual effects with no server impact.
 Each player in the snapshot includes:
 
 ```js
-grief: p.grief ? { type: p.grief.type, ttl: p.grief.ttl, by: p.grief.by } : null
+grief: p.grief ? { type: p.grief.type, ttl: p.grief.ttl } : null,
+griefBy: p.grief ? p.grief.by : null
 ```
 
 ### Client Grief Rendering
 
 - **Fog**: After rendering the shaft and all players, draw a radial gradient
   overlay from transparent center to `rgba(15, 23, 42, 0.4)` edges
-- **Tremor**: Feed the existing screen shake (`shakeRef`), which already applies
-  `ctx.translate(shakeX, shakeY)` with random offsets each frame
+- **Tremor**: Apply `ctx.translate(shakeX, shakeY)` with random offsets before
+  rendering the shaft (resets each frame)
 - **Chill**: Blue tint overlay `rgba(56, 189, 248, 0.15)` over the shaft.
   "DRILL CHILLED" text rendered in blue monospace near the telemetry bar
 - **Sabotage notification**: When the local player breaks a sabotage crystal,
-  show "SENT [EFFECT] TO [NAME]" in a brief canvas toast (2s, fades out). The
-  snapshot names no target, so the page finds the rival whose `grief.by` is the
-  local player's name and whose grief is under 2 s old
+  show "SENT [EFFECT] TO [NAME]" in a brief canvas toast (2s, fades out)
 - **Incoming grief notification**: When `grief` appears on the local player,
   show "[NAME] SABOTAGED YOU" briefly
 
@@ -322,8 +323,8 @@ handles it identically for bots and humans).
 - `tick()`: Per-player collision uses `p.grid`; clear `p.deltas` per player;
   decrement `p.grief.ttl`; per-player hazard updates
 - `driveBots()`: Use `p.grid` for each bot
-- `snapshot(match, viewerId)` with per-player deltas/hazards, and `seq`
-  advanced in `tick()` rather than in `snapshot()`
+- `snapshot()` becomes `snapshotFor(match, viewerPlayer)` with per-player
+  deltas/hazards
 - Add `SABOTAGE_HP = 2`, grief effect constants
 
 ### `server/voiddrillers-server.js` (Network Adapter)
