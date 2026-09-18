@@ -418,24 +418,42 @@ test('make initialises laps to MIN_LAPS', () => {
   assert.equal(match.laps, MIN_LAPS)
 })
 
-test('starting slots do not collide when cars leave before the grid fills', () => {
+test('starting slots do not collide when counter wraps after roster churn', () => {
   const match = make({ circuitIndex: 0 })
-  const a = join(match, { name: 'A' }, () => 0)
-  const b = join(match, { name: 'B' }, () => 0)
-  const c = join(match, { name: 'C' }, () => 0)
 
-  leave(match, b.id)
-
-  // Join 5 more cars to fill up
-  for (let i = 0; i < 5; i++) {
-    join(match, { name: `D${i}` }, () => 0)
+  // Fill the grid: lifetime joins 0 through MAX_PLAYERS-1, assigning slots 0 through MAX_PLAYERS-1
+  const cars = []
+  for (let i = 0; i < MAX_PLAYERS; i++) {
+    cars.push(join(match, { name: `Car${i}` }, () => 0))
   }
+  const firstCar = cars[0]
 
-  // Verify no two cars share a starting slot
+  // Leave a middle car to free its slot. Capture the slot from the object,
+  // never hardcode it, so the test works against any MAX_PLAYERS.
+  const targetCar = cars[Math.floor(MAX_PLAYERS / 2)]
+  const freedSlot = targetCar.slot
+  leave(match, targetCar.id)
+
+  // Join one more: lifetime join #MAX_PLAYERS, so the old counter computes
+  // MAX_PLAYERS % MAX_PLAYERS === 0 and assigns slot 0 (still held by firstCar).
+  // The fixed code scans for the freed slot instead.
+  const newCar = join(match, { name: 'NewCar' }, () => 0)
+
+  // The new car should occupy the freed slot
+  assert.equal(newCar.slot, freedSlot, `new car should occupy freed slot ${freedSlot}`)
+
+  // The new car must NOT collide with the first car, which still lives
+  assert.notEqual(
+    newCar.slot,
+    firstCar.slot,
+    `new car slot ${newCar.slot} collided with first car slot ${firstCar.slot}`,
+  )
+
+  // Verify all live cars have unique slots
   const slots = new Set([...match.cars.values()].map((car) => car.slot))
   assert.equal(slots.size, match.cars.size, 'all cars have unique slots')
 
-  // Verify no two cars share x/y coordinates
+  // Verify all live cars have unique starting positions
   const positions = new Set([...match.cars.values()].map((car) => `${car.x},${car.y}`))
   assert.equal(positions.size, match.cars.size, 'all cars have unique starting positions')
 })
