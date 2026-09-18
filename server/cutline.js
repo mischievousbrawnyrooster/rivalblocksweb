@@ -381,3 +381,126 @@ export function decodeMap(str) {
   }
   return out
 }
+
+// --- Timing & lobby -------------------------------------------------------
+export const TICK_MS = 16            // 60 Hz simulation
+export const SEND_MS = 16            // client input rate
+export const DELAY_MS = 60           // client interpolation window
+
+export const MIN_PLAYERS = 2
+export const BOT_FILL_TO = 4
+export const MIN_LAPS = 3
+export const GRACE_LAPS = 1          // lap 1 takes no cut
+export const COUNTDOWN_MS = 4000
+export const POST_RACE_GRACE_MS = 8000
+
+export const BOT_NAMES = ['Ladle', 'Tap', 'Cinder', 'Bloom', 'Skip', 'Tundish', 'Runner']
+
+// --- Name sanitisation ----------------------------------------------------
+const isPrintable = (ch) => {
+  const code = ch.charCodeAt(0)
+  return code >= 32 && code !== 127
+}
+
+export function sanitizeName(raw) {
+  const clean = String(raw ?? '')
+    .slice(0, 256)
+    .split('')
+    .filter(isPrintable)
+    .join('')
+    .replace(/\s+/g, ' ')
+    .trim()
+  return clean ? clean.slice(0, 16) : 'Driver'
+}
+
+// --- Match creation -------------------------------------------------------
+export function make(options = {}) {
+  const circuitIndex = Number.isInteger(options.circuitIndex)
+    ? ((options.circuitIndex % CIRCUITS.length) + CIRCUITS.length) % CIRCUITS.length
+    : 0
+  const circuit = CIRCUITS[circuitIndex]
+  const { grid, centerline, checkpoints, startSlots } = carve(circuit.seed)
+
+  return {
+    circuit,
+    circuitIndex,
+    grid,
+    centerline,
+    checkpoints,
+    startSlots,
+    cars: new Map(),
+    nextId: 1,
+    nextSlot: 0,
+    phase: 'waiting', // waiting | countdown | racing | over
+    countdown: COUNTDOWN_MS,
+    now: 0,
+    elapsed: 0,
+    laps: MIN_LAPS,
+    lap: 0,           // laps the leader has completed
+    hazards: [],
+    cut: null,        // { id, name, at } for the most recent elimination
+    winner: null,
+    final: false,
+    overSince: 0,
+    board: options.board ?? [],
+    botFill: options.botFill ?? BOT_FILL_TO,
+    botsWanted: options.botsWanted ?? false,
+    botsOnly: options.botsOnly ?? false,
+  }
+}
+
+// --- Roster ---------------------------------------------------------------
+export function join(match, info = {}, rng = Math.random) {
+  const isBot = Boolean(info.bot)
+
+  // A full grid of bots stands one down rather than turning a person away.
+  if (!isBot && match.cars.size >= MAX_PLAYERS) {
+    const bot = [...match.cars.values()].find((c) => c.bot)
+    if (bot) leave(match, bot.id)
+  }
+  if (match.cars.size >= MAX_PLAYERS) return null
+
+  // A restart carries cars in under their old ids while the counter starts
+  // again, so an id already on the grid is skipped, never reused.
+  let id = info.id
+  while (!id || match.cars.has(id)) id = `${isBot ? 'bot' : 'p'}-${match.nextId++}`
+
+  const slot = match.nextSlot++ % MAX_PLAYERS
+  const start = match.startSlots[slot]
+
+  const car = {
+    id,
+    name: sanitizeName(info.name),
+    slot,
+    bot: isBot,
+    botSkill: isBot ? 0.82 + rng() * 0.18 : 1,
+    x: start.x,
+    y: start.y,
+    heading: start.heading,
+    vx: 0,
+    vy: 0,
+    lap: 0,
+    // A car sitting on the line has already taken checkpoint 0, so it waits
+    // for 1. Starting at 0 would let a car count a lap without moving.
+    nextCp: 1,
+    cpTaken: 0,
+    alive: true,
+    finishedAt: null,
+    item: null,
+    boostUntil: 0,
+    bestLapMs: null,
+    lapStartedAt: 0,
+  }
+
+  match.cars.set(id, car)
+  return car
+}
+
+export function leave(match, id) {
+  match.cars.delete(id)
+  if (match.cars.size === 0) {
+    match.phase = 'waiting'
+    match.winner = null
+    match.final = false
+  }
+}

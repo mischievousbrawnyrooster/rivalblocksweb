@@ -326,3 +326,103 @@ test('walkLine visits every tile from start to end and never takes a diagonal-on
     }
   }
 })
+
+import {
+  TICK_MS,
+  MIN_PLAYERS,
+  BOT_FILL_TO,
+  MIN_LAPS,
+  make,
+  join,
+  leave,
+  sanitizeName,
+} from './cutline.js'
+
+/**
+ * A match with n cars on the grid, ready to race. Randomness is the injected
+ * counter rng so a seeded run repeats, never Math.random.
+ */
+function racing(n, options = {}) {
+  const match = make({ circuitIndex: 0, ...options })
+  for (let i = 0; i < n; i++) join(match, { name: `D${i}` }, () => 0)
+  match.phase = 'racing'
+  match.laps = Math.max(MIN_LAPS, match.cars.size)
+  return match
+}
+
+test('make seats a match on a named circuit with a carved grid', () => {
+  const match = make({ circuitIndex: 0 })
+  assert.equal(match.circuit.name, CIRCUITS[0].name)
+  assert.equal(match.grid.length, GRID * GRID)
+  assert.equal(match.phase, 'waiting')
+  assert.equal(match.cars.size, 0)
+  assert.deepEqual(match.hazards, [])
+  assert.equal(match.final, false)
+})
+
+test('a car joins onto its own starting slot, facing down the track', () => {
+  const match = make({ circuitIndex: 0 })
+  const a = join(match, { name: 'Ladle' }, () => 0)
+  const b = join(match, { name: 'Tap' }, () => 0)
+
+  assert.equal(match.cars.size, 2)
+  assert.notEqual(a.slot, b.slot, 'two cars must not share a starting slot')
+  assert.ok(Number.isFinite(a.x) && Number.isFinite(a.y) && Number.isFinite(a.heading))
+  assert.equal(a.lap, 0)
+  assert.equal(a.nextCp, 1, 'a car on the line is already waiting for checkpoint 1')
+  assert.equal(a.alive, true)
+  assert.equal(a.item, null)
+})
+
+test('joining beyond MAX_PLAYERS is refused', () => {
+  const match = make({ circuitIndex: 0 })
+  for (let i = 0; i < MAX_PLAYERS; i++) {
+    assert.ok(join(match, { name: `D${i}` }, () => 0), `join ${i} should be accepted`)
+  }
+  assert.equal(join(match, { name: 'Late' }, () => 0), null)
+  assert.equal(match.cars.size, MAX_PLAYERS)
+})
+
+test('a full grid of bots stands one down for an arriving human', () => {
+  const match = make({ circuitIndex: 0 })
+  for (let i = 0; i < MAX_PLAYERS; i++) join(match, { name: `B${i}`, bot: true }, () => 0)
+
+  const human = join(match, { name: 'Operator' }, () => 0)
+  assert.ok(human, 'a human must displace a bot rather than be refused')
+  assert.equal(human.bot, false)
+  assert.equal(match.cars.size, MAX_PLAYERS)
+})
+
+test('a name off a join screen is sanitised', () => {
+  assert.equal(sanitizeName('  Ladle  '), 'Ladle')
+  assert.equal(sanitizeName(''), 'Driver')
+  assert.equal(sanitizeName(null), 'Driver')
+  assert.equal(sanitizeName('a'.repeat(200)).length, 16)
+  assert.equal(sanitizeName('Tap Hole'), 'TapHole')
+  assert.equal(sanitizeName('Draw   Bench'), 'Draw Bench')
+})
+
+test('leaving removes the car and an empty grid falls back to waiting', () => {
+  const match = racing(2)
+  const [first] = [...match.cars.values()]
+  leave(match, first.id)
+  assert.equal(match.cars.size, 1)
+
+  for (const car of [...match.cars.values()]) leave(match, car.id)
+  assert.equal(match.cars.size, 0)
+  assert.equal(match.phase, 'waiting')
+})
+
+test('laps adapt to the field and never fall below MIN_LAPS', () => {
+  const small = racing(2)
+  assert.equal(small.laps, MIN_LAPS, 'a two car race still runs MIN_LAPS')
+
+  const full = racing(MAX_PLAYERS)
+  assert.equal(full.laps, MAX_PLAYERS, 'a full grid runs one lap per car')
+})
+
+test('BOT_FILL_TO and MIN_PLAYERS are sane against the grid', () => {
+  assert.ok(MIN_PLAYERS >= 2, 'a race needs at least two cars')
+  assert.ok(BOT_FILL_TO <= MAX_PLAYERS, 'bots cannot overfill the grid')
+  assert.ok(TICK_MS > 0)
+})
