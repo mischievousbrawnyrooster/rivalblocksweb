@@ -463,3 +463,174 @@ test('BOT_FILL_TO and MIN_PLAYERS are sane against the grid', () => {
   assert.ok(BOT_FILL_TO <= MAX_PLAYERS, 'bots cannot overfill the grid')
   assert.ok(TICK_MS > 0)
 })
+
+// S_TARMAC is already imported above; re-importing it here would be a
+// duplicate binding (SyntaxError), so it is left out of this block.
+import {
+  TOP_SPEED,
+  TURN_RATE,
+  OFFTRACK_CAP,
+  WALL_HIT_KEEP,
+  GRIP,
+  S_OIL,
+  applyInput,
+  stepCar,
+  topSpeedOf,
+} from './cutline.js'
+
+const speedOf = (car) => Math.hypot(car.vx, car.vy)
+
+/** Put a car at a known tile with a known velocity, for a physics test. */
+function placed(match, car, { x, y, heading = 0, speed = 0, lateral = 0 }) {
+  car.x = x
+  car.y = y
+  car.heading = heading
+  car.vx = Math.cos(heading) * speed - Math.sin(heading) * lateral
+  car.vy = Math.sin(heading) * speed + Math.cos(heading) * lateral
+  return car
+}
+
+test('holding throttle accelerates a car along its nose', () => {
+  const match = racing(1)
+  const [car] = [...match.cars.values()]
+  applyInput(match, car.id, { throttle: 1, steer: 0 })
+
+  const before = speedOf(car)
+  for (let i = 0; i < 10; i++) stepCar(match, car, TICK_MS / 1000)
+  assert.ok(speedOf(car) > before, 'throttle must build speed')
+  assert.ok(speedOf(car) <= topSpeedOf(match, car) + 0.001, 'speed must not exceed the cap')
+})
+
+test('steering is a rate: holding it turns continuously', () => {
+  const match = racing(1)
+  const [car] = [...match.cars.values()]
+  placed(match, car, { x: car.x, y: car.y, heading: 0, speed: 4 })
+  applyInput(match, car.id, { throttle: 1, steer: 1 })
+
+  const first = car.heading
+  stepCar(match, car, 0.1)
+  const afterOne = car.heading
+  stepCar(match, car, 0.1)
+  const afterTwo = car.heading
+
+  assert.ok(afterOne > first, 'one step of held steer must turn the car')
+  assert.ok(afterTwo > afterOne, 'a second step must keep turning it')
+  assert.ok(
+    Math.abs(afterOne - first) <= TURN_RATE * 0.1 + 0.001,
+    'a step must never turn more than TURN_RATE allows',
+  )
+})
+
+test('turn rate falls off as speed rises', () => {
+  const match = racing(1)
+  const [slow] = [...match.cars.values()]
+  const fast = join(match, { name: 'Fast' }, () => 0)
+
+  placed(match, slow, { x: slow.x, y: slow.y, heading: 0, speed: 1 })
+  placed(match, fast, { x: slow.x, y: slow.y, heading: 0, speed: TOP_SPEED })
+  applyInput(match, slow.id, { steer: 1 })
+  applyInput(match, fast.id, { steer: 1 })
+
+  const slowBefore = slow.heading
+  const fastBefore = fast.heading
+  stepCar(match, slow, 0.1)
+  stepCar(match, fast, 0.1)
+
+  assert.ok(
+    slow.heading - slowBefore > fast.heading - fastBefore,
+    'a slow car must out-turn a fast one',
+  )
+})
+
+test('lateral velocity bleeds off faster on tarmac than on oil', () => {
+  const match = racing(1)
+  const [car] = [...match.cars.values()]
+
+  // Find a tarmac tile and an oil tile on this circuit by writing one, so the
+  // test does not depend on where decoration happened to land.
+  const cp = match.checkpoints[3]
+  const tx = Math.round(cp.x)
+  const ty = Math.round(cp.y)
+
+  match.grid[ty * GRID + tx] = S_TARMAC
+  placed(match, car, { x: tx, y: ty, heading: 0, speed: 0, lateral: 4 })
+  stepCar(match, car, 0.1)
+  const onTarmac = Math.abs(-car.vx * Math.sin(0) + car.vy * Math.cos(0))
+
+  match.grid[ty * GRID + tx] = S_OIL
+  placed(match, car, { x: tx, y: ty, heading: 0, speed: 0, lateral: 4 })
+  stepCar(match, car, 0.1)
+  const onOil = Math.abs(-car.vx * Math.sin(0) + car.vy * Math.cos(0))
+
+  assert.ok(onOil > onTarmac, 'oil must hold a slide that tarmac would kill')
+  assert.ok(GRIP[S_OIL] < GRIP[S_TARMAC], 'the grip table must agree with the behaviour')
+})
+
+test('off the racing surface a car is capped and dragged', () => {
+  const match = racing(1)
+  const [car] = [...match.cars.values()]
+
+  // Corner of the grid is always wall on every circuit.
+  placed(match, car, { x: 1, y: 1, heading: 0, speed: TOP_SPEED })
+  applyInput(match, car.id, { throttle: 1 })
+  for (let i = 0; i < 60; i++) stepCar(match, car, TICK_MS / 1000)
+
+  assert.ok(speedOf(car) <= OFFTRACK_CAP + 0.001, `off track speed ${speedOf(car)} exceeds the cap`)
+})
+
+test('a car driven into a wall keeps only WALL_HIT_KEEP of its speed', () => {
+  const match = racing(1)
+  const [car] = [...match.cars.values()]
+
+  // Aim at the grid edge from just inside it.
+  placed(match, car, { x: 2, y: 2, heading: Math.PI, speed: 10 })
+  const before = speedOf(car)
+  for (let i = 0; i < 30; i++) stepCar(match, car, TICK_MS / 1000)
+
+  assert.ok(speedOf(car) < before * (WALL_HIT_KEEP + 0.5), 'wall contact must scrub speed')
+  assert.ok(car.x >= 0 && car.x < GRID && car.y >= 0 && car.y < GRID, 'a car must never leave the grid')
+})
+
+test('hostile and malformed input never moves a car or produces NaN', () => {
+  const match = racing(1)
+  const [car] = [...match.cars.values()]
+
+  for (const input of [
+    { steer: 99 },
+    { steer: -99 },
+    { steer: NaN },
+    { steer: Infinity },
+    { steer: '1' },
+    { steer: null },
+    { steer: {} },
+    { steer: [] },
+    { throttle: NaN },
+    { throttle: 'yes' },
+    {},
+    null,
+    undefined,
+  ]) {
+    applyInput(match, car.id, input)
+    for (let i = 0; i < 5; i++) stepCar(match, car, TICK_MS / 1000)
+    assert.ok(Number.isFinite(car.x), `x went non finite on ${JSON.stringify(input)}`)
+    assert.ok(Number.isFinite(car.y), `y went non finite on ${JSON.stringify(input)}`)
+    assert.ok(Number.isFinite(car.heading), `heading went non finite on ${JSON.stringify(input)}`)
+    assert.ok(Number.isFinite(car.vx) && Number.isFinite(car.vy), 'velocity went non finite')
+  }
+})
+
+test('applyInput refuses an unknown id and a dead car', () => {
+  const match = racing(2)
+  const [car] = [...match.cars.values()]
+  assert.equal(applyInput(match, 'nobody', { throttle: 1 }), false)
+
+  car.alive = false
+  assert.equal(applyInput(match, car.id, { throttle: 1 }), false)
+})
+
+test('a prototype key as an id is not a car', () => {
+  const match = racing(2)
+  for (const hostile of ['__proto__', 'constructor', 'toString', 'hasOwnProperty']) {
+    assert.equal(applyInput(match, hostile, { throttle: 1 }), false, `${hostile} must not resolve`)
+  }
+})

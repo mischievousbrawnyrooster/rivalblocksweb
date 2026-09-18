@@ -505,3 +505,158 @@ export function leave(match, id) {
     match.final = false
   }
 }
+
+// --- Handling -------------------------------------------------------------
+export const TOP_SPEED = 14.0        // tiles per second
+export const ACCEL = 18.0
+export const BRAKE = 26.0
+export const DRAG = 1.2
+export const TURN_RATE = 3.2         // rad/s at low speed
+export const TURN_FALLOFF = 0.45     // fraction of turn rate lost at top speed
+
+export const OFFTRACK_CAP = 6.5
+export const OFFTRACK_DRAG = 6.0
+export const WALL_HIT_KEEP = 0.25
+export const CAR_RADIUS = 0.45
+
+export const BOOST_MS = 3000         // the carried boost item
+export const STRIP_BOOST_MS = 1200   // crossing an S_BOOST strip on the track
+export const BOOST_MULT = 1.35       // shared by both
+export const SLIP_BOOST = 1.18
+
+// How fast sideways velocity bleeds off, per surface. This one table is where
+// a circuit's entire character lives: raise a value and that surface bites,
+// lower it and the car slides.
+export const GRIP = {
+  [S_TARMAC]: 7.0,
+  [S_KERB]: 4.0,
+  [S_BOOST]: 7.0,
+  [S_OIL]: 0.6,
+  [S_PICKUP]: 7.0,
+  [S_LINE]: 7.0,
+}
+
+/**
+ * Held input, clamped. Nothing from a socket is trusted: steer is forced to
+ * exactly -1, 0 or 1 and the rest to booleans, so no value a client can send
+ * reaches the physics as NaN. A single non finite number here would drive a
+ * position to NaN and make a car permanently un-eliminable, the same class of
+ * failure the Object.hasOwn direction lookup exists to close.
+ */
+export function applyInput(match, id, input) {
+  const car = typeof id === 'string' ? match.cars.get(id) : undefined
+  if (!car || !car.alive) return false
+
+  const raw = input && typeof input === 'object' ? input : {}
+  const steer = raw.steer
+  car.steer = steer === 1 || steer === -1 ? steer : 0
+  car.throttle = raw.throttle === 1 || raw.throttle === true
+  car.brake = raw.brake === 1 || raw.brake === true
+  car.wantsUse = raw.use === 1 || raw.use === true
+  return true
+}
+
+/** The speed cap a car is currently allowed, including boost and slipstream. */
+export function topSpeedOf(match, car) {
+  let cap = TOP_SPEED
+  if (match.now < car.boostUntil) cap *= BOOST_MULT
+  if (car.drafting) cap *= SLIP_BOOST
+  return cap
+}
+
+/** The surface under a car right now. */
+function surfaceUnder(match, car) {
+  return surfaceAt(match.grid, Math.round(car.x), Math.round(car.y))
+}
+
+/**
+ * One car, one tick. The standard arcade drift model: thrust along the nose,
+ * then bleed the sideways component according to the surface. Low grip is
+ * drift, and oil is grip near zero, so a car on a slick keeps its momentum and
+ * loses its ability to change direction with no special case anywhere.
+ */
+export function stepCar(match, car, dt) {
+  if (!car.alive || !Number.isFinite(dt) || dt <= 0) return
+
+  const surface = surfaceUnder(match, car)
+  const offTrack = surface === S_WALL
+  const cap = offTrack ? OFFTRACK_CAP : topSpeedOf(match, car)
+
+  // 1. Steer. A rate, never a target: this is what makes the game playable
+  //    without client-side prediction.
+  const speed = Math.hypot(car.vx, car.vy)
+  const falloff = 1 - TURN_FALLOFF * Math.min(1, speed / TOP_SPEED)
+  car.heading += (car.steer ?? 0) * TURN_RATE * falloff * dt
+
+  const cos = Math.cos(car.heading)
+  const sin = Math.sin(car.heading)
+
+  // 2. Split velocity into forward and lateral, relative to the nose.
+  let fwd = car.vx * cos + car.vy * sin
+  let lat = -car.vx * sin + car.vy * cos
+
+  // 3. Thrust, braking and drag act on the forward component only.
+  if (car.throttle) fwd += ACCEL * (match.now < car.boostUntil ? BOOST_MULT : 1) * dt
+  if (car.brake) fwd -= BRAKE * dt
+  fwd -= fwd * (offTrack ? OFFTRACK_DRAG : DRAG) * dt
+
+  // 4. Lateral bleeds off at the surface's grip.
+  const grip = offTrack ? GRIP[S_TARMAC] : (GRIP[surface] ?? GRIP[S_TARMAC])
+  lat *= Math.max(0, 1 - grip * dt)
+
+  // 5. Clamp and recompose.
+  fwd = Math.max(-cap * 0.4, Math.min(cap, fwd))
+  car.vx = fwd * cos - lat * sin
+  car.vy = fwd * sin + lat * cos
+
+  // 6. Integrate, then resolve contact one axis at a time so a car sliding
+  //    along a wall keeps the component that is not blocked.
+  const nx = car.x + car.vx * dt
+  if (surfaceAt(match.grid, Math.round(nx), Math.round(car.y)) === S_WALL && !offTrack) {
+    car.vx *= -WALL_HIT_KEEP
+  } else {
+    car.x = nx
+  }
+
+  const ny = car.y + car.vy * dt
+  if (surfaceAt(match.grid, Math.round(car.x), Math.round(ny)) === S_WALL && !offTrack) {
+    car.vy *= -WALL_HIT_KEEP
+  } else {
+    car.y = ny
+  }
+
+  // A car that started off track is walked back rather than trapped: it is
+  // allowed to move, capped and dragged, until it finds surface again.
+  if (offTrack) {
+    car.x = nx
+    car.y = ny
+  }
+
+  // The grid is the world. Nothing leaves it, whatever the physics says.
+  car.x = Math.max(0, Math.min(GRID - 1, car.x))
+  car.y = Math.max(0, Math.min(GRID - 1, car.y))
+}
+
+/** Cars push each other apart. Contact is a nuisance, never a weapon. */
+function resolveContact(match) {
+  const cars = [...match.cars.values()].filter((c) => c.alive)
+  for (let i = 0; i < cars.length; i++) {
+    for (let j = i + 1; j < cars.length; j++) {
+      const a = cars[i]
+      const b = cars[j]
+      const dx = b.x - a.x
+      const dy = b.y - a.y
+      const d = Math.hypot(dx, dy)
+      const min = CAR_RADIUS * 2
+      if (d >= min || d === 0) continue
+
+      const push = (min - d) / 2
+      const ux = dx / d
+      const uy = dy / d
+      a.x -= ux * push
+      a.y -= uy * push
+      b.x += ux * push
+      b.y += uy * push
+    }
+  }
+}
