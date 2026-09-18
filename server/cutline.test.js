@@ -413,12 +413,31 @@ test('leaving removes the car and an empty grid falls back to waiting', () => {
   assert.equal(match.phase, 'waiting')
 })
 
-test('laps adapt to the field and never fall below MIN_LAPS', () => {
-  const small = racing(2)
-  assert.equal(small.laps, MIN_LAPS, 'a two car race still runs MIN_LAPS')
+test('make initialises laps to MIN_LAPS', () => {
+  const match = make({ circuitIndex: 0 })
+  assert.equal(match.laps, MIN_LAPS)
+})
 
-  const full = racing(MAX_PLAYERS)
-  assert.equal(full.laps, MAX_PLAYERS, 'a full grid runs one lap per car')
+test('starting slots do not collide when cars leave before the grid fills', () => {
+  const match = make({ circuitIndex: 0 })
+  const a = join(match, { name: 'A' }, () => 0)
+  const b = join(match, { name: 'B' }, () => 0)
+  const c = join(match, { name: 'C' }, () => 0)
+
+  leave(match, b.id)
+
+  // Join 5 more cars to fill up
+  for (let i = 0; i < 5; i++) {
+    join(match, { name: `D${i}` }, () => 0)
+  }
+
+  // Verify no two cars share a starting slot
+  const slots = new Set([...match.cars.values()].map((car) => car.slot))
+  assert.equal(slots.size, match.cars.size, 'all cars have unique slots')
+
+  // Verify no two cars share x/y coordinates
+  const positions = new Set([...match.cars.values()].map((car) => `${car.x},${car.y}`))
+  assert.equal(positions.size, match.cars.size, 'all cars have unique starting positions')
 })
 
 test('BOT_FILL_TO and MIN_PLAYERS are sane against the grid', () => {

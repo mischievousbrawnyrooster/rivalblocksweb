@@ -430,7 +430,6 @@ export function make(options = {}) {
     startSlots,
     cars: new Map(),
     nextId: 1,
-    nextSlot: 0,
     phase: 'waiting', // waiting | countdown | racing | over
     countdown: COUNTDOWN_MS,
     now: 0,
@@ -465,7 +464,9 @@ export function join(match, info = {}, rng = Math.random) {
   let id = info.id
   while (!id || match.cars.has(id)) id = `${isBot ? 'bot' : 'p'}-${match.nextId++}`
 
-  const slot = match.nextSlot++ % MAX_PLAYERS
+  const used = new Set([...match.cars.values()].map((c) => c.slot))
+  let slot = 0
+  while (slot < MAX_PLAYERS && used.has(slot)) slot++
   const start = match.startSlots[slot]
 
   const car = {
