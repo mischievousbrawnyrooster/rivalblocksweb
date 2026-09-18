@@ -118,6 +118,8 @@ import {
   encodeMap,
   decodeMap,
   surfaceAt,
+  stampTrack,
+  walkLine,
 } from './cutline.js'
 
 const drivable = (s) => s !== S_WALL
@@ -229,4 +231,98 @@ test('surfaceAt treats anything off the grid as wall', () => {
   assert.equal(surfaceAt(grid, 10, -1), S_WALL)
   assert.equal(surfaceAt(grid, GRID, 10), S_WALL)
   assert.equal(surfaceAt(grid, 10, GRID), S_WALL)
+})
+
+test('stampTrack bridges a rail a tight corner pulls apart, wrap seam included', () => {
+  // A synthetic octagon, radius 12 with only 8 points, far tighter than any
+  // real circuit is allowed to be (MAX_CORNER_RAD forbids it). This isolates
+  // the bridging behaviour from the luck of the eight fixed seeds in
+  // CIRCUITS: measured directly (disabling the elbow bridge and rerunning),
+  // this exact shape drops from 540 reachable tiles to 110 of 440, so it is
+  // not a case the surrounding redundancy of a 7-wide track happens to paper
+  // over. If stampTrack regresses to a lone dot per point, this is expected
+  // to fail loudly rather than pass by chance.
+  const centre = { x: 40, y: 40 }
+  const radius = 12
+  const POINTS = 8
+  const centerline = []
+  for (let i = 0; i < POINTS; i++) {
+    const a = (i / POINTS) * Math.PI * 2
+    centerline.push({ x: centre.x + Math.cos(a) * radius, y: centre.y + Math.sin(a) * radius })
+  }
+
+  const grid = new Uint8Array(GRID * GRID)
+  stampTrack(grid, centerline)
+
+  const drivable = (s) => s !== S_WALL
+  const drivableTiles = []
+  for (let i = 0; i < grid.length; i++) {
+    if (drivable(grid[i])) drivableTiles.push(i)
+  }
+  assert.ok(drivableTiles.length > 0, 'stampTrack laid no surface at all')
+
+  const seen = new Uint8Array(grid.length)
+  const stack = [drivableTiles[0]]
+  seen[drivableTiles[0]] = 1
+  let reached = 0
+  while (stack.length) {
+    const idx = stack.pop()
+    reached++
+    const x = idx % GRID
+    const y = (idx / GRID) | 0
+    for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+      const nx = x + dx
+      const ny = y + dy
+      if (nx < 0 || ny < 0 || nx >= GRID || ny >= GRID) continue
+      const n = ny * GRID + nx
+      if (seen[n] || !drivable(grid[n])) continue
+      seen[n] = 1
+      stack.push(n)
+    }
+  }
+
+  assert.equal(reached, drivableTiles.length, 'a corner this tight split the surface into more than one piece')
+})
+
+test('walkLine visits every tile from start to end and never takes a diagonal-only step', () => {
+  // This is the primitive stampTrack's bridging is built on: given any two
+  // integer tiles, walk a path between them where every consecutive pair is
+  // 4-adjacent (shares an edge, not just a corner), so a caller that stamps
+  // along the path never has to bridge it again. Cases include a short
+  // diagonal (the old special case, dx=1 dy=1), longer jumps past it in both
+  // x and y (the class the old special case missed, matching the review's
+  // reported Chebyshev-2 and wider gaps), a pure horizontal and a pure
+  // vertical run, and both directions of travel.
+  const cases = [
+    [0, 0, 1, 1],
+    [0, 0, 2, 2],
+    [0, 0, 3, 1],
+    [0, 0, 4, 3],
+    [5, 5, 2, 2],
+    [3, 3, 3, 3],
+    [0, 0, 5, 0],
+    [0, 0, 0, 5],
+  ]
+  for (const [x0, y0, x1, y1] of cases) {
+    const visited = []
+    walkLine(x0, y0, x1, y1, (x, y) => visited.push([x, y]))
+
+    assert.deepEqual(visited[0], [x0, y0], `[${x0},${y0}]->[${x1},${y1}]: does not start at the start`)
+    assert.deepEqual(
+      visited[visited.length - 1],
+      [x1, y1],
+      `[${x0},${y0}]->[${x1},${y1}]: does not end at the end`,
+    )
+
+    for (let i = 1; i < visited.length; i++) {
+      const [ax, ay] = visited[i - 1]
+      const [bx, by] = visited[i]
+      const dx = Math.abs(bx - ax)
+      const dy = Math.abs(by - ay)
+      assert.ok(
+        dx + dy === 1,
+        `[${x0},${y0}]->[${x1},${y1}]: step ${i} from (${ax},${ay}) to (${bx},${by}) is not 4-adjacent`,
+      )
+    }
+  }
 })

@@ -168,6 +168,88 @@ function tangentAt(line, i) {
   return { x: dx / len, y: dy / len }
 }
 
+/** Stamp one tile, rounding to the nearest cell and dropping anything that
+ * rounds off the grid, so no caller needs a bounds check. */
+function putTile(grid, x, y, surface) {
+  const ix = Math.round(x)
+  const iy = Math.round(y)
+  if (ix < 0 || iy < 0 || ix >= GRID || iy >= GRID) return
+  grid[iy * GRID + ix] = surface
+}
+
+/**
+ * Visit every integer tile from (x0, y0) to (x1, y1) inclusive, in order.
+ * Ordinary Bresenham already does this, but a plain diagonal step in
+ * Bresenham (both x and y moving at once) touches the previous tile only at
+ * its corner, not an edge, so a straight run of them is 8-connected, not
+ * 4-connected. Visiting the elbow (x + sx, y) just before a diagonal step
+ * turns every such step into two orthogonal ones, so the whole line stays
+ * 4-connected end to end, whatever its slope or length. Exported so this
+ * guarantee can be tested directly, independent of any centerline.
+ */
+export function walkLine(x0, y0, x1, y1, visit) {
+  let x = x0
+  let y = y0
+  const dx = Math.abs(x1 - x0)
+  const dy = -Math.abs(y1 - y0)
+  const sx = x0 < x1 ? 1 : -1
+  const sy = y0 < y1 ? 1 : -1
+  let err = dx + dy
+
+  visit(x, y)
+  while (x !== x1 || y !== y1) {
+    const e2 = 2 * err
+    const stepX = e2 >= dy
+    const stepY = e2 <= dx
+    if (stepX && stepY) visit(x + sx, y) // the elbow ahead of a diagonal step
+    if (stepX) {
+      err += dy
+      x += sx
+    }
+    if (stepY) {
+      err += dx
+      y += sy
+    }
+    visit(x, y)
+  }
+}
+
+/**
+ * Stamp the racing surface (tarmac in the middle, kerb along both edges)
+ * across the normal at every centerline point, walking the closed set of
+ * adjacent pairs, wrap from the last point back to the first included, and
+ * rasterizing the segment between each pair rather than dropping a lone dot.
+ * Points are POINT_SPACING apart and the track is TRACK_WIDTH wide, so most
+ * consecutive stamps already overlap, but on a tight corner the outer rail
+ * travels further per index than the centerline does, so two consecutive
+ * stamps on it can round tiles apart. walkLine's rasterized, elbow-aware
+ * segment is what keeps every rail, seam included, 4-connected to itself
+ * regardless of how far a corner pushes two samples apart.
+ *
+ * Exported so the bridging can be exercised directly against a synthetic
+ * centerline, not only against the eight fixed seeds in CIRCUITS.
+ */
+export function stampTrack(grid, centerline) {
+  const railAt = (i, off) => {
+    const p = centerline[i]
+    const t = tangentAt(centerline, i)
+    return { x: p.x - t.y * off, y: p.y + t.x * off }
+  }
+
+  for (let i = 0; i < centerline.length; i++) {
+    const next = (i + 1) % centerline.length
+    for (let off = -HALF_WIDTH; off <= HALF_WIDTH; off++) {
+      const edge = Math.abs(off) === HALF_WIDTH
+      const surface = edge ? S_KERB : S_TARMAC
+      const a = railAt(i, off)
+      const b = railAt(next, off)
+      walkLine(Math.round(a.x), Math.round(a.y), Math.round(b.x), Math.round(b.y), (x, y) =>
+        putTile(grid, x, y, surface),
+      )
+    }
+  }
+}
+
 /**
  * One circuit, whole. The grid is what the client draws and what handling reads;
  * the centerline, checkpoints and starting slots all fall out of the same walk,
@@ -179,12 +261,7 @@ export function carve(seed) {
   const rng = createRng(seed ^ 0x9e3779b9) // a stream of its own, so surface
   //                                          decoration cannot shift the shape
 
-  const put = (x, y, surface) => {
-    const ix = Math.round(x)
-    const iy = Math.round(y)
-    if (ix < 0 || iy < 0 || ix >= GRID || iy >= GRID) return
-    grid[iy * GRID + ix] = surface
-  }
+  const put = (x, y, surface) => putTile(grid, x, y, surface)
 
   // Curvature per point, so decoration can tell a straight from a corner exit.
   const curvature = centerline.map((_, i) => {
@@ -198,35 +275,10 @@ export function carve(seed) {
     return turn
   })
 
-  // 1. Stamp the racing surface across the normal at every point. Points are
-  //    POINT_SPACING apart and the track is TRACK_WIDTH wide, so consecutive
-  //    stamps overlap and the surface has no gaps, EXCEPT on a tight corner:
-  //    the outer offset travels further per index than the centerline does,
-  //    so two consecutive stamps on the same rail can round to tiles that
-  //    touch only diagonally, splitting the surface into two 4-connected
-  //    pieces. lastAt bridges that elbow, one tile, so every rail stays
-  //    orthogonally connected to itself.
-  const lastAt = new Map()
-  for (let i = 0; i < centerline.length; i++) {
-    const p = centerline[i]
-    const t = tangentAt(centerline, i)
-    const nx = -t.y
-    const ny = t.x
-
-    for (let off = -HALF_WIDTH; off <= HALF_WIDTH; off++) {
-      const edge = Math.abs(off) === HALF_WIDTH
-      const surface = edge ? S_KERB : S_TARMAC
-      const ix = Math.round(p.x + nx * off)
-      const iy = Math.round(p.y + ny * off)
-
-      const last = lastAt.get(off)
-      if (last && Math.abs(ix - last.x) === 1 && Math.abs(iy - last.y) === 1) {
-        put(last.x, iy, surface)
-      }
-      put(ix, iy, surface)
-      lastAt.set(off, { x: ix, y: iy })
-    }
-  }
+  // 1. Stamp the racing surface. See stampTrack for why it walks the closed
+  //    set of adjacent pairs, wrap included, rather than dropping a lone dot
+  //    per point.
+  stampTrack(grid, centerline)
 
   // 2. Decorate. A boost strip rewards a straight; oil punishes a corner exit
   //    that was taken too fast. Both come from the decoration stream, so a
