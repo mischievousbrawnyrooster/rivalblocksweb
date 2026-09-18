@@ -393,7 +393,7 @@ Registered in `server/board.js`:
   mode: null,
   title: 'Cutline',
   fights: false,
-  bests: [{ key: 'fastestTime', label: 'Fastest lap', short: 'Lap' }],
+  bests: [{ key: 'fastestTime', label: 'Winning lap', short: 'Lap' }],
 }
 ```
 
@@ -406,9 +406,12 @@ to the validator or the ranker. Only the `BOARDS` row is new.
   as one, so Cutline contributes nothing to cross title kill and death totals.
 * **Banked once per match**, on the edge into `over` with `final`, the same
   unit Fracture Line and Blastworks bank. Rounds are not a unit here; a race is.
-* **A fastest lap banks only from a race that reached the flag, and only from a
-  lap with every checkpoint taken in order.** A lone driver circling an idle
-  lobby cannot set a record, and neither can a cut corner.
+* **The lap record is the best lap among winning drives.** `merge` only records
+  a time on a win, so a faster lap from a driver who was cut is not banked. The
+  column is labelled "Winning lap" rather than "Fastest lap" to say exactly
+  that, the same way Cipher Run labels its gated time "Fastest win". A lap is
+  only offered once the race reached the flag and only if every checkpoint was
+  taken in order, so neither an idle lobby nor a cut corner can set a record.
 
 ---
 
