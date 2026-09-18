@@ -89,31 +89,43 @@ export function buildCenterline(seed) {
   return resample(dense, POINT_SPACING)
 }
 
-/** Walk a closed polyline and emit a point every `spacing` of arc length. */
+/**
+ * Walk a closed polyline and emit evenly spaced points around the whole
+ * loop, including the closing segment from the last point back to the
+ * first. A greedy walk that stops once it runs out of input leaves one
+ * short or long seam at the wrap; measuring the loop's total length first
+ * and dividing it into exactly `n` equal steps removes that seam instead of
+ * leaving it for a post-hoc trim.
+ */
 function resample(points, spacing) {
-  const out = [points[0]]
-  let carried = 0
-
+  const segLengths = []
+  let total = 0
   for (let i = 0; i < points.length; i++) {
     const a = points[i]
     const b = points[(i + 1) % points.length]
-    const segment = Math.hypot(b.x - a.x, b.y - a.y)
-    if (segment === 0) continue
-
-    let travelled = spacing - carried
-    while (travelled <= segment) {
-      const t = travelled / segment
-      out.push({ x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t })
-      travelled += spacing
-    }
-    carried = segment - (travelled - spacing)
+    const d = Math.hypot(b.x - a.x, b.y - a.y)
+    segLengths.push(d)
+    total += d
   }
 
-  // The final point may land almost on top of the first after the wrap. Drop it
-  // rather than leave a zero-length segment for the tangent maths to divide by.
-  const first = out[0]
-  const last = out[out.length - 1]
-  if (out.length > 1 && Math.hypot(last.x - first.x, last.y - first.y) < spacing * 0.5) out.pop()
+  const n = Math.round(total / spacing)
+  const step = total / n
+  const out = []
+
+  let segIndex = 0
+  let segStart = 0 // arc length travelled at the start of the current segment
+  for (let k = 0; k < n; k++) {
+    const target = k * step
+    while (segIndex < segLengths.length - 1 && segStart + segLengths[segIndex] < target) {
+      segStart += segLengths[segIndex]
+      segIndex++
+    }
+    const a = points[segIndex]
+    const b = points[(segIndex + 1) % points.length]
+    const segLen = segLengths[segIndex]
+    const t = segLen === 0 ? 0 : (target - segStart) / segLen
+    out.push({ x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t })
+  }
 
   return out
 }

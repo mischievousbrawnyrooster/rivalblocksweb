@@ -40,16 +40,28 @@ test('every circuit centerline is a closed loop of unit-spaced points', () => {
     assert.ok(line.length > 100, `${circuit.name}: centerline is implausibly short`)
 
     // Consecutive points, including the wrap from last back to first, are
-    // adjacent. This is what makes the loop closed and walkable.
+    // adjacent and evenly spaced. The resample divides the loop's measured
+    // length into equal steps, so every gap, including the seam where the
+    // loop closes, should sit within a hair of the same distance as every
+    // other gap, not merely under some loose ceiling.
+    const gaps = []
     for (let i = 0; i < line.length; i++) {
       const a = line[i]
       const b = line[(i + 1) % line.length]
-      const d = Math.hypot(b.x - a.x, b.y - a.y)
-      assert.ok(
-        d <= POINT_SPACING * 2,
-        `${circuit.name}: gap of ${d.toFixed(2)} between point ${i} and the next`,
-      )
+      gaps.push(Math.hypot(b.x - a.x, b.y - a.y))
     }
+    const maxGap = Math.max(...gaps)
+    const minGap = Math.min(...gaps)
+    const meanGap = gaps.reduce((sum, g) => sum + g, 0) / gaps.length
+
+    assert.ok(
+      maxGap - minGap < 0.01,
+      `${circuit.name}: gaps are not uniform, max ${maxGap.toFixed(4)} min ${minGap.toFixed(4)}`,
+    )
+    assert.ok(
+      Math.abs(meanGap - POINT_SPACING) <= POINT_SPACING * 0.1,
+      `${circuit.name}: mean gap ${meanGap.toFixed(4)} strays too far from POINT_SPACING ${POINT_SPACING}`,
+    )
   }
 })
 
