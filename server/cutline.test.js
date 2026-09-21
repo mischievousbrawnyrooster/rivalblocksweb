@@ -9,6 +9,18 @@ import {
   CHECKPOINT_COUNT,
   createRng,
   buildCenterline,
+  S_WALL,
+  S_TARMAC,
+  S_KERB,
+  S_LINE,
+  S_PICKUP,
+  MAX_PLAYERS,
+  carve,
+  encodeMap,
+  decodeMap,
+  surfaceAt,
+  stampTrack,
+  walkLine,
 } from './cutline.js'
 
 test('createRng is deterministic for a seed and differs across seeds', () => {
@@ -107,20 +119,6 @@ test('the same seed rebuilds an identical centerline', () => {
   assert.deepEqual(a, b)
 })
 
-import {
-  S_WALL,
-  S_TARMAC,
-  S_KERB,
-  S_LINE,
-  S_PICKUP,
-  MAX_PLAYERS,
-  carve,
-  encodeMap,
-  decodeMap,
-  surfaceAt,
-  stampTrack,
-  walkLine,
-} from './cutline.js'
 
 const drivable = (s) => s !== S_WALL
 

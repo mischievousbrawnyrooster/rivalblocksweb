@@ -54,7 +54,7 @@ const wss = new WebSocketServer({
   perMessageDeflate: false,
 })
 
-const welcome = (car) =>
+const welcome = (car, mapEncoded = encodeMap(match.grid)) =>
   JSON.stringify({
     t: 'welcome',
     id: car.id,
@@ -62,7 +62,7 @@ const welcome = (car) =>
     circuit: {
       name: match.circuit.name,
       size: Math.sqrt(match.grid.length),
-      map: encodeMap(match.grid),
+      map: mapEncoded,
       checkpoints: match.checkpoints,
     },
   })
@@ -89,12 +89,16 @@ function restartMatch(circuitIndex = null) {
   match.board = keep.top()
   sockets.clear()
 
+  const mapEncoded = encodeMap(match.grid)
   for (const { ws, id, name } of carried) {
     const car = join(match, { id, name })
-    if (!car) continue
+    if (!car) {
+      ws.car = null
+      continue
+    }
     ws.car = car
     sockets.set(car.id, ws)
-    ws.send(welcome(car))
+    ws.send(welcome(car, mapEncoded))
   }
 }
 

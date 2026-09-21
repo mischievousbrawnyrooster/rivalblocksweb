@@ -513,4 +513,3 @@ test('a bot never reaches the board', () => {
   )
   assert.equal(banked.players.length, 0, 'merge drops bots itself')
 })
-

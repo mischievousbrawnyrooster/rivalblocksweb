@@ -35,10 +35,25 @@ const PLAYER_FALLBACKS = [
   '#a3a3f0',
 ]
 
+let cachedTheme = null
+let cachedPalette = null
+
+function resolvePalette() {
+  if (typeof document === 'undefined') return PLAYER_FALLBACKS
+  const theme = document.documentElement.dataset.theme ?? ''
+  if (!cachedPalette || cachedTheme !== theme) {
+    cachedTheme = theme
+    const root = getComputedStyle(document.documentElement)
+    cachedPalette = PLAYER_FALLBACKS.map((fallback, idx) => {
+      const val = root.getPropertyValue(`--player-${idx + 1}`).trim()
+      return val || fallback
+    })
+  }
+  return cachedPalette
+}
+
 function getPlayerColor(slot) {
-  const root = getComputedStyle(document.documentElement)
-  const num = (slot % 8) + 1
-  return root.getPropertyValue(`--player-${num}`).trim() || PLAYER_FALLBACKS[slot % 8]
+  return resolvePalette()[slot % 8]
 }
 
 /** Decode run-length encoded circuit map */
@@ -378,12 +393,13 @@ export default function Cutline() {
 
         // Draw cars
         const cars = sampled.players ?? sampled.cars ?? []
+        const palette = resolvePalette()
         for (const car of cars) {
           const cx = car.x * TILE
           const cy = car.y * TILE
           const isMe = car.id === myIdRef.current
           const alive = car.alive
-          const color = getPlayerColor(car.slot)
+          const color = palette[car.slot % 8]
 
           ctx.save()
           ctx.translate(cx, cy)
