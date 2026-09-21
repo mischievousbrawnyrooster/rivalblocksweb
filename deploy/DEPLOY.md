@@ -120,7 +120,7 @@ disk, and the config has not changed.
 
 ## The match servers
 
-`/play` needs a process holding the match, and there are seven of them — one per
+`/play` needs a process holding the match, and there are eight of them — one per
 game, plus a second Blastworks for the other mode. nginx keeps serving the site
 exactly as before and proxies each path to its own port.
 
@@ -133,6 +133,7 @@ exactly as before and proxies each path to its own port.
 | `/blockout3d-ws` | 8085 | `server/blockout3d-server.js` | Blockout Royale 3D |
 | `/voiddrillers-ws` | 8086 | `server/voiddrillers-server.js` | Void Drillers |
 | `/cipherrun-ws` | 8087 | `server/cipherrun-server.js` | Cipher Run |
+| `/cutline-ws` | 8088 | `server/cutline-server.js` | Cutline |
 
 **No path but the first may begin with `/ws`.** nginx matches locations by
 prefix, so `/ws-fracture` would be swallowed by the Blockout Royale rule and
@@ -213,7 +214,8 @@ sudo systemctl enable --now \
     rivalblocks@blastworks-dm \
     rivalblocks@blockout3d-server \
     rivalblocks@voiddrillers-server \
-    rivalblocks@cipherrun-server
+    rivalblocks@cipherrun-server \
+    rivalblocks@cutline-server
 systemctl status "rivalblocks@*"
 ```
 
@@ -248,7 +250,7 @@ If a board never appears, the handshake is the first suspect. Check every path �
 a mistake in the prefix rules shows as one game working and another not:
 
 ```bash
-for path in /ws /fracture-ws /blast-ws /blast-dm-ws /blockout3d-ws /voiddrillers-ws /cipherrun-ws; do
+for path in /ws /fracture-ws /blast-ws /blast-dm-ws /blockout3d-ws /voiddrillers-ws /cipherrun-ws /cutline-ws; do
   printf "%s " "$path"
   curl -s -o /dev/null -w "%{http_code}\n" -N \
     -H "Connection: Upgrade" -H "Upgrade: websocket" \
@@ -283,7 +285,8 @@ sudo systemctl start \
     rivalblocks@blastworks-dm \
     rivalblocks@blockout3d-server \
     rivalblocks@voiddrillers-server \
-    rivalblocks@cipherrun-server
+    rivalblocks@cipherrun-server \
+    rivalblocks@cutline-server
 ```
 
 nginx needs nothing unless its config changed. The leaderboard is untouched by
@@ -348,7 +351,7 @@ into one service directory per server — it reads the directory name to know wh
 server it is starting.
 
 ```sh
-for s in server fracture-server blastworks-server blastworks-dm blockout3d-server voiddrillers-server cipherrun-server; do
+for s in server fracture-server blastworks-server blastworks-dm blockout3d-server voiddrillers-server cipherrun-server cutline-server; do
   sudo mkdir -p "/etc/sv/rivalblocks-$s"
   sudo cp rivalblocks.run "/etc/sv/rivalblocks-$s/run"
   sudo chmod +x "/etc/sv/rivalblocks-$s/run"

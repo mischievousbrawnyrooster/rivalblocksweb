@@ -12,7 +12,8 @@
 #       rivalblocks@blastworks-dm \
 #       rivalblocks@blockout3d-server \
 #       rivalblocks@voiddrillers-server \
-#       rivalblocks@cipherrun-server
+#       rivalblocks@cipherrun-server \
+#       rivalblocks@cutline-server
 #
 # Replaces the old single-game rivalblocks-game.service. If that one is still
 # installed, disable it first or two processes will fight over port 8081:

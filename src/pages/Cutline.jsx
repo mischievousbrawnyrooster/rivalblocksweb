@@ -131,7 +131,7 @@ function itemLabel(item) {
   if (item === 'boost') return 'BOOST »'
   if (item === 'slick') return 'SLICK ◈'
   if (item === 'wall') return 'WALL ≡'
-  return 'EMPTY —'
+  return 'EMPTY -'
 }
 
 function statusLine(hud, myId) {

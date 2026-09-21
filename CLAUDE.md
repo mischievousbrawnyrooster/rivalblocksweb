@@ -19,6 +19,7 @@ npm run blast:dm # Blastworks, deathmatch         :8084  ← /blast-dm-ws
 npm run blockout3d # Blockout Royale 3D            :8085  ← /blockout3d-ws
 npm run drillers # Void Drillers                   :8086  ← /voiddrillers-ws
 npm run cipher   # Cipher Run                      :8087  ← /cipherrun-ws
+npm run cutline  # Cutline                        :8088  ← /cutline-ws
 npm test         # node --test over src/lib and server/*.test.js
 npm run build    # static output to dist/
 ```
@@ -41,7 +42,7 @@ Two things that waste time if forgotten:
 
 Two things sharing one build:
 
-1. A **static marketing SPA** for a fictional game studio. `src/data/games.js` and `src/data/servers.js` are the CMS — all copy lives there. It fetches exactly one thing: `/board/*.json`, the standing leaderboard, which is six plain files written by the match servers and served straight off disk.
+1. A **static marketing SPA** for a fictional game studio. `src/data/games.js` and `src/data/servers.js` are the CMS — all copy lives there. It fetches exactly one thing: `/board/*.json`, the standing leaderboard, which is eight plain files written by the match servers and served straight off disk.
 2. A **playable multiplayer game** at `/play`, the only part that touches a network.
 
 ## Game architecture
@@ -58,12 +59,15 @@ Three layers with a deliberate, enforced split:
 | `server/voiddrillers-server.js` | Connection lifecycle, parsing, broadcast | Any game decision |
 | `server/cipherrun.js` | Every rule and all match state | Sockets, Node APIs, *any* import |
 | `server/cipherrun-server.js` | Connection lifecycle, parsing, broadcast | Any game decision |
+| `server/cutline.js` | Every rule and all match state | Sockets, Node APIs, *any* import |
+| `server/cutline-server.js` | Connection lifecycle, parsing, broadcast | Any game decision |
 | `server/board.js` | Leaderboard merging and ranking | Node APIs, imports, I/O, a clock |
 | `server/board-store.js` | Reading and writing the board files | Any ranking decision |
 | `src/pages/Play.jsx` | Rendering and input | Simulation, prediction, rule checks |
 | `src/pages/Blockout3D.jsx` | Scene, camera, input, HUD | Simulation, prediction, rule checks |
 | `src/pages/VoidDrillers.jsx` | Canvas, camera, particles, HUD | Simulation, prediction, rule checks |
 | `src/pages/CipherRun.jsx` | Canvas, chibi runners, input, HUD | Simulation, prediction, rule checks |
+| `src/pages/Cutline.jsx` | Canvas, cars, HUD | Simulation, prediction, rule checks |
 
 
 `game.js` has zero imports on purpose — that purity is why all ~60 tests live against it and why `server.js` and `Play.jsx` have none. Put new logic there, not in the socket wrapper.
@@ -92,7 +96,7 @@ body feels the replay delay as the whole world lagging the mouse.
 
 ## The leaderboard
 
-Seven files, one per match server, each with **exactly one writer** (`board-blockout.json`, `board-blockout3d.json`, `board-fracture.json`, `board-blastworks-lastman.json`, `board-blastworks-deathmatch.json`, `board-voiddrillers.json`, `board-cipherrun.json`). That is the
+Eight files, one per match server, each with **exactly one writer** (`board-blockout.json`, `board-blockout3d.json`, `board-fracture.json`, `board-blastworks-lastman.json`, `board-blastworks-deathmatch.json`, `board-voiddrillers.json`, `board-cipherrun.json`, `board-cutline.json`). That is the
 whole concurrency design: no two processes ever write the same path, so there
 is nothing to lock. `BOARD_DIR` says where they live (`./data` in dev,
 `/var/lib/rivalblocks/board` deployed).
@@ -288,6 +292,47 @@ is nothing to lock. `BOARD_DIR` says where they live (`./data` in dev,
   counter-rotating tilted torus ring) use procedural geometries and materials only.
   Floating silhouette glyph billboard labels above heads preserve non-color player
   identification under WCAG 1.4.1.
+- **Cutline: steering is a rate, never a position target.** The page sends
+  `steer: -1 | 0 | 1` as held state at 60 Hz and the server turns the car at
+  `TURN_RATE` for as long as it is held. A round trip is then felt as heavy
+  steering, because a turn starts late and ends late by the same amount. A
+  control model where the client names a destination instead puts the latency
+  between the hand and the nose, which is the failure that makes a networked
+  racer feel broken. This is the single decision that makes the genre viable
+  under the no-prediction rule, and it is not a preference.
+- **Cutline: the track is static and ships once; hazards are a list.** `carve()`
+  produces the grid, the racing line, the checkpoints and the starting slots
+  from one walk, and the grid RLE-encodes into `welcome` exactly as Void
+  Drillers ships its shaft. Dropped slicks and walls never write into the grid;
+  they live in `state.hazards`, capped at `MAX_HAZARDS`. Writing a hazard into
+  the grid would force the whole track into every snapshot and turn a
+  sub-kilobyte frame into a per-tick map.
+- **Cutline: `MAX_CORNER_RAD` is derived, not chosen.** At speed `v` a car
+  turns `TURN_RATE * (1 - TURN_FALLOFF * v / TOP_SPEED) / v` radians per tile,
+  so 0.30 is a corner taken at about 57% of `TOP_SPEED`. A test asserts no
+  generated circuit exceeds it. Raise it and circuits gain corners no hauler
+  can hold; the cheap fix for one bad circuit is a different seed, not a
+  different bound.
+- **Cutline: the centerline is a sum of sine harmonics, not a jittered
+  polygon.** Periodic by construction, so the loop closes with no seam to
+  blend; single-valued in angle, so it can never cross itself; bounded in
+  curvature, which is what makes the corner test possible. A jittered polygon
+  needs a seam fix and a smoothing-pass count, and gives no curvature
+  guarantee.
+- **Cutline: the item bag is flat, and that is the design.** A car running last
+  draws from the same odds as the leader. Slipstream is the only catch-up
+  mechanic, because it rewards closing a gap rather than failing to. Weighting
+  the bag by position would make the cut arbitrary rather than earned.
+- **Cutline: the cut fires when the leader crosses, not when the field
+  finishes.** Whoever is last in running order at that instant is out, wherever
+  they are. Waiting for the tail to trail in would pace the race off its
+  slowest car, which is the format's whole reason for existing.
+- **Cutline banks per race, and its lap record is filed under `fastestTime`.**
+  The `label` in `BOARDS` is already per title, so this needs no new key, no
+  change to `isRow` and no change to `rank`. `merge` only records a time on a
+  win, so the record is the best lap **among winning drives**, and the column is
+  labelled "Winning lap" to say so. A faster lap from a driver who was cut is
+  not banked, the same gate Cipher Run's "Fastest win" sits behind.
 
 ## Game-Specific Mechanics & Balance Solutions
 
@@ -333,7 +378,7 @@ These are non-negotiable and predate the game:
 
 ## Deployment
 
-Single node, two tiers: nginx serves `dist/` and proxies seven WebSocket paths to seven Node processes on loopback, all from one systemd template unit (`rivalblocks@<instance>`). nginx also serves `/board/` straight from `BOARD_DIR`. Full sequence in `deploy/DEPLOY.md`.
+Single node, two tiers: nginx serves `dist/` and proxies eight WebSocket paths to eight Node processes on loopback, all from one systemd template unit (`rivalblocks@<instance>`). nginx also serves `/board/` straight from `BOARD_DIR`. Full sequence in `deploy/DEPLOY.md`.
 
 **No proxy path but `/ws` itself may begin with `/ws`.** nginx and vite both match by prefix, so `/ws-fracture` is silently swallowed by the Blockout rule and connects the player to the wrong game.
 

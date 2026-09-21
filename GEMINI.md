@@ -16,6 +16,7 @@ npm.cmd run blast    # Blastworks (Last Man)        127.0.0.1:8083  ← /blast-w
 npm.cmd run blast:dm # Blastworks (Deathmatch)      127.0.0.1:8084  ← /blast-dm-ws
 npm.cmd run drillers # Void Drillers                127.0.0.1:8086  ← /voiddrillers-ws
 npm.cmd run cipher   # Cipher Run                   127.0.0.1:8087  ← /cipherrun-ws
+npm.cmd run cutline  # Cutline                      127.0.0.1:8088  ← /cutline-ws
 npm.cmd run build    # static production build to dist/
 ```
 
@@ -34,17 +35,17 @@ node --test --test-name-pattern="cooldown" server/game.test.js
 
 ## Codebase Structure & Architectural Split
 
-The project contains a static marketing SPA and six authoritative multiplayer games sharing one build.
+The project contains a static marketing SPA and seven authoritative multiplayer games sharing one build.
 
 ### Strict Three-Layer Architecture
 
 | Component / Layer | Files | Responsibilities | Constraints (Must NEVER contain) |
 |---|---|---|---|
-| **Rules Engine** | `server/game.js`, `server/fracture.js`, `server/blastworks.js`, `server/blockout3d.js`, `server/voiddrillers.js`, `server/cipherrun.js` | Authoritative match state, movement, collision, elimination, powerups, tick logic | **Zero external imports, zero Node APIs, zero sockets, zero timers, zero I/O**. Completely pure functions. |
-| **Network Adapter** | `server/server.js`, `server/fracture-server.js`, `server/blastworks-server.js`, `server/blockout3d-server.js`, `server/voiddrillers-server.js`, `server/cipherrun-server.js` | WebSocket lifecycle, frame parsing, validation, snapshot broadcasts | **Zero game decisions or simulation logic**. Only relays client input and broadcasts snapshots. |
+| **Rules Engine** | `server/game.js`, `server/fracture.js`, `server/blastworks.js`, `server/blockout3d.js`, `server/voiddrillers.js`, `server/cipherrun.js`, `server/cutline.js` | Authoritative match state, movement, collision, elimination, powerups, tick logic | **Zero external imports, zero Node APIs, zero sockets, zero timers, zero I/O**. Completely pure functions. |
+| **Network Adapter** | `server/server.js`, `server/fracture-server.js`, `server/blastworks-server.js`, `server/blockout3d-server.js`, `server/voiddrillers-server.js`, `server/cipherrun-server.js`, `server/cutline-server.js` | WebSocket lifecycle, frame parsing, validation, snapshot broadcasts | **Zero game decisions or simulation logic**. Only relays client input and broadcasts snapshots. |
 | **Shared Pure Logic** | `server/board.js` | Leaderboard merging, ranking, K/D math | **Runs in both Node.js and the browser**. No Node APIs, no clock (`Date.now` passed in). |
 | **Storage Layer** | `server/board-store.js` | Reading/writing the leaderboard JSON files | **Single-writer per file**. No locking needed. Corrupted files fall back to empty boards. |
-| **Client UI** | `src/pages/Play.jsx`, `src/pages/Fracture.jsx`, `src/pages/Blastworks.jsx`, `src/pages/Blockout3D.jsx`, `src/pages/VoidDrillers.jsx`, `src/pages/CipherRun.jsx` | Canvas / DOM rendering, keyboard/mouse input uplink | **No client-side simulation, prediction, or rollback**. Pure rendering of authoritative server snapshots. |
+| **Client UI** | `src/pages/Play.jsx`, `src/pages/Fracture.jsx`, `src/pages/Blastworks.jsx`, `src/pages/Blockout3D.jsx`, `src/pages/VoidDrillers.jsx`, `src/pages/CipherRun.jsx`, `src/pages/Cutline.jsx` | Canvas / DOM rendering, keyboard/mouse input uplink | **No client-side simulation, prediction, or rollback**. Pure rendering of authoritative server snapshots. |
 
 
 ---
@@ -54,7 +55,7 @@ The project contains a static marketing SPA and six authoritative multiplayer ga
 1. **Strict Server Authority**:
    - The client only transmits intent (`{t: 'join' | 'move' | 'input' | 'use'}`).
    - The server decides position, collision, validity, elimination, and victory.
-   - Snapshots are broadcast at 10 Hz (grid games), 30 Hz (Fracture Line), or 60 Hz (Blockout 3D, Void Drillers).
+   - Snapshots are broadcast at 10 Hz (grid games), 30 Hz (Fracture Line), or 60 Hz (Blockout 3D, Void Drillers, Cutline).
    - In continuous games (`Fracture.jsx`), the client renders `DELAY_MS = 100` behind the latest snapshot, smoothly interpolating between two known server states without client prediction or rollback.
 
 2. **Snapshot Reference Safety**:
@@ -70,7 +71,7 @@ The project contains a static marketing SPA and six authoritative multiplayer ga
    - WebSockets enforce `maxPayload: 4096` to prevent oversized join frames from crashing the server process.
 
 5. **Concurrency Without Locks**:
-   - Seven board files (`board-blockout.json`, `board-blockout3d.json`, `board-fracture.json`, `board-blastworks-lastman.json`, `board-blastworks-deathmatch.json`, `board-voiddrillers.json`, `board-cipherrun.json`).
+   - Eight board files (`board-blockout.json`, `board-blockout3d.json`, `board-fracture.json`, `board-blastworks-lastman.json`, `board-blastworks-deathmatch.json`, `board-voiddrillers.json`, `board-cipherrun.json`, `board-cutline.json`).
    - Exactly one process writes to each file.
    - `load()` in `board-store.js` safely catches all syntax errors and returns an empty board if the file is damaged.
 
@@ -120,6 +121,14 @@ The project contains a static marketing SPA and six authoritative multiplayer ga
 - **151 Curated Protocols**: 50 Short (15 to 25 words), 50 Medium (40 to 60 words), 50 Long (85 to 125 words), plus Protocol 151 Easter Egg (Subliminal Devotion Directive repeating "I LOVE RIVALBLOCKS." 20 times).
 - **Authoritative Pre-Round Voting**: 5-second pre-round voting phase (`VOTE_DURATION_MS = 5000`) before race countdown, with real-time consensus percentages, home-row hotkeys (`1`, `2`, `3`), random tie resolution, and a 2% Easter Egg roll.
 - **Chibi Cyber Sprinters**: Procedural anime runner with 6 sprinter variations, dynamic stride cadence scaling with WPM, word-dash impulse, stumble states, and celebratory cheer states.
+
+### Cutline (Elimination Circuit Racer)
+- **Steering Rate Control**: Steering is transmitted as a held rate (`steer: -1 | 0 | 1`) at 60 Hz (`TURN_RATE = 2.4` rad/s, `TURN_FALLOFF = 0.35`). Network latency is felt as steering inertia rather than nose-position drift, keeping the controls tight under strict server authority without prediction.
+- **Harmonic Circuit Centerlines**: Circuits are generated as polar harmonic curves (`HARMONICS = [2, 3, 4]`, `BASE_RADIUS = 30`), producing periodic closed loops without seams. Curvature is strictly bounded (`MAX_CORNER_RAD = 0.30`) so all turns remain driveable.
+- **Static Track & Dynamic Hazards**: Carved track grids are run-length encoded and sent once on join via `welcome`. Active oil slicks and wall barriers reside in `state.hazards` (capped at `MAX_HAZARDS = 24`) rather than altering track tiles, keeping snapshots under 1 KB.
+- **Instant Cut on Leader Lap**: The moment the race leader crosses the start/finish line, the driver currently running in last place is cut immediately, regardless of where they are on the circuit.
+- **Flat Item Bag & Pure Slipstream**: Pickup crates yield boost, slick, or wall with equal probability regardless of race standing. Slipstream drafting behind leading cars is the sole catch-up mechanic.
+- **Winning Lap Record**: Only race winners can bank lap records under `fastestTime`, preserving competitive leaderboards.
 
 ---
 

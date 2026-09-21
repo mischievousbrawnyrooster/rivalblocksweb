@@ -20,14 +20,14 @@
 --      needs a client new enough to send it.
 --
 --   2. By the path in the upgrade request -- /ws, /fracture-ws, /blast-ws,
---      /blast-dm-ws, /blockout3d-ws, /voiddrillers-ws, /cipherrun-ws. Needs
---      the handshake in the capture but
+--      /blast-dm-ws, /blockout3d-ws, /voiddrillers-ws, /cipherrun-ws,
+--      /cutline-ws. Needs the handshake in the capture but
 --      nothing whatsoever from the client, so it reads captures taken before
 --      any of this existed. It is also the only signal that survives a proxy:
 --      capture at the browser and every game shares one port, 5173 in dev and
 --      80 deployed, but the path still differs.
 --
---   3. By port. A frame on 8081..8087 that looks like our JSON is claimed
+--   3. By port. A frame on 8081..8088 that looks like our JSON is claimed
 --      without a handshake at all, which is what reads a capture started in
 --      the middle of a session. Only true on the loopback hop to the match
 --      server, where the ports are the real ones.
@@ -44,6 +44,7 @@ local games = {
   { key = 'blockout3d.v1', id = 'blockout3d', title = 'Blockout Royale 3D', col = 'BLOCKOUT3D', ports = { 8085 } },
   { key = 'voiddrillers.v1', id = 'voiddrillers', title = 'Void Drillers', col = 'VOIDDRILLERS', ports = { 8086 } },
   { key = 'cipherrun.v1',  id = 'cipherrun',  title = 'Cipher Run',         col = 'CIPHERRUN',  ports = { 8087 } },
+  { key = 'cutline.v1',    id = 'cutline',    title = 'Cutline',            col = 'CUTLINE',    ports = { 8088 } },
 }
 
 -- Every field is declared for every game rather than only the ones that game
@@ -57,6 +58,10 @@ local specs = {
   { 'dy',      'Intent Y',       'string' },
   { 'aim',     'Aim angle',      'string' },
   { 'fire',    'Firing',         'string' },
+  { 'steer',   'Steering',       'string' },
+  { 'throttle','Throttle',       'string' },
+  { 'drift',   'Drifting',       'string' },
+  { 'item',    'Use Item',       'string' },
   { 'bytes',   'Payload bytes',  'uint32' },
   { 'json',    'Raw JSON',       'string' },
 }
@@ -71,6 +76,7 @@ local inputs = {
   blockout3d = { join=1, input=1, jump=1, use=1, ready=1, click=1 },
   voiddrillers = { join=1, input=1, ready=1 },
   cipherrun  = { join=1, input=1, vote=1, avatar=1, ready=1, pick=1 },
+  cutline    = { join=1, input=1, ready=1 },
 }
 
 local admin = { admin=1, kick=1, restart=1, botsonly=1, bots=1, arena=1 }
@@ -88,6 +94,7 @@ local by_path = {
   ['/blockout3d-ws'] = 'blockout3d',
   ['/voiddrillers-ws'] = 'voiddrillers',
   ['/cipherrun-ws']  = 'cipherrun',
+  ['/cutline-ws']    = 'cutline',
 }
 
 local f_stream = Field.new('tcp.stream')
@@ -177,7 +184,7 @@ local function build(game)
     end
 
     local bits = {}
-    for _, key in ipairs({ 'name', 'dir', 'dx', 'dy', 'aim', 'fire' }) do
+    for _, key in ipairs({ 'name', 'dir', 'dx', 'dy', 'aim', 'fire', 'steer', 'throttle', 'drift', 'item' }) do
       local v = scrape(text, key)
       if v then
         sub:add(f[key], buf(0, 0), v)

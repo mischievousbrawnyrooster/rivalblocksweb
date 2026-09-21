@@ -71,6 +71,13 @@ export const MARKS = {
     `<path d="M6 8 L16 16 L6 24" stroke="${FLARE}" stroke-width="4" stroke-linecap="round" stroke-linejoin="round" fill="none"/>` +
       `<rect x="18" y="21" width="8" height="4" fill="${PAPER}"/>`,
   ),
+
+  // Cutline: two parallel racing kerbs and the cutline slicing through.
+  cutline: wrap(
+    `<rect x="5" y="6" width="22" height="6" fill="${FLARE}"/>` +
+      `<rect x="5" y="20" width="22" height="6" fill="${FLARE}"/>` +
+      `<line x1="16" y1="2" x2="16" y2="30" stroke="${PAPER}" stroke-width="3.5" stroke-dasharray="4 3"/>`,
+  ),
 }
 
 /**

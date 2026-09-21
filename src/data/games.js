@@ -402,6 +402,70 @@ export const games = [
       { seed: 72, caption: 'Mainframe breach: breaking the checkered tape at 100 WPM' },
     ],
   },
+  {
+    slug: 'cutline',
+    playPath: '/play/cutline',
+    playBlurb:
+      'Eight haulers on the plant service loops. Draft the car ahead, take what ' +
+      'the track gives you, and stay off the back of the field. At the end of ' +
+      'every lap the hauler running last is cut.',
+    title: 'Cutline',
+    tagline: 'Nobody remembers who led lap one.',
+    genre: 'Elimination circuit racer, up to 8',
+    status: 'Open Beta',
+    statusTone: 'beta',
+    flagship: false,
+    platforms: ['PC', 'PS5', 'Xbox Series X|S'],
+    coverImage: '/art/cutline.jpg',
+    art: { variant: 'arena', seed: 2088 },
+    blurb:
+      'Between shifts the works runs its service loops as a circuit. The format ' +
+      'is the works format: nobody is timed and nobody is lapped, because the ' +
+      'hauler running last leaves the track every time the leader comes round.',
+    features: [
+      {
+        title: 'The cut, every lap',
+        body:
+          'When the leader crosses, whoever is running last is done, wherever ' +
+          'they are on the track. The race never waits for the tail, so the ' +
+          'fight is always for second to last.',
+      },
+      {
+        title: 'Draft to close',
+        body:
+          'Sit in the wake of the car ahead and the plant air stops fighting ' +
+          'you. It is the only way back to the pack, and it is earned rather ' +
+          'than handed out.',
+      },
+      {
+        title: 'No gifts for running last',
+        body:
+          'One slot, found on the track, and the same odds for the leader and ' +
+          'the backmarker. Nothing in the crate cares what position you are in.',
+      },
+      {
+        title: 'Eight loops, learned not guessed',
+        body:
+          'Foundry Loop, Coolant Bend, The Spindle, Slag Pit, Draw Bench, ' +
+          'Cinder Yard, Ladle Row, Tap Hole. Each one is the same every time ' +
+          'you race it, so knowing a corner is worth something.',
+      },
+      {
+        title: 'Every hauler on screen',
+        body:
+          'The whole circuit at once, no chase camera. You watch the cut coming ' +
+          'for somebody three corners away, and you watch it come for you.',
+      },
+    ],
+    serverNote:
+      'Ranked integrity depends on the server, not the client. We run ours.',
+    shots: [
+      { seed: 81, caption: 'Foundry Loop: the pack still eight wide into turn one' },
+      { seed: 92, caption: 'Coolant Bend: a slick laid on the exit' },
+      { seed: 103, caption: 'The Spindle: drafting out of the infield' },
+      { seed: 114, caption: 'Tap Hole: two haulers left and one lap to run' },
+    ],
+  },
 ]
 
 export const getGame = (slug) => games.find((g) => g.slug === slug)
