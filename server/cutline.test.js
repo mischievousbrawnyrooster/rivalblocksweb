@@ -398,7 +398,7 @@ test('a name off a join screen is sanitised', () => {
   assert.equal(sanitizeName(''), 'Driver')
   assert.equal(sanitizeName(null), 'Driver')
   assert.equal(sanitizeName('a'.repeat(200)).length, 16)
-  assert.equal(sanitizeName('Tap Hole'), 'TapHole')
+  assert.equal(sanitizeName('Tap\x00\x07Hole'), 'TapHole')
   assert.equal(sanitizeName('Draw   Bench'), 'Draw Bench')
 })
 
@@ -581,14 +581,90 @@ test('off the racing surface a car is capped and dragged', () => {
 test('a car driven into a wall keeps only WALL_HIT_KEEP of its speed', () => {
   const match = racing(1)
   const [car] = [...match.cars.values()]
+  const { centerline, grid } = match
 
-  // Aim at the grid edge from just inside it.
-  placed(match, car, { x: 2, y: 2, heading: Math.PI, speed: 10 })
-  const before = speedOf(car)
-  for (let i = 0; i < 30; i++) stepCar(match, car, TICK_MS / 1000)
+  // Find a centerline point whose outward normal is close to a grid axis.
+  // A near axis-aligned approach concentrates the car's velocity on one
+  // component, so the per-axis wall check in stepCar resolves the bounce on
+  // that one axis cleanly, rather than splitting it unpredictably across
+  // both. Derived from real circuit geometry, not a guessed coordinate: a
+  // hardcoded corner (the old (2, 2)) sits off every circuit's racing
+  // surface entirely, so the wall-contact branch it was meant to exercise
+  // never actually ran.
+  let best = null
+  for (let i = 0; i < centerline.length; i++) {
+    const a = centerline[(i - 1 + centerline.length) % centerline.length]
+    const b = centerline[(i + 1) % centerline.length]
+    const dx = b.x - a.x
+    const dy = b.y - a.y
+    const tlen = Math.hypot(dx, dy) || 1
+    const tangent = { x: dx / tlen, y: dy / tlen }
 
-  assert.ok(speedOf(car) < before * (WALL_HIT_KEEP + 0.5), 'wall contact must scrub speed')
-  assert.ok(car.x >= 0 && car.x < GRID && car.y >= 0 && car.y < GRID, 'a car must never leave the grid')
+    const p = centerline[i]
+    const radial = { x: p.x - GRID / 2, y: p.y - GRID / 2 }
+    let normal = { x: -tangent.y, y: tangent.x }
+    if (normal.x * radial.x + normal.y * radial.y < 0) {
+      normal = { x: tangent.y, y: -tangent.x } // keep the normal pointing outward
+    }
+
+    const axisAligned = Math.max(Math.abs(normal.x), Math.abs(normal.y))
+    if (!best || axisAligned > best.axisAligned) best = { p, normal, axisAligned }
+  }
+
+  const { p, normal } = best
+
+  // Step outward from the centerline, tile by tile, until surfaceAt leaves
+  // the racing surface. The last drivable tile before that is on track and
+  // touching a wall.
+  let wx = p.x
+  let wy = p.y
+  let onX = Math.round(wx)
+  let onY = Math.round(wy)
+  let steps = 0
+  while (surfaceAt(grid, Math.round(wx), Math.round(wy)) !== S_WALL && steps < GRID) {
+    onX = Math.round(wx)
+    onY = Math.round(wy)
+    wx += normal.x
+    wy += normal.y
+    steps++
+  }
+  assert.ok(steps > 0 && steps < GRID, 'never found a wall walking outward from the centerline')
+  assert.notEqual(surfaceAt(grid, onX, onY), S_WALL, 'the tile just inside the wall must be drivable')
+
+  // Drive straight at the wall, nose first, along the outward normal.
+  const heading = Math.atan2(normal.y, normal.x)
+  placed(match, car, { x: onX, y: onY, heading, speed: 10 })
+
+  let bounced = false
+  for (let i = 0; i < 30 && !bounced; i++) {
+    const before = car.vx * normal.x + car.vy * normal.y
+    stepCar(match, car, TICK_MS / 1000)
+    const after = car.vx * normal.x + car.vy * normal.y
+
+    assert.notEqual(
+      surfaceAt(grid, Math.round(car.x), Math.round(car.y)),
+      S_WALL,
+      'the wall must stop the car; it must never actually enter the wall tile',
+    )
+
+    if (before > 1 && after < 0) {
+      bounced = true
+      // WALL_HIT_KEEP reflects velocity, it does not merely damp it: the
+      // component driving into the wall must reverse sign, and by enough
+      // that this cannot be explained by ordinary drag alone. A fixed ratio
+      // is used here rather than one built from WALL_HIT_KEEP itself,
+      // because the whole point is to catch a keep factor near 1 (an
+      // elastic, unscrubbed bounce) or a neutralised branch, and a bound
+      // derived from the same constant the bug would corrupt could never
+      // fail regardless of what that constant said.
+      assert.ok(after < 0, 'the blocked velocity component must reverse sign')
+      assert.ok(
+        Math.abs(after) < Math.abs(before) * 0.6,
+        `contact must scrub speed, not just reflect it: before ${before.toFixed(2)}, after ${after.toFixed(2)}`,
+      )
+    }
+  }
+  assert.ok(bounced, 'driving straight at a wall must trigger the bounce within 30 ticks')
 })
 
 test('hostile and malformed input never moves a car or produces NaN', () => {
