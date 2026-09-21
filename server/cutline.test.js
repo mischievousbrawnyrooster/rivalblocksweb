@@ -1017,6 +1017,30 @@ test('a pickup fills an empty slot, not a full one, and starts a cooldown', () =
   assert.equal(car.item, held, 'a full slot must not be overwritten')
 })
 
+test('powerups spawn right at the middle of the road and their spacing is randomised', () => {
+  for (const circuit of CIRCUITS) {
+    const { centerline, pickups } = carve(circuit.seed)
+    assert.ok(pickups.length > 0, `${circuit.name}: must spawn at least one pickup`)
+
+    for (const p of pickups) {
+      // Every pickup must sit right on the centerline (middle of the road)
+      const closestDist = centerline.reduce((min, cp) => {
+        const d = Math.hypot(p.x - cp.x, p.y - cp.y)
+        return d < min ? d : min
+      }, Infinity)
+      assert.ok(
+        closestDist <= 0.75,
+        `${circuit.name}: pickup at (${p.x}, ${p.y}) is ${closestDist} away from centerline, not in middle of road`,
+      )
+    }
+  }
+
+  // Spacing and coordinates are randomised across different circuit seeds
+  const pickupsA = carve(CIRCUITS[0].seed).pickups
+  const pickupsB = carve(CIRCUITS[1].seed).pickups
+  assert.notDeepEqual(pickupsA, pickupsB, 'different circuits should have randomised pickup distributions')
+})
+
 test('using an empty slot is a no-op', () => {
   const match = racing(1)
   const [car] = [...match.cars.values()]
@@ -1277,6 +1301,7 @@ test('the snapshot carries what the page draws and nothing it must not trust', (
   assert.equal(snap.laps, match.laps)
   assert.ok(Array.isArray(snap.cars))
   assert.ok(Array.isArray(snap.hazards))
+  assert.ok(Array.isArray(snap.pickups))
   assert.ok(Array.isArray(snap.order))
   assert.equal(snap.cars.length, 3)
 
@@ -1291,6 +1316,46 @@ test('the snapshot carries what the page draws and nothing it must not trust', (
   assert.equal(snap.grid, undefined, 'the track must never be in a snapshot')
   assert.equal(snap.map, undefined, 'the track must never be in a snapshot')
   assert.equal(snap.centerline, undefined, 'the racing line is not the client\'s business')
+})
+
+test('collecting a powerup despawns it from snapshot until cooldown expires', () => {
+  const match = racing(1)
+  const [car] = [...match.cars.values()]
+  assert.ok(match.pickups.length > 0, 'match should have pickups')
+
+  // Find the first pickup
+  const targetPickup = match.pickups[0]
+  const initialSnap = snapshot(match)
+  assert.ok(
+    initialSnap.pickups.some((p) => p.x === targetPickup.x && p.y === targetPickup.y),
+    'initial snapshot must include active pickup',
+  )
+
+  // Drive car directly over the pickup
+  car.x = targetPickup.x
+  car.y = targetPickup.y
+  car.item = null
+
+  const collected = collectPickup(match, car, () => 0)
+  assert.ok(collected, 'car should collect pickup')
+  assert.ok(car.item, 'car should receive an item')
+
+  // Despawn check: pickup must immediately vanish from snapshot
+  const postPickupSnap = snapshot(match)
+  assert.ok(
+    !postPickupSnap.pickups.some((p) => p.x === targetPickup.x && p.y === targetPickup.y),
+    'collected pickup must despawn from snapshot while on cooldown',
+  )
+
+  // Advance time past cooldown
+  match.now += PICKUP_RESPAWN_MS + 10
+
+  // Respawn check: pickup must reappear in snapshot
+  const respawnSnap = snapshot(match)
+  assert.ok(
+    respawnSnap.pickups.some((p) => p.x === targetPickup.x && p.y === targetPickup.y),
+    'pickup must respawn and reappear in snapshot after cooldown expires',
+  )
 })
 
 test('a snapshot is small enough to send at 60 Hz', () => {

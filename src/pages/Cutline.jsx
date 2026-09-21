@@ -179,26 +179,29 @@ function prerender(map) {
           }
         }
       } else if (surface === S_PICKUP) {
-        // Powerup charging pad
+        // Recessed tarmac induction charging pad
         g.fillStyle = cTile
         g.fillRect(tx, ty, T, T)
 
-        g.strokeStyle = cFlare
+        // Subtle recessed charging pad border
+        g.strokeStyle = 'rgba(58, 209, 196, 0.35)'
         g.lineWidth = 1.5
         g.strokeRect(tx + 4, ty + 4, T - 8, T - 8)
 
-        g.fillStyle = cFlare
+        // Induction plate crosshair marks
+        g.strokeStyle = 'rgba(58, 209, 196, 0.2)'
+        g.lineWidth = 1
         g.beginPath()
-        g.moveTo(tx + T * 0.5, ty + T * 0.25)
-        g.lineTo(tx + T * 0.75, ty + T * 0.5)
-        g.lineTo(tx + T * 0.5, ty + T * 0.75)
-        g.lineTo(tx + T * 0.25, ty + T * 0.5)
-        g.closePath()
-        g.fill()
+        g.moveTo(tx + 4, ty + T * 0.5)
+        g.lineTo(tx + T - 4, ty + T * 0.5)
+        g.moveTo(tx + T * 0.5, ty + 4)
+        g.lineTo(tx + T * 0.5, ty + T - 4)
+        g.stroke()
 
-        g.fillStyle = '#0b0b0d'
+        // Center contact dot
+        g.fillStyle = 'rgba(58, 209, 196, 0.3)'
         g.beginPath()
-        g.arc(tx + T * 0.5, ty + T * 0.5, 2.5, 0, Math.PI * 2)
+        g.arc(tx + T * 0.5, ty + T * 0.5, 3, 0, Math.PI * 2)
         g.fill()
       } else if (surface === S_OIL) {
         g.fillStyle = cTile
@@ -583,7 +586,63 @@ export default function Cutline() {
         }
       }
 
-      // 3c. Draw Cars (Procedural GT Racer Chassis)
+      // 3c. Draw Active Dynamic Powerups (Hovering / Spinning Crates)
+      const pickups = sampled.pickups ?? []
+      for (const p of pickups) {
+        const px = p.x * u
+        const py = p.y * u
+        const bob = Math.sin(now / 180 + p.x * 2.5) * (u * 0.1)
+        const rot = now / 400 + p.y
+
+        // Ground drop shadow beneath hovering crate
+        ctx.save()
+        ctx.translate(px, py)
+        const shadowScale = 1 - (bob / (u * 0.1)) * 0.15
+        ctx.fillStyle = 'rgba(0, 0, 0, 0.45)'
+        ctx.beginPath()
+        ctx.ellipse(0, 0, u * 0.38 * shadowScale, u * 0.22 * shadowScale, 0, 0, Math.PI * 2)
+        ctx.fill()
+        ctx.restore()
+
+        // Hovering powerup crate
+        ctx.save()
+        ctx.translate(px, py - u * 0.25 + bob)
+        ctx.rotate(rot)
+        const crateSize = u * 0.58
+
+        // Cyan glow aura
+        ctx.shadowColor = '#3ad1c4'
+        ctx.shadowBlur = 8
+
+        // Crate container
+        ctx.fillStyle = '#092523'
+        ctx.fillRect(-crateSize / 2, -crateSize / 2, crateSize, crateSize)
+
+        ctx.strokeStyle = '#3ad1c4'
+        ctx.lineWidth = 1.8
+        ctx.strokeRect(-crateSize / 2, -crateSize / 2, crateSize, crateSize)
+
+        // Luminous diamond core
+        ctx.fillStyle = '#3ad1c4'
+        ctx.beginPath()
+        ctx.moveTo(0, -crateSize * 0.32)
+        ctx.lineTo(crateSize * 0.32, 0)
+        ctx.lineTo(0, crateSize * 0.32)
+        ctx.lineTo(-crateSize * 0.32, 0)
+        ctx.closePath()
+        ctx.fill()
+
+        // WCAG 1.4.1 structural glyph: ✶
+        ctx.fillStyle = '#0b0b0d'
+        ctx.font = `bold ${Math.round(crateSize * 0.46)}px monospace`
+        ctx.textAlign = 'center'
+        ctx.textBaseline = 'middle'
+        ctx.fillText('✶', 0, 0.5)
+
+        ctx.restore()
+      }
+
+      // 3d. Draw Cars (Procedural GT Racer Chassis)
       for (const car of cars) {
         const cx = car.x * u
         const cy = car.y * u
@@ -960,6 +1019,17 @@ export default function Cutline() {
       ctx.strokeStyle = '#3ad1c4'
       ctx.lineWidth = 1.2
       ctx.stroke()
+
+      // Active Pickup Blips on Minimap
+      const activePickups = sampled.pickups ?? []
+      ctx.fillStyle = '#3ad1c4'
+      for (const p of activePickups) {
+        const px = mmX + 4 + (p.x / GRID) * (mmW - 8)
+        const py = mmY + 4 + (p.y / GRID) * (mmH - 8)
+        ctx.beginPath()
+        ctx.arc(px, py, 2, 0, Math.PI * 2)
+        ctx.fill()
+      }
 
       // Driver Blips
       for (const car of cars) {

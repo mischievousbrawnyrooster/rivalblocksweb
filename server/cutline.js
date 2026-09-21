@@ -149,7 +149,8 @@ export const START_COLUMNS = 2
 export const MAX_PLAYERS = START_ROWS * START_COLUMNS
 
 const HALF_WIDTH = (TRACK_WIDTH - 1) / 2
-const PICKUP_EVERY = 24              // centerline points between pickup tiles
+export const PICKUP_MIN_SPACING = 16
+export const PICKUP_RANDOM_SPACING = 16
 const START_ROW_GAP = 3              // centerline points between starting rows
 
 /** The surface at a tile. Anything off the grid is wall, so no caller needs a bounds check. */
@@ -299,13 +300,18 @@ export function carve(seed) {
     }
   }
 
-  // 3. Pickup tiles at even intervals, offset to either side so a driver
-  //    chooses a line to collect rather than getting one for free.
-  for (let i = PICKUP_EVERY; i < centerline.length - PICKUP_EVERY; i += PICKUP_EVERY) {
-    const p = centerline[i]
-    const t = tangentAt(centerline, i)
-    const side = (i / PICKUP_EVERY) % 2 === 0 ? 1 : -1
-    put(p.x - t.y * side * 2, p.y + t.x * side * 2, S_PICKUP)
+  // 3. Randomised powerup spawns right at the middle of the road (centerline).
+  const pickups = []
+  let nextPickup = 14 + Math.floor(rng() * 8)
+  for (let i = 0; i < centerline.length - 14; i++) {
+    if (i >= nextPickup) {
+      const p = centerline[i]
+      const px = Math.round(p.x)
+      const py = Math.round(p.y)
+      put(px, py, S_PICKUP)
+      pickups.push({ x: px, y: py, key: py * GRID + px })
+      nextPickup = i + PICKUP_MIN_SPACING + Math.floor(rng() * PICKUP_RANDOM_SPACING)
+    }
   }
 
   // 4. The cut line, across the full width at index 0.
@@ -343,7 +349,7 @@ export function carve(seed) {
     }
   }
 
-  return { grid, centerline, checkpoints, startSlots }
+  return { grid, centerline, checkpoints, startSlots, pickups }
 }
 
 // --- Map encoding ---------------------------------------------------------
@@ -419,7 +425,7 @@ export function make(options = {}) {
     ? ((options.circuitIndex % CIRCUITS.length) + CIRCUITS.length) % CIRCUITS.length
     : 0
   const circuit = CIRCUITS[circuitIndex]
-  const { grid, centerline, checkpoints, startSlots } = carve(circuit.seed)
+  const { grid, centerline, checkpoints, startSlots, pickups } = carve(circuit.seed)
 
   return {
     circuit,
@@ -428,6 +434,7 @@ export function make(options = {}) {
     centerline,
     checkpoints,
     startSlots,
+    pickups: pickups ?? [],
     cars: new Map(),
     nextId: 1,
     phase: 'waiting', // waiting | countdown | racing | over
@@ -799,15 +806,30 @@ export const ITEM_BAG = ['boost', 'boost', 'boost', 'slick', 'slick', 'wall']
 export function collectPickup(match, car, rng = Math.random) {
   if (!car.alive || car.item) return false
 
-  const tx = Math.round(car.x)
-  const ty = Math.round(car.y)
-  if (surfaceAt(match.grid, tx, ty) !== S_PICKUP) return false
+  let hitKey = null
+  if (match.pickups && match.pickups.length > 0) {
+    for (const p of match.pickups) {
+      if (Math.hypot(car.x - p.x, car.y - p.y) <= 1.2) {
+        hitKey = p.key
+        break
+      }
+    }
+  }
 
-  const key = ty * GRID + tx
-  const readyAt = match.pickupCooldown.get(key) ?? 0
+  if (hitKey === null) {
+    const tx = Math.round(car.x)
+    const ty = Math.round(car.y)
+    if (surfaceAt(match.grid, tx, ty) === S_PICKUP) {
+      hitKey = ty * GRID + tx
+    }
+  }
+
+  if (hitKey === null) return false
+
+  const readyAt = match.pickupCooldown.get(hitKey) ?? 0
   if (match.now < readyAt) return false
 
-  match.pickupCooldown.set(key, match.now + PICKUP_RESPAWN_MS)
+  match.pickupCooldown.set(hitKey, match.now + PICKUP_RESPAWN_MS)
   car.item = ITEM_BAG[Math.floor(rng() * ITEM_BAG.length)] ?? ITEM_BAG[0]
   return true
 }
@@ -1074,6 +1096,16 @@ export function snapshot(match) {
     })
   }
 
+  const activePickups = []
+  if (match.pickups) {
+    for (const p of match.pickups) {
+      const readyAt = match.pickupCooldown.get(p.key) ?? 0
+      if (match.now >= readyAt) {
+        activePickups.push({ x: p.x, y: p.y })
+      }
+    }
+  }
+
   return {
     t: 'state',
     phase: match.phase,
@@ -1085,6 +1117,7 @@ export function snapshot(match) {
     circuit: match.circuit.name,
     cars,
     hazards: match.hazards,
+    pickups: activePickups,
     order: order.map((c) => c.id),
     cut: match.cut,
     winner: match.winner,
