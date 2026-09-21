@@ -1351,3 +1351,61 @@ test('startRace scales laps to the field: a small field gets MIN_LAPS, a full gr
   startRace(full)
   assert.equal(full.laps, MAX_PLAYERS, 'a full grid races one lap per car')
 })
+
+// Circuit 0 alone is not proof the aim-anchor fix generalises: the
+// checkpoint-anchor defect this task fixed affected 4 of the 8 circuits, and
+// every other test in this file that drives driveBots and tick end to end is
+// pinned to circuitIndex 0. This walks every circuit in CIRCUITS, so a ninth
+// circuit is covered the day it is added, and a regression in the aim
+// anchor, BOT_LOOKAHEAD, or the corner bound cannot hide behind circuit 0
+// alone.
+test('every circuit resolves to exactly one winner with bots only', () => {
+  const BUDGET_MS = 300000 // five simulated minutes: generous, still bounded
+
+  for (let ci = 0; ci < CIRCUITS.length; ci++) {
+    const match = make({ circuitIndex: ci })
+    for (let i = 0; i < 4; i++) join(match, { name: BOT_NAMES[i], bot: true }, () => 0.5)
+    startRace(match)
+
+    // A bit-for-bit wedge check rides along for free. The resolution
+    // assertion below already fails a race that hangs because its leader is
+    // wedged, but a wedge on a car that is not the leader could still let
+    // the race resolve around it, so this catches that case too.
+    // REPEAT_LIMIT is generous enough that a car briefly motionless off the
+    // start line, or waiting between bot decisions, is never mistaken for
+    // stuck: BOT_REACT_MS is 100ms, so a genuinely driving car cannot hold
+    // identical state for a full simulated second.
+    const REPEAT_LIMIT = 60
+    const lastState = new Map()
+    const repeats = new Map()
+    let wedgedCar = null
+
+    let ms = 0
+    for (; ms < BUDGET_MS && match.phase === 'racing'; ms += TICK_MS) {
+      tick(match, TICK_MS, () => 0.5)
+
+      for (const car of match.cars.values()) {
+        if (!car.alive) continue
+        const key = `${car.x}|${car.y}|${car.heading}|${car.vx}|${car.vy}`
+        if (key === lastState.get(car.id)) {
+          const count = (repeats.get(car.id) ?? 0) + 1
+          repeats.set(car.id, count)
+          if (count >= REPEAT_LIMIT && !wedgedCar) wedgedCar = car.id
+        } else {
+          repeats.set(car.id, 0)
+        }
+        lastState.set(car.id, key)
+      }
+    }
+
+    assert.equal(
+      wedgedCar,
+      null,
+      `${CIRCUITS[ci].name}: car ${wedgedCar} held identical position, velocity and heading for over a simulated second while racing`,
+    )
+
+    const alive = [...match.cars.values()].filter((c) => c.alive).length
+    assert.equal(match.phase, 'over', `${CIRCUITS[ci].name} did not resolve`)
+    assert.equal(alive, 1, `${CIRCUITS[ci].name} ended with ${alive} car(s) alive, not 1`)
+  }
+})
