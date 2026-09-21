@@ -21,8 +21,10 @@ import {
   decodeMap,
 } from '../../server/cutline.js'
 
-const TILE = 8
-const CANVAS = GRID * TILE // 96 * 8 = 768px: whole circuit on screen, no camera needed
+const CANVAS = 768
+const TILE_RES = 32
+const VIEW_CELLS = 22
+const MINIMAP_FRACTION = 0.22
 
 const PLAYER_FALLBACKS = [
   '#ff8a3d',
@@ -76,16 +78,17 @@ function decode(str) {
 }
 
 /**
- * Paint the circuit once to an offscreen canvas.
+ * Paint the circuit once to an offscreen canvas at high resolution (TILE_RES = 32).
  *
  * The track never changes during a race, so every frame after this is one
- * drawImage plus the cars and active hazards.
+ * hardware-accelerated drawImage plus cars, dynamic hazards, and minimap blit.
  */
 function prerender(map) {
   const off = document.createElement('canvas')
-  off.width = CANVAS
-  off.height = CANVAS
+  off.width = GRID * TILE_RES
+  off.height = GRID * TILE_RES
   const g = off.getContext('2d')
+  if (!g) return off
 
   // Raw :root variables, never the --color-* aliases: Tailwind v4 substitutes
   // those into utilities rather than emitting them, so reading one at runtime
@@ -93,43 +96,122 @@ function prerender(map) {
   const root = getComputedStyle(document.documentElement)
   const v = (name, fallback) => root.getPropertyValue(name).trim() || fallback
 
-  const paint = {
-    [S_WALL]: v('--bg', '#0b0b0d'),
-    [S_TARMAC]: v('--tile', '#2a2a2e'),
-    [S_KERB]: v('--warn', '#d4a017'),
-    [S_BOOST]: v('--flare', '#3ad1c4'),
-    [S_OIL]: '#15151a',
-    [S_PICKUP]: v('--flare', '#3ad1c4'),
-    [S_LINE]: v('--fg', '#e9e9ec'),
-  }
+  const cBg = v('--bg', '#0b0b0d')
+  const cTile = v('--tile', '#202026')
+  const cWarn = v('--warn', '#eab308')
+  const cFlare = v('--flare', '#3ad1c4')
+  const cLine = v('--fg', '#ecebe6')
+  const cKerbDark = '#18181b'
+
+  g.fillStyle = cBg
+  g.fillRect(0, 0, off.width, off.height)
+
+  const T = TILE_RES
 
   for (let y = 0; y < GRID; y++) {
     for (let x = 0; x < GRID; x++) {
       const surface = map[y * GRID + x]
-      g.fillStyle = paint[surface] ?? paint[S_WALL]
-      g.fillRect(x * TILE, y * TILE, TILE, TILE)
+      if (surface === S_WALL) continue
 
-      // Structure, not colour alone (WCAG 1.4.1). Kerbs are striped, oil is
-      // stippled, the line is chequered, and pickups carry inner markers.
-      if (surface === S_KERB && (x + y) % 2 === 0) {
-        g.fillStyle = paint[S_WALL]
-        g.fillRect(x * TILE, y * TILE, TILE, TILE / 2)
-      }
-      if (surface === S_OIL) {
-        g.fillStyle = paint[S_TARMAC]
-        g.fillRect(x * TILE + 2, y * TILE + 2, 2, 2)
-      }
-      if (surface === S_LINE && (x + y) % 2 === 0) {
-        g.fillStyle = paint[S_WALL]
-        g.fillRect(x * TILE, y * TILE, TILE, TILE)
-      }
-      if (surface === S_PICKUP) {
-        g.fillStyle = paint[S_WALL]
-        g.fillRect(x * TILE + 2, y * TILE + 2, 4, 4)
-      }
-      if (surface === S_BOOST && (x + y) % 2 === 0) {
-        g.fillStyle = paint[S_WALL]
-        g.fillRect(x * TILE + 2, y * TILE + 2, 4, 2)
+      const tx = x * T
+      const ty = y * T
+
+      if (surface === S_TARMAC) {
+        g.fillStyle = cTile
+        g.fillRect(tx, ty, T, T)
+
+        // Subtle aggregate flecks for asphalt depth
+        const hash = (x * 37 + y * 73) % 4
+        if (hash === 0) {
+          g.fillStyle = 'rgba(0, 0, 0, 0.12)'
+          g.fillRect(tx + 4, ty + 4, T - 8, T - 8)
+        } else if (hash === 2) {
+          g.fillStyle = 'rgba(255, 255, 255, 0.03)'
+          g.fillRect(tx + 6, ty + 6, T - 12, T - 12)
+        }
+      } else if (surface === S_KERB) {
+        // Authentic racing rumble kerb with alternating diagonal stripes
+        g.fillStyle = (x + y) % 2 === 0 ? cWarn : cKerbDark
+        g.fillRect(tx, ty, T, T)
+
+        g.fillStyle = (x + y) % 2 === 0 ? cKerbDark : cWarn
+        g.beginPath()
+        g.moveTo(tx, ty)
+        g.lineTo(tx + T, ty + T)
+        g.lineTo(tx + T, ty + T * 0.5)
+        g.lineTo(tx + T * 0.5, ty)
+        g.closePath()
+        g.fill()
+
+        g.strokeStyle = 'rgba(255, 255, 255, 0.15)'
+        g.lineWidth = 1
+        g.strokeRect(tx + 0.5, ty + 0.5, T - 1, T - 1)
+      } else if (surface === S_BOOST) {
+        // Neon cyan boost acceleration pad
+        g.fillStyle = '#0a2e2b'
+        g.fillRect(tx, ty, T, T)
+
+        g.strokeStyle = cFlare
+        g.lineWidth = 2
+        g.strokeRect(tx + 2, ty + 2, T - 4, T - 4)
+
+        // Chevrons »»
+        g.fillStyle = cFlare
+        for (const cx of [tx + T * 0.3, tx + T * 0.65]) {
+          g.beginPath()
+          g.moveTo(cx - 3, ty + T * 0.25)
+          g.lineTo(cx + 4, ty + T * 0.5)
+          g.lineTo(cx - 3, ty + T * 0.75)
+          g.lineTo(cx - 1, ty + T * 0.5)
+          g.closePath()
+          g.fill()
+        }
+      } else if (surface === S_LINE) {
+        // Checkered starting grid line
+        g.fillStyle = cTile
+        g.fillRect(tx, ty, T, T)
+
+        const checkSize = T / 4
+        for (let cy = 0; cy < 4; cy++) {
+          for (let cx = 0; cx < 4; cx++) {
+            g.fillStyle = (cx + cy) % 2 === 0 ? cLine : '#0b0b0d'
+            g.fillRect(tx + cx * checkSize, ty + cy * checkSize, checkSize, checkSize)
+          }
+        }
+      } else if (surface === S_PICKUP) {
+        // Powerup charging pad
+        g.fillStyle = cTile
+        g.fillRect(tx, ty, T, T)
+
+        g.strokeStyle = cFlare
+        g.lineWidth = 1.5
+        g.strokeRect(tx + 4, ty + 4, T - 8, T - 8)
+
+        g.fillStyle = cFlare
+        g.beginPath()
+        g.moveTo(tx + T * 0.5, ty + T * 0.25)
+        g.lineTo(tx + T * 0.75, ty + T * 0.5)
+        g.lineTo(tx + T * 0.5, ty + T * 0.75)
+        g.lineTo(tx + T * 0.25, ty + T * 0.5)
+        g.closePath()
+        g.fill()
+
+        g.fillStyle = '#0b0b0d'
+        g.beginPath()
+        g.arc(tx + T * 0.5, ty + T * 0.5, 2.5, 0, Math.PI * 2)
+        g.fill()
+      } else if (surface === S_OIL) {
+        g.fillStyle = cTile
+        g.fillRect(tx, ty, T, T)
+
+        g.fillStyle = '#111116'
+        g.beginPath()
+        g.arc(tx + T * 0.5, ty + T * 0.5, T * 0.4, 0, Math.PI * 2)
+        g.fill()
+
+        g.strokeStyle = 'rgba(56, 189, 248, 0.3)'
+        g.lineWidth = 1
+        g.stroke()
       }
     }
   }
@@ -197,6 +279,8 @@ export default function Cutline() {
   const myIdRef = useRef(null)
   const keysRef = useRef(new Set())
   const wantsReadyRef = useRef(false)
+  const skidsRef = useRef([])
+  const mmAlphaRef = useRef(0.95)
 
   // --- Connect and socket lifecycle -----------------------------------------
   const connect = useCallback((playerName, andReady = false) => {
@@ -208,6 +292,7 @@ export default function Cutline() {
     wantsReadyRef.current = andReady
     bufRef.current = makeBuffer(DELAY_MS)
     keysRef.current.clear()
+    skidsRef.current = []
 
     const proto = location.protocol === 'https:' ? 'wss:' : 'ws:'
     const url = `${proto}//${location.host}/cutline-ws`
@@ -340,221 +425,581 @@ export default function Cutline() {
       ctx.fillStyle = '#0b0b0d'
       ctx.fillRect(0, 0, CANVAS, CANVAS)
 
-      if (track) {
-        ctx.drawImage(track, 0, 0)
+      if (!sampled) {
+        if (track) {
+          const initialCam = (GRID - VIEW_CELLS) / 2
+          ctx.drawImage(
+            track,
+            initialCam * TILE_RES,
+            initialCam * TILE_RES,
+            VIEW_CELLS * TILE_RES,
+            VIEW_CELLS * TILE_RES,
+            0,
+            0,
+            CANVAS,
+            CANVAS,
+          )
+        }
+        rafId = requestAnimationFrame(frame)
+        return
       }
 
-      if (sampled) {
-        // Draw hazards
-        const hazards = sampled.hazards ?? []
-        for (const h of hazards) {
-          const hx = h.x * TILE
-          const hy = h.y * TILE
+      const cars = sampled.players ?? sampled.cars ?? []
+      const palette = resolvePalette()
 
-          if (h.kind === 'slick') {
-            // Oil slick puddle with droplet stipples
-            ctx.save()
-            ctx.fillStyle = '#111116'
-            ctx.strokeStyle = '#2d2d38'
-            ctx.lineWidth = 1.5
-            ctx.beginPath()
-            ctx.ellipse(hx, hy, 9, 7.5, 0.4, 0, Math.PI * 2)
-            ctx.fill()
-            ctx.stroke()
+      // --- 1. Follow Camera Viewport ----------------------------------------
+      const me = cars.find((c) => c.id === myIdRef.current)
+      const aliveCars = cars.filter((c) => c.alive)
+      const leaderCar = aliveCars[0] ?? cars[0]
+      const focusCar = me && me.alive ? me : leaderCar
 
-            ctx.fillStyle = '#4a4a58'
-            ctx.beginPath()
-            ctx.arc(hx - 2, hy - 1, 1.2, 0, Math.PI * 2)
-            ctx.arc(hx + 3, hy + 1, 1.2, 0, Math.PI * 2)
-            ctx.arc(hx, hy + 2.5, 1, 0, Math.PI * 2)
-            ctx.fill()
-            ctx.restore()
-          } else if (h.kind === 'wall') {
-            // Deployed barrier hazard with hazard stripes
-            ctx.save()
-            ctx.translate(hx, hy)
-            ctx.fillStyle = '#16161a'
-            ctx.fillRect(-6, -6, 12, 12)
-            ctx.strokeStyle = '#fbbf24'
-            ctx.lineWidth = 1.5
-            ctx.strokeRect(-6, -6, 12, 12)
+      const focusX = focusCar ? focusCar.x : GRID / 2
+      const focusY = focusCar ? focusCar.y : GRID / 2
 
-            ctx.beginPath()
-            ctx.moveTo(-5, 5)
-            ctx.lineTo(5, -5)
-            ctx.moveTo(-5, 1)
-            ctx.lineTo(1, -5)
-            ctx.moveTo(-1, 5)
-            ctx.lineTo(5, -1)
-            ctx.stroke()
-            ctx.restore()
-          }
+      const viewW = VIEW_CELLS
+      const u = CANVAS / viewW // Screen pixels per world tile (e.g. 768 / 22 = 34.9px)
+      const viewH = CANVAS / u
+
+      const camX = Math.max(0, Math.min(GRID - viewW, focusX - viewW / 2))
+      const camY = Math.max(0, Math.min(GRID - viewH, focusY - viewH / 2))
+      const offX = camX * u
+      const offY = camY * u
+
+      // --- 2. Background Track Blit -----------------------------------------
+      if (track) {
+        ctx.drawImage(
+          track,
+          camX * TILE_RES,
+          camY * TILE_RES,
+          viewW * TILE_RES,
+          viewH * TILE_RES,
+          0,
+          0,
+          CANVAS,
+          CANVAS,
+        )
+      }
+
+      // --- 3. World Space Elements (Camera Offset) --------------------------
+      ctx.save()
+      ctx.setTransform(1, 0, 0, 1, -offX, -offY)
+
+      // 3a. Update & Draw Dynamic Skid Marks
+      for (const car of cars) {
+        if (car.alive && car.sliding) {
+          const cos = Math.cos(car.heading)
+          const sin = Math.sin(car.heading)
+          const rlX = car.x - cos * 0.45 - sin * 0.25
+          const rlY = car.y - sin * 0.45 + cos * 0.25
+          const rrX = car.x - cos * 0.45 + sin * 0.25
+          const rrY = car.y - sin * 0.45 - cos * 0.25
+          skidsRef.current.push({ x: rlX, y: rlY, at: now })
+          skidsRef.current.push({ x: rrX, y: rrY, at: now })
         }
+      }
+      if (skidsRef.current.length > 500) {
+        skidsRef.current = skidsRef.current.slice(-400)
+      }
+      skidsRef.current = skidsRef.current.filter((s) => now - s.at < 3500)
+      for (const s of skidsRef.current) {
+        const age = (now - s.at) / 3500
+        ctx.fillStyle = `rgba(12, 12, 16, ${(1 - age) * 0.45})`
+        ctx.beginPath()
+        ctx.arc(s.x * u, s.y * u, u * 0.08, 0, Math.PI * 2)
+        ctx.fill()
+      }
 
-        // Draw cars
-        const cars = sampled.players ?? sampled.cars ?? []
-        const palette = resolvePalette()
-        for (const car of cars) {
-          const cx = car.x * TILE
-          const cy = car.y * TILE
-          const isMe = car.id === myIdRef.current
-          const alive = car.alive
-          const color = palette[car.slot % 8]
+      // 3b. Draw Active Hazards
+      const hazards = sampled.hazards ?? []
+      for (const h of hazards) {
+        const hx = h.x * u
+        const hy = h.y * u
+
+        if (h.kind === 'slick') {
+          // Viscous organic oil puddle with petroleum iridescent sheen
+          ctx.save()
+          ctx.translate(hx, hy)
+
+          ctx.fillStyle = 'rgba(0, 0, 0, 0.4)'
+          ctx.beginPath()
+          ctx.ellipse(2, 3, u * 0.7, u * 0.55, 0.3, 0, Math.PI * 2)
+          ctx.fill()
+
+          ctx.fillStyle = '#0d0d12'
+          ctx.beginPath()
+          ctx.ellipse(0, 0, u * 0.68, u * 0.52, 0.35, 0, Math.PI * 2)
+          ctx.fill()
+
+          const grad = ctx.createLinearGradient(-u * 0.5, -u * 0.4, u * 0.5, u * 0.4)
+          grad.addColorStop(0, 'rgba(45, 212, 191, 0.45)')
+          grad.addColorStop(0.5, 'rgba(192, 132, 252, 0.45)')
+          grad.addColorStop(1, 'rgba(251, 191, 36, 0.35)')
+          ctx.strokeStyle = grad
+          ctx.lineWidth = 1.8
+          ctx.stroke()
+
+          ctx.fillStyle = 'rgba(255, 255, 255, 0.18)'
+          ctx.beginPath()
+          ctx.ellipse(-u * 0.2, -u * 0.15, u * 0.2, u * 0.1, 0.35, 0, Math.PI * 2)
+          ctx.fill()
+
+          ctx.fillStyle = '#0d0d12'
+          ctx.beginPath()
+          ctx.arc(u * 0.6, -u * 0.25, u * 0.1, 0, Math.PI * 2)
+          ctx.arc(-u * 0.55, u * 0.3, u * 0.08, 0, Math.PI * 2)
+          ctx.arc(u * 0.2, u * 0.45, u * 0.09, 0, Math.PI * 2)
+          ctx.fill()
+
+          ctx.restore()
+        } else if (h.kind === 'wall') {
+          // Concrete impact crash barrier
+          ctx.save()
+          ctx.translate(hx, hy)
+
+          const bw = u * 0.85
+          const bh = u * 0.85
+
+          ctx.fillStyle = 'rgba(0, 0, 0, 0.5)'
+          ctx.fillRect(-bw / 2 + 3, -bh / 2 + 4, bw, bh)
+
+          ctx.fillStyle = '#1e1e24'
+          ctx.fillRect(-bw / 2, -bh / 2, bw, bh)
+
+          ctx.strokeStyle = '#3f3f46'
+          ctx.lineWidth = 1.5
+          ctx.strokeRect(-bw / 2, -bh / 2, bw, bh)
 
           ctx.save()
-          ctx.translate(cx, cy)
-          ctx.rotate(car.heading)
-
-          if (!alive) {
-            ctx.globalAlpha = 0.35
-          }
-
-          // Sliding tire tracks
-          if (car.sliding && alive) {
-            ctx.strokeStyle = '#000000'
-            ctx.lineWidth = 1.5
-            ctx.setLineDash([2, 2])
-            ctx.beginPath()
-            ctx.moveTo(-7, -3)
-            ctx.lineTo(-16, -3)
-            ctx.moveTo(-7, 3)
-            ctx.lineTo(-16, 3)
-            ctx.stroke()
-            ctx.setLineDash([])
-          }
-
-          // Boosting wake trails
-          if (car.boosting && alive) {
-            ctx.strokeStyle = '#ff6b1a'
-            ctx.lineWidth = 2
-            ctx.beginPath()
-            ctx.moveTo(-7, -2.5)
-            ctx.lineTo(-17, -6)
-            ctx.moveTo(-7, 2.5)
-            ctx.lineTo(-17, 6)
-            ctx.moveTo(-7, 0)
-            ctx.lineTo(-13, 0)
-            ctx.stroke()
-
-            ctx.strokeStyle = '#38bdf8'
-            ctx.lineWidth = 1
-            ctx.beginPath()
-            ctx.moveTo(-7, -1)
-            ctx.lineTo(-12, -2.5)
-            ctx.moveTo(-7, 1)
-            ctx.lineTo(-12, 2.5)
-            ctx.stroke()
-          }
-
-          // Drafting chevron
-          if (car.drafting && alive) {
-            ctx.strokeStyle = '#38bdf8'
-            ctx.lineWidth = 1.5
-            ctx.beginPath()
-            ctx.moveTo(-15, -4)
-            ctx.lineTo(-11, 0)
-            ctx.lineTo(-15, 4)
-            ctx.stroke()
-          }
-
-          // Car body: rounded rectangle
-          ctx.fillStyle = color
           ctx.beginPath()
-          if (typeof ctx.roundRect === 'function') {
-            ctx.roundRect(-7, -4, 14, 8, 2)
-          } else {
-            ctx.rect(-7, -4, 14, 8)
+          ctx.rect(-bw / 2, -bh / 2, bw, bh)
+          ctx.clip()
+
+          ctx.strokeStyle = '#fbbf24'
+          ctx.lineWidth = 3.5
+          for (let d = -bw * 1.5; d <= bw * 1.5; d += 8) {
+            ctx.beginPath()
+            ctx.moveTo(d, -bh / 2 - 2)
+            ctx.lineTo(d + bh + 4, bh / 2 + 2)
+            ctx.stroke()
           }
+          ctx.restore()
+
+          const flasherPulse = Math.sin(now / 100) > 0 ? 1 : 0.2
+          ctx.fillStyle = `rgba(245, 158, 11, ${0.4 + 0.6 * flasherPulse})`
+          ctx.beginPath()
+          ctx.arc(0, 0, u * 0.18, 0, Math.PI * 2)
           ctx.fill()
-          ctx.strokeStyle = isMe ? '#ffffff' : '#0b0b0d'
+          ctx.strokeStyle = '#ffffff'
           ctx.lineWidth = 1
           ctx.stroke()
 
-          // Nose triangle heading indicator (+X is forward)
-          ctx.fillStyle = isMe ? '#ffffff' : '#0b0b0d'
+          ctx.restore()
+        }
+      }
+
+      // 3c. Draw Cars (Procedural GT Racer Chassis)
+      for (const car of cars) {
+        const cx = car.x * u
+        const cy = car.y * u
+        const isMe = car.id === myIdRef.current
+        const alive = car.alive
+        const color = palette[car.slot % 8]
+
+        ctx.save()
+        ctx.translate(cx, cy)
+        ctx.rotate(car.heading)
+
+        const L = u * 1.45 // ~50px
+        const W = u * 0.82 // ~29px
+        const halfL = L / 2
+        const halfW = W / 2
+
+        if (!alive) {
+          ctx.globalAlpha = 0.35
+        }
+
+        // Dynamic Headlights (cast forward onto the track)
+        if (alive) {
+          const beamGrad = ctx.createRadialGradient(
+            halfL * 0.8,
+            0,
+            halfW * 0.3,
+            halfL + u * 2.2,
+            0,
+            u * 1.5,
+          )
+          beamGrad.addColorStop(0, 'rgba(255, 255, 230, 0.3)')
+          beamGrad.addColorStop(0.5, 'rgba(255, 255, 230, 0.1)')
+          beamGrad.addColorStop(1, 'rgba(255, 255, 230, 0)')
+          ctx.fillStyle = beamGrad
           ctx.beginPath()
-          ctx.moveTo(6.5, 0)
-          ctx.lineTo(2.5, -3)
-          ctx.lineTo(2.5, 3)
+          ctx.moveTo(halfL * 0.8, -halfW * 0.55)
+          ctx.lineTo(halfL + u * 2.2, -halfW * 1.7)
+          ctx.lineTo(halfL + u * 2.2, halfW * 1.7)
+          ctx.lineTo(halfL * 0.8, halfW * 0.55)
+          ctx.closePath()
+          ctx.fill()
+        }
+
+        // Boosting Flame Wake (twin exhaust plumes)
+        if (car.boosting && alive) {
+          const plumeLen = u * (0.8 + 0.25 * Math.sin(now / 30))
+          ctx.fillStyle = '#f97316'
+          ctx.beginPath()
+          ctx.moveTo(-halfL, -halfW * 0.4)
+          ctx.lineTo(-halfL - plumeLen, -halfW * 0.4)
+          ctx.lineTo(-halfL, -halfW * 0.15)
+          ctx.moveTo(-halfL, halfW * 0.15)
+          ctx.lineTo(-halfL - plumeLen, halfW * 0.4)
+          ctx.lineTo(-halfL, halfW * 0.4)
+          ctx.fill()
+
+          ctx.fillStyle = '#38bdf8'
+          ctx.beginPath()
+          ctx.moveTo(-halfL, -halfW * 0.35)
+          ctx.lineTo(-halfL - plumeLen * 0.65, -halfW * 0.4)
+          ctx.lineTo(-halfL, -halfW * 0.2)
+          ctx.moveTo(-halfL, halfW * 0.2)
+          ctx.lineTo(-halfL - plumeLen * 0.65, halfW * 0.4)
+          ctx.lineTo(-halfL, halfW * 0.35)
+          ctx.fill()
+        }
+
+        // Drafting Slipstream Wake
+        if (car.drafting && alive) {
+          ctx.strokeStyle = '#38bdf8'
+          ctx.lineWidth = 1.8
+          ctx.beginPath()
+          ctx.moveTo(-halfL - 8, -halfW * 0.7)
+          ctx.lineTo(-halfL - 3, 0)
+          ctx.lineTo(-halfL - 8, halfW * 0.7)
+          ctx.stroke()
+
+          ctx.strokeStyle = 'rgba(56, 189, 248, 0.5)'
+          ctx.lineWidth = 1.2
+          ctx.beginPath()
+          ctx.moveTo(-halfL - 14, -halfW * 0.9)
+          ctx.lineTo(-halfL - 8, 0)
+          ctx.lineTo(-halfL - 14, halfW * 0.9)
+          ctx.stroke()
+        }
+
+        // Drift Sparks
+        if (car.sliding && alive) {
+          const sparkColor = Math.sin(now / 20) > 0 ? '#fbbf24' : '#f97316'
+          ctx.fillStyle = sparkColor
+          for (let s = 0; s < 4; s++) {
+            const sx = -halfL * 0.7 - Math.random() * u * 0.4
+            const sy = (Math.random() > 0.5 ? -halfW : halfW) + (Math.random() - 0.5) * 4
+            ctx.fillRect(sx, sy, 2, 2)
+          }
+        }
+
+        // 4 Wheels / Tires
+        const tw = L * 0.24
+        const th = W * 0.2
+        const steerAngle = (car.steer ?? 0) * 0.32
+
+        // Rear tires (fixed)
+        ctx.fillStyle = '#18181b'
+        ctx.fillRect(-halfL * 0.65 - tw / 2, -halfW * 0.95, tw, th)
+        ctx.fillRect(-halfL * 0.65 - tw / 2, halfW * 0.95 - th, tw, th)
+        ctx.fillStyle = '#52525b'
+        ctx.fillRect(-halfL * 0.65 - tw / 4, -halfW * 0.95 + 1, tw / 2, th - 2)
+        ctx.fillRect(-halfL * 0.65 - tw / 4, halfW * 0.95 - th + 1, tw / 2, th - 2)
+
+        // Front tires (steer rotation)
+        for (const side of [-1, 1]) {
+          ctx.save()
+          const fty = side === -1 ? -halfW * 0.95 + th / 2 : halfW * 0.95 - th / 2
+          ctx.translate(halfL * 0.55, fty)
+          ctx.rotate(steerAngle)
+          ctx.fillStyle = '#18181b'
+          ctx.fillRect(-tw / 2, -th / 2, tw, th)
+          ctx.fillStyle = '#52525b'
+          ctx.fillRect(-tw / 4, -th / 2 + 1, tw / 2, th - 2)
+          ctx.restore()
+        }
+
+        // Car Body Drop Shadow
+        ctx.fillStyle = 'rgba(0, 0, 0, 0.45)'
+        ctx.beginPath()
+        if (typeof ctx.roundRect === 'function') {
+          ctx.roundRect(-halfL * 0.85 + 2, -halfW * 0.75 + 2, L * 0.85, W * 0.75, 4)
+        } else {
+          ctx.rect(-halfL * 0.85 + 2, -halfW * 0.75 + 2, L * 0.85, W * 0.75)
+        }
+        ctx.fill()
+
+        // Aerodynamic Chassis Body
+        ctx.fillStyle = color
+        ctx.beginPath()
+        ctx.moveTo(halfL * 0.85, 0)
+        ctx.lineTo(halfL * 0.75, -halfW * 0.65)
+        ctx.lineTo(halfL * 0.2, -halfW * 0.7)
+        ctx.lineTo(-halfL * 0.6, -halfW * 0.7)
+        ctx.lineTo(-halfL * 0.85, -halfW * 0.55)
+        ctx.lineTo(-halfL * 0.85, halfW * 0.55)
+        ctx.lineTo(-halfL * 0.6, halfW * 0.7)
+        ctx.lineTo(halfL * 0.2, halfW * 0.7)
+        ctx.lineTo(halfL * 0.75, halfW * 0.65)
+        ctx.closePath()
+        ctx.fill()
+
+        ctx.strokeStyle = isMe ? '#ffffff' : '#0b0b0d'
+        ctx.lineWidth = isMe ? 1.8 : 1.2
+        ctx.stroke()
+
+        // Front Splitter Lip
+        ctx.fillStyle = '#111115'
+        ctx.fillRect(halfL * 0.72, -halfW * 0.6, L * 0.12, W * 1.2)
+
+        // Cockpit / Windshield Glass
+        ctx.fillStyle = '#0a0e17'
+        ctx.beginPath()
+        ctx.ellipse(0, 0, L * 0.28, W * 0.42, 0, 0, Math.PI * 2)
+        ctx.fill()
+        ctx.strokeStyle = 'rgba(255, 255, 255, 0.2)'
+        ctx.lineWidth = 1
+        ctx.stroke()
+
+        // Windshield reflection streak
+        ctx.strokeStyle = 'rgba(255, 255, 255, 0.45)'
+        ctx.lineWidth = 1.2
+        ctx.beginPath()
+        ctx.moveTo(-L * 0.12, -W * 0.25)
+        ctx.lineTo(L * 0.12, W * 0.25)
+        ctx.stroke()
+
+        // Rear GT Wing / Spoiler
+        ctx.fillStyle = '#18181b'
+        ctx.fillRect(-halfL * 0.88, -halfW * 0.75, L * 0.12, W * 1.5)
+        ctx.fillStyle = color
+        ctx.fillRect(-halfL * 0.9, -halfW * 0.8, L * 0.08, 3)
+        ctx.fillRect(-halfL * 0.9, halfW * 0.8 - 3, L * 0.08, 3)
+
+        // Headlight Lenses
+        ctx.fillStyle = '#fef08a'
+        ctx.fillRect(halfL * 0.72, -halfW * 0.55, 2, 4)
+        ctx.fillRect(halfL * 0.72, halfW * 0.55 - 4, 2, 4)
+
+        // Taillights (glow during braking)
+        const brakeActive = car.brake && alive
+        ctx.fillStyle = brakeActive ? '#ff2222' : '#dc2626'
+        ctx.fillRect(-halfL * 0.87, -halfW * 0.5, 2, 5)
+        ctx.fillRect(-halfL * 0.87, halfW * 0.5 - 5, 2, 5)
+        if (brakeActive) {
+          ctx.fillStyle = 'rgba(239, 68, 68, 0.4)'
+          ctx.beginPath()
+          ctx.arc(-halfL * 0.87, -halfW * 0.35, 6, 0, Math.PI * 2)
+          ctx.arc(-halfL * 0.87, halfW * 0.35, 6, 0, Math.PI * 2)
+          ctx.fill()
+        }
+
+        // Roof Number Roundel / Place Badge
+        if (alive && car.place != null) {
+          ctx.fillStyle = '#ffffff'
+          ctx.beginPath()
+          ctx.ellipse(-L * 0.02, 0, 7.5, 7.5, 0, 0, Math.PI * 2)
+          ctx.fill()
+
+          ctx.fillStyle = '#09090b'
+          ctx.font = 'bold 9px monospace'
+          ctx.textAlign = 'center'
+          ctx.textBaseline = 'middle'
+          ctx.fillText(String(car.place), -L * 0.02, 0.5)
+        }
+
+        // Eliminated Cross Mark
+        if (!alive) {
+          ctx.strokeStyle = '#ef4444'
+          ctx.lineWidth = 2.5
+          ctx.beginPath()
+          ctx.moveTo(-halfL * 0.6, -halfW * 0.6)
+          ctx.lineTo(halfL * 0.6, halfW * 0.6)
+          ctx.moveTo(-halfL * 0.6, halfW * 0.6)
+          ctx.lineTo(halfL * 0.6, -halfW * 0.6)
+          ctx.stroke()
+        }
+
+        ctx.restore()
+
+        // Local Car "YOU" Floating Indicator
+        if (isMe && alive) {
+          ctx.save()
+          const bob = Math.sin(now / 150) * 2.5
+          const indicatorY = cy - u * 1.1 + bob
+
+          ctx.fillStyle = '#3ad1c4'
+          ctx.beginPath()
+          ctx.moveTo(cx, indicatorY + 5)
+          ctx.lineTo(cx - 5, indicatorY - 2)
+          ctx.lineTo(cx + 5, indicatorY - 2)
           ctx.closePath()
           ctx.fill()
 
-          // Place number in contrasting token
-          if (alive && car.place != null) {
-            ctx.fillStyle = '#0b0b0d'
-            ctx.font = 'bold 7px monospace'
-            ctx.textAlign = 'center'
-            ctx.textBaseline = 'middle'
-            ctx.fillText(String(car.place), -1.5, 0.5)
-          }
+          ctx.fillStyle = 'rgba(11, 11, 13, 0.85)'
+          ctx.fillRect(cx - 14, indicatorY - 15, 28, 12)
+          ctx.strokeStyle = '#3ad1c4'
+          ctx.lineWidth = 1
+          ctx.strokeRect(cx - 14, indicatorY - 15, 28, 12)
 
-          // Eliminated car cross
-          if (!alive) {
-            ctx.strokeStyle = '#ffffff'
-            ctx.lineWidth = 1.5
-            ctx.beginPath()
-            ctx.moveTo(-6, -3)
-            ctx.lineTo(6, 3)
-            ctx.moveTo(-6, 3)
-            ctx.lineTo(6, -3)
-            ctx.stroke()
-          }
+          ctx.fillStyle = '#3ad1c4'
+          ctx.font = 'bold 8px monospace'
+          ctx.textAlign = 'center'
+          ctx.textBaseline = 'middle'
+          ctx.fillText('YOU', cx, indicatorY - 9)
 
           ctx.restore()
+        }
+      }
 
-          // Local car highlight ring in world space
-          if (isMe && alive) {
-            ctx.save()
-            ctx.strokeStyle = '#ff6b1a'
-            ctx.lineWidth = 1.5
-            ctx.beginPath()
-            ctx.arc(cx, cy, 11, 0, Math.PI * 2)
-            ctx.stroke()
+      ctx.restore() // Restore world transform
 
-            ctx.fillStyle = '#ff6b1a'
-            ctx.font = 'bold 8px monospace'
-            ctx.textAlign = 'center'
-            ctx.fillText('YOU', cx, cy - 13)
-            ctx.restore()
-          }
+      // --- 4. Top-Right Minimap (Circuit Radar) ------------------------------
+      const pad = 14
+      const mmW = Math.round(CANVAS * MINIMAP_FRACTION)
+      const mmH = mmW
+      const mmX = CANVAS - mmW - pad
+      const mmY = pad
+
+      // Dynamic fade when any car is under the minimap
+      const nearMap = u * 1.5
+      const behindMap = cars.some((c) => {
+        if (!c.alive) return false
+        const sx = c.x * u - offX
+        const sy = c.y * u - offY
+        return (
+          sx > mmX - nearMap &&
+          sx < mmX + mmW + nearMap &&
+          sy > mmY - nearMap &&
+          sy < mmY + mmH + nearMap
+        )
+      })
+      mmAlphaRef.current += ((behindMap ? 0.22 : 0.94) - mmAlphaRef.current) * 0.15
+      const mmA = mmAlphaRef.current
+
+      ctx.save()
+      ctx.globalAlpha = mmA
+
+      // Minimap card container
+      ctx.fillStyle = 'rgba(11, 11, 15, 0.88)'
+      if (typeof ctx.roundRect === 'function') {
+        ctx.beginPath()
+        ctx.roundRect(mmX, mmY, mmW, mmH, 6)
+        ctx.fill()
+      } else {
+        ctx.fillRect(mmX, mmY, mmW, mmH)
+      }
+      ctx.strokeStyle = '#27272a'
+      ctx.lineWidth = 1.5
+      if (typeof ctx.roundRect === 'function') {
+        ctx.stroke()
+      } else {
+        ctx.strokeRect(mmX, mmY, mmW, mmH)
+      }
+
+      // Draw scaled whole circuit
+      if (track) {
+        ctx.drawImage(track, 0, 0, track.width, track.height, mmX + 4, mmY + 4, mmW - 8, mmH - 8)
+      }
+
+      // Camera Viewport Box on Minimap
+      const camVx = mmX + 4 + (camX / GRID) * (mmW - 8)
+      const camVy = mmY + 4 + (camY / GRID) * (mmH - 8)
+      const camVw = (viewW / GRID) * (mmW - 8)
+      const camVh = (viewH / GRID) * (mmH - 8)
+
+      ctx.fillStyle = 'rgba(58, 209, 196, 0.1)'
+      ctx.fillRect(camVx, camVy, camVw, camVh)
+      ctx.strokeStyle = '#3ad1c4'
+      ctx.lineWidth = 1.2
+      ctx.strokeRect(camVx, camVy, camVw, camVh)
+
+      // Driver Blips
+      const lastCarId = sampled.order?.[sampled.order.length - 1]
+      for (const car of cars) {
+        const bx = mmX + 4 + (car.x / GRID) * (mmW - 8)
+        const by = mmY + 4 + (car.y / GRID) * (mmH - 8)
+        const isMeCar = car.id === myIdRef.current
+        const isCarLast = sampled.phase === 'racing' && car.id === lastCarId
+        const carColor = palette[car.slot % 8]
+
+        if (!car.alive) {
+          ctx.fillStyle = '#52525b'
+          ctx.beginPath()
+          ctx.arc(bx, by, 2, 0, Math.PI * 2)
+          ctx.fill()
+          continue
         }
 
-        // Overlay banner for non-racing phases
-        if (sampled.phase !== 'racing') {
-          ctx.save()
-          let headline = ''
-          let subtitle = ''
-          if (sampled.phase === 'countdown') {
-            headline = `GRID COUNTDOWN: ${sampled.countdown}`
-            subtitle = 'Drivers prepare for green flag'
-          } else if (sampled.phase === 'waiting') {
-            headline = 'WAITING FOR DRIVERS'
-            subtitle = 'The grid starts when drivers ready up'
-          } else if (sampled.phase === 'over') {
-            const winner = cars.find((c) => c.id === sampled.winner)
-            headline = winner ? `${winner.name.toUpperCase()} TAKES THE FLAG` : 'RACE CONCLUDED'
-            subtitle = 'A fresh circuit rolls shortly'
-          }
+        ctx.fillStyle = carColor
+        ctx.beginPath()
+        ctx.arc(bx, by, 3.5, 0, Math.PI * 2)
+        ctx.fill()
 
-          if (headline) {
-            ctx.fillStyle = 'rgba(11, 11, 13, 0.85)'
-            ctx.fillRect(0, CANVAS / 2 - 40, CANVAS, 80)
-            ctx.strokeStyle = '#2b2b31'
-            ctx.lineWidth = 1
-            ctx.strokeRect(-1, CANVAS / 2 - 40, CANVAS + 2, 80)
-
-            ctx.fillStyle = '#ecebe6'
-            ctx.font = 'bold 22px ui-sans-serif, system-ui, sans-serif'
-            ctx.textAlign = 'center'
-            ctx.textBaseline = 'middle'
-            ctx.fillText(headline, CANVAS / 2, CANVAS / 2 - 10)
-
-            ctx.fillStyle = '#8f8d86'
-            ctx.font = '13px ui-sans-serif, system-ui, sans-serif'
-            ctx.fillText(subtitle, CANVAS / 2, CANVAS / 2 + 18)
-          }
-          ctx.restore()
+        if (isCarLast) {
+          const pulse = 1 + 0.3 * Math.sin(now / 120)
+          ctx.strokeStyle = '#ef4444'
+          ctx.lineWidth = 1.5
+          ctx.beginPath()
+          ctx.arc(bx, by, 5 * pulse, 0, Math.PI * 2)
+          ctx.stroke()
         }
+
+        if (isMeCar) {
+          ctx.strokeStyle = '#ffffff'
+          ctx.lineWidth = 1.8
+          ctx.beginPath()
+          ctx.arc(bx, by, 5.5, 0, Math.PI * 2)
+          ctx.stroke()
+        }
+      }
+
+      // Header tag
+      ctx.fillStyle = '#71717a'
+      ctx.font = 'bold 8px monospace'
+      ctx.textAlign = 'left'
+      ctx.textBaseline = 'top'
+      ctx.fillText('CIRCUIT RADAR', mmX + 8, mmY + 8)
+
+      ctx.restore()
+
+      // --- 5. Non-Racing Overlay Banners ------------------------------------
+      if (sampled.phase !== 'racing') {
+        ctx.save()
+        let headline = ''
+        let subtitle = ''
+        if (sampled.phase === 'countdown') {
+          headline = `GRID COUNTDOWN: ${sampled.countdown}`
+          subtitle = 'Drivers prepare for green flag'
+        } else if (sampled.phase === 'waiting') {
+          headline = 'WAITING FOR DRIVERS'
+          subtitle = 'The grid starts when drivers ready up'
+        } else if (sampled.phase === 'over') {
+          const winner = cars.find((c) => c.id === sampled.winner)
+          headline = winner ? `${winner.name.toUpperCase()} TAKES THE FLAG` : 'RACE CONCLUDED'
+          subtitle = 'A fresh circuit rolls shortly'
+        }
+
+        if (headline) {
+          ctx.fillStyle = 'rgba(11, 11, 13, 0.85)'
+          ctx.fillRect(0, CANVAS / 2 - 40, CANVAS, 80)
+          ctx.strokeStyle = '#2b2b31'
+          ctx.lineWidth = 1
+          ctx.strokeRect(-1, CANVAS / 2 - 40, CANVAS + 2, 80)
+
+          ctx.fillStyle = '#ecebe6'
+          ctx.font = 'bold 22px ui-sans-serif, system-ui, sans-serif'
+          ctx.textAlign = 'center'
+          ctx.textBaseline = 'middle'
+          ctx.fillText(headline, CANVAS / 2, CANVAS / 2 - 10)
+
+          ctx.fillStyle = '#8f8d86'
+          ctx.font = '13px ui-sans-serif, system-ui, sans-serif'
+          ctx.fillText(subtitle, CANVAS / 2, CANVAS / 2 + 18)
+        }
+        ctx.restore()
       }
 
       rafId = requestAnimationFrame(frame)
