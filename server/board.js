@@ -61,6 +61,14 @@ export const BOARDS = [
       { key: 'peakWpm', label: 'Peak WPM', short: 'WPM' },
     ],
   },
+  {
+    file: 'board-cutline.json',
+    game: 'cutline',
+    mode: null,
+    title: 'Cutline',
+    fights: false,
+    bests: [{ key: 'fastestTime', label: 'Winning lap', short: 'Lap' }],
+  },
 ]
 
 // Enough names that nobody who plays regularly falls off, few enough that a

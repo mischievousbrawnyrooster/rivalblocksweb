@@ -452,3 +452,65 @@ test('equal wins rank by peak WPM (higher is better)', () => {
   assert.equal(ranked[1].name, 'ada')
 })
 
+test('Cutline is registered and files its best lap under fastestTime', () => {
+  const spec = boardFor('cutline')
+  assert.ok(spec, 'Cutline must have a board')
+  assert.equal(spec.file, 'board-cutline.json')
+  assert.equal(spec.title, 'Cutline')
+  assert.equal(spec.fights, false, 'nobody is killed in Cutline; being cut is not a death')
+
+  // fastestTime is reused rather than a new key added: the label is already per
+  // board, and fastestTime is already validated by isRow and ranked lower is
+  // better, so this costs no change to the validator or the ranker.
+  assert.equal(spec.bests.length, 1)
+  assert.equal(spec.bests[0].key, 'fastestTime')
+  assert.equal(spec.bests[0].label, 'Winning lap')
+  assert.equal(spec.bests[0].short, 'Lap')
+})
+
+test('every board file is unique and every game resolves', () => {
+  const files = BOARDS.map((b) => b.file)
+  assert.equal(new Set(files).size, files.length, 'two servers must never write the same file')
+  for (const b of BOARDS) {
+    assert.equal(boardFor(b.game, b.mode), b, `${b.title} must resolve from its game and mode`)
+  }
+})
+
+test('a Cutline race banks a win, and only the winner sets a lap record', () => {
+  // merge() only records fastestTime on a win (board.js), so the record is the
+  // fastest lap among winning drives. That is why the label reads "Winning lap"
+  // rather than "Fastest lap": a quicker lap from a driver who was cut is not
+  // banked, and a column claiming otherwise would be a lie.
+  const banked = merge(
+    emptyBoard('cutline'),
+    [
+      { name: 'Ladle', bot: false, won: true, time: 17420 },
+      { name: 'Tap', bot: false, won: false, time: 12000 },
+    ],
+    1000,
+  )
+
+  const winner = banked.players.find((p) => p.name === 'Ladle')
+  assert.equal(winner.wins, 1)
+  assert.equal(winner.fastestTime, 17420)
+  assert.equal(winner.kills, 0, 'Cutline banks no kills')
+  assert.equal(winner.deaths, 0, 'being cut is not a death')
+
+  const cut = banked.players.find((p) => p.name === 'Tap')
+  assert.equal(cut.wins, 0)
+  assert.equal(cut.matches, 1, 'a cut driver still played the race')
+  assert.ok(
+    cut.fastestTime === null || cut.fastestTime === undefined,
+    'a faster lap from a driver who was cut is not banked',
+  )
+})
+
+test('a bot never reaches the board', () => {
+  const banked = merge(
+    emptyBoard('cutline'),
+    [{ name: 'Cinder', bot: true, won: true, time: 9000 }],
+    1000,
+  )
+  assert.equal(banked.players.length, 0, 'merge drops bots itself')
+})
+
