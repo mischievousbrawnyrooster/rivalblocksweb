@@ -1325,6 +1325,12 @@ test('tick survives a hostile dt without moving anybody to NaN', () => {
     for (const car of match.cars.values()) {
       assert.ok(Number.isFinite(car.x) && Number.isFinite(car.y), `dt ${dt} broke a position`)
     }
+    // These two are tick's own guard, not stepCar's: stepCar never touches
+    // match.now or match.elapsed, so only tick's own clamp of dtMs can be
+    // keeping them numeric here. A car's position surviving is not proof of
+    // that on its own, stepCar has an independent dt guard of its own.
+    assert.ok(Number.isFinite(match.now), `dt ${JSON.stringify(dt)} broke match.now`)
+    assert.ok(Number.isFinite(match.elapsed), `dt ${JSON.stringify(dt)} broke match.elapsed`)
   }
 })
 

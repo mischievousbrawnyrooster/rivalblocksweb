@@ -508,13 +508,12 @@ export function leave(match, id) {
 }
 
 // --- Handling -------------------------------------------------------------
-// Measured lap time (Task 7): 4 bots, fixed rng, 90s runs across all 8
-// circuits. Where a bot drives cleanly, median lap is about 19.4s (range
-// 13.5 to 24s), close to the spec's 18s estimate. On 4 of the 8 circuits the
-// bot pursuit line and the wall bounce physics settle into a fixed point that
-// freezes a bot in place; two of those never complete a lap at all in 90s.
-// That is a bot AI or track geometry defect, not a speed problem, and
-// TOP_SPEED was left alone to get this number. See task-7-report.md.
+// Measured lap time (Task 7, after the driveBots aim-anchor fix): 4 bots,
+// fixed rng, 90s runs across all 8 circuits. All 8 now drive cleanly and
+// consistently: median lap 11.87s, range 11.14 to 13.04s. That is well
+// under the spec's 18s estimate, not tuned toward it; TOP_SPEED was left
+// alone. See task-7-report.md for the prior, bug-confounded measurement and
+// the fix.
 export const TOP_SPEED = 14.0        // tiles per second
 export const ACCEL = 18.0
 export const BRAKE = 26.0
@@ -905,11 +904,28 @@ export function driveBots(match) {
     if (match.now < (car.botNextAt ?? 0)) continue
     car.botNextAt = match.now + BOT_REACT_MS
 
-    // Aim ahead of the checkpoint the bot is chasing, scaled by how quick this
-    // bot is, so the field has a skill spread rather than identical laps.
+    // Aim ahead of the car's own position on the centerline, scaled by how
+    // quick this bot is, so the field has a skill spread rather than
+    // identical laps. The nearest point has to be the car's own, not the
+    // checkpoint's: anchoring to the checkpoint index made the effective
+    // lookahead BOT_LOOKAHEAD plus however far the car still was from that
+    // checkpoint, which could throw the aim point across a wall the car was
+    // still negotiating. A plain scan, not a cached cursor: the line is a
+    // couple hundred points, this runs a few times a second per bot, and a
+    // cached index buys back the drift and wrap bugs this plan has already
+    // paid for twice.
     const line = match.centerline
-    const target = match.checkpoints[car.nextCp]
-    let nearest = target ? target.index : 0
+    let nearest = 0
+    let nearestDist = Infinity
+    for (let i = 0; i < line.length; i++) {
+      const dx = line[i].x - car.x
+      const dy = line[i].y - car.y
+      const dist = dx * dx + dy * dy
+      if (dist < nearestDist) {
+        nearestDist = dist
+        nearest = i
+      }
+    }
     const aim = line[(nearest + Math.round(BOT_LOOKAHEAD * car.botSkill)) % line.length]
 
     let want = Math.atan2(aim.y - car.y, aim.x - car.x) - car.heading
