@@ -775,35 +775,104 @@ test('a clean lap counts and resets the checkpoint ring', () => {
 })
 
 test('running order sorts by lap, then checkpoints, then distance to the next', () => {
-  const match = racing(3)
-  const [a, b, c] = [...match.cars.values()]
+  const match = racing(5)
+  // Join order deliberately does not match the intended running order for
+  // the tier-3 pair (far joins before near, see below), so a comparator that
+  // dropped a tier and fell back to array order could not pass by accident.
+  const [leader, moreCps, fewerCps, far, near] = [...match.cars.values()]
 
-  completeLap(match, a)                       // one lap up
-  takeCheckpoint(match, b, 1)                 // same lap, one checkpoint
-  takeCheckpoint(match, b, 2)                 // same lap, two checkpoints
-  takeCheckpoint(match, c, 1)                 // same lap, one checkpoint
+  // Tier 1 (lap): leader is a lap up on everyone else. No earlier tier to
+  // tie on, so this alone must place it first.
+  completeLap(match, leader)
+
+  // Tier 2 (checkpoints, tied on lap): moreCps and fewerCps both sit on lap
+  // 0, so only cpTaken can separate them, and their distances are rigged
+  // backwards on purpose: fewerCps sits exactly on its next checkpoint
+  // (distance 0) while moreCps sits well short of its own. A comparator that
+  // fell through to distance instead of checking cpTaken would rank them the
+  // other way around.
+  const cp6 = match.checkpoints[6]
+  moreCps.nextCp = 6
+  moreCps.cpTaken = 5
+  moreCps.x = cp6.x + 10
+  moreCps.y = cp6.y
+
+  const cp7 = match.checkpoints[7]
+  fewerCps.nextCp = 7
+  fewerCps.cpTaken = 2
+  fewerCps.x = cp7.x
+  fewerCps.y = cp7.y
+
+  // Tier 3 (distance, tied on lap and checkpoints): far and near share both
+  // lap (0) and cpTaken (3), so only distance to the next checkpoint can
+  // separate them. far joined before near (see destructuring above), so a
+  // comparator that dropped the distance tier and left ties in array order
+  // would keep far ahead of near, the wrong order, rather than passing by
+  // coincidence.
+  const cp8 = match.checkpoints[8]
+  far.nextCp = 8
+  far.cpTaken = 3
+  far.x = cp8.x + 10
+  far.y = cp8.y
+
+  const cp9 = match.checkpoints[9]
+  near.nextCp = 9
+  near.cpTaken = 3
+  near.x = cp9.x
+  near.y = cp9.y
 
   const order = runningOrder(match)
-  assert.equal(order[0].id, a.id, 'the car a lap up leads')
-  assert.equal(order[1].id, b.id, 'more checkpoints beats fewer')
-  assert.equal(order[2].id, c.id)
+  assert.equal(order[0].id, leader.id, 'the car a lap up leads')
+  assert.equal(
+    order[1].id,
+    moreCps.id,
+    'more checkpoints beats fewer, even against a shorter distance to go',
+  )
+  assert.equal(
+    order[2].id,
+    near.id,
+    'tied on laps and checkpoints, the car closer to its next checkpoint leads',
+  )
+  assert.equal(
+    order[3].id,
+    far.id,
+    'tied on laps and checkpoints, the car farther from its next checkpoint trails',
+  )
+  assert.equal(
+    order[4].id,
+    fewerCps.id,
+    'fewer checkpoints trails, even against a shorter distance to go',
+  )
 })
 
 test('the cut removes the car last in running order, not the last to finish', () => {
   const match = racing(3)
-  const [leader, middle, trailer] = [...match.cars.values()]
+  // Join order is deliberately the reverse of running order: c, joined
+  // last, is given the most progress, and a, joined first, is given the
+  // least. An implementation that cut by insertion order instead of
+  // runningOrder would reach for c here, not a, so the two cannot agree by
+  // accident.
+  const [a, b, c] = [...match.cars.values()]
 
-  completeLap(match, leader)
-  takeCheckpoint(match, middle, 1)
-  // trailer has taken nothing at all, so it is last
+  completeLap(match, c)                       // joined last, one lap up: leads
+  takeCheckpoint(match, b, 1)                 // joined second, middling progress
+  // a has taken nothing at all: joined first, but genuinely last in running order
 
   match.lap = GRACE_LAPS + 1 // past the grace lap, so a cut is due
   applyCut(match)
 
-  assert.equal(trailer.alive, false, 'the car last in running order is cut')
-  assert.equal(leader.alive, true)
-  assert.equal(middle.alive, true)
-  assert.equal(match.cut?.id, trailer.id, 'the cut is announced for the HUD')
+  assert.equal(
+    a.alive,
+    false,
+    `expected a (last in running order, first joined) to be cut; instead cut was ${match.cut?.id}`,
+  )
+  assert.equal(b.alive, true, 'b is not last in running order and must survive the cut')
+  assert.equal(c.alive, true, 'c leads and must survive the cut')
+  assert.equal(
+    match.cut?.id,
+    a.id,
+    `expected the cut to name a (${a.id}), got ${match.cut?.id}`,
+  )
 })
 
 test('lap 1 takes no cut', () => {
