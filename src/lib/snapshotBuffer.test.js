@@ -108,3 +108,29 @@ test('a live player present in the newest frame but absent in delayed frames is 
   assert.ok(live, 'live player is present')
   assert.equal(live.x, 99)
 })
+
+test('a snapshot without a fall field is blended without producing NaN', () => {
+  // Cutline's cars have no fall and no z. The buffer is shared, so it must not
+  // write NaN into a field a caller never set.
+  const buffer = makeBuffer(60)
+  buffer.push({ players: [{ id: 'p-1', x: 0, y: 0, heading: 1 }] }, 0)
+  buffer.push({ players: [{ id: 'p-1', x: 10, y: 20, heading: 2 }] }, 100)
+
+  const sampled = buffer.sample(100)
+  assert.ok(sampled, 'two frames must be enough to sample')
+
+  const [car] = sampled.players
+  assert.ok(Number.isFinite(car.x), 'x must stay finite')
+  assert.ok(Number.isFinite(car.y), 'y must stay finite')
+  assert.ok(!('fall' in car) || Number.isFinite(car.fall), 'fall must never be NaN')
+})
+
+test('a snapshot that does carry fall still blends it', () => {
+  const buffer = makeBuffer(60)
+  buffer.push({ players: [{ id: 'p-1', x: 0, y: 0, z: 0, fall: 0 }] }, 0)
+  buffer.push({ players: [{ id: 'p-1', x: 10, y: 0, z: 0, fall: 1 }] }, 100)
+
+  const [body] = buffer.sample(100).players
+  assert.ok(Number.isFinite(body.fall), 'fall must still interpolate for Blockout 3D')
+  assert.ok(body.fall > 0 && body.fall <= 1)
+})

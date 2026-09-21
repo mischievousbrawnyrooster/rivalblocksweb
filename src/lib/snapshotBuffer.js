@@ -76,12 +76,18 @@ export function makeBuffer(delayMs) {
         // Returned by reference, not copied — safe only because every
         // caller of sample() reads this player read-only.
         if (!a || a.z !== p.z) return p
-        return {
+        const blended = {
           ...p,
           x: a.x + (p.x - a.x) * alpha,
           y: a.y + (p.y - a.y) * alpha,
-          fall: a.fall + (p.fall - a.fall) * alpha,
         }
+        // Not every game has a third axis. Cutline's cars are flat and carry no
+        // fall, and blending an absent field would write NaN into a snapshot
+        // that nothing reads but everything passes along.
+        if (Number.isFinite(a.fall) && Number.isFinite(p.fall)) {
+          blended.fall = a.fall + (p.fall - a.fall) * alpha
+        }
+        return blended
       })
       if (livePlayer && !liveIncluded) {
         players.push(livePlayer)
