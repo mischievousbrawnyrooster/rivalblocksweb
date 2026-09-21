@@ -965,6 +965,42 @@ export default function Cutline() {
 
       ctx.restore()
 
+      // Cutline elimination banner toast (shown for 3.5s after any cut)
+      if (sampled.cut && sampled.phase === 'racing') {
+        const cutAge = sampled.elapsed - sampled.cut.at
+        if (cutAge >= 0 && cutAge < 3500) {
+          const cutFade = cutAge > 2800 ? (3500 - cutAge) / 700 : 1
+          ctx.save()
+          ctx.globalAlpha = cutFade
+          const bannerW = 380
+          const bannerH = 34
+          const bannerX = (CANVAS - bannerW) / 2
+          const bannerY = 16
+          ctx.fillStyle = 'rgba(17, 17, 22, 0.94)'
+          if (typeof ctx.roundRect === 'function') {
+            ctx.beginPath()
+            ctx.roundRect(bannerX, bannerY, bannerW, bannerH, 4)
+            ctx.fill()
+          } else {
+            ctx.fillRect(bannerX, bannerY, bannerW, bannerH)
+          }
+          ctx.strokeStyle = '#ef4444'
+          ctx.lineWidth = 1.5
+          if (typeof ctx.roundRect === 'function') {
+            ctx.stroke()
+          } else {
+            ctx.strokeRect(bannerX, bannerY, bannerW, bannerH)
+          }
+
+          ctx.fillStyle = '#ef4444'
+          ctx.font = 'bold 12px monospace'
+          ctx.textAlign = 'center'
+          ctx.textBaseline = 'middle'
+          ctx.fillText(`CUTLINE: ${sampled.cut.name.toUpperCase()} ELIMINATED`, CANVAS / 2, bannerY + bannerH / 2)
+          ctx.restore()
+        }
+      }
+
       // --- 5. Non-Racing Overlay Banners ------------------------------------
       if (sampled.phase !== 'racing') {
         ctx.save()
