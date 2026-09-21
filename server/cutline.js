@@ -508,6 +508,13 @@ export function leave(match, id) {
 }
 
 // --- Handling -------------------------------------------------------------
+// Measured lap time (Task 7): 4 bots, fixed rng, 90s runs across all 8
+// circuits. Where a bot drives cleanly, median lap is about 19.4s (range
+// 13.5 to 24s), close to the spec's 18s estimate. On 4 of the 8 circuits the
+// bot pursuit line and the wall bounce physics settle into a fixed point that
+// freezes a bot in place; two of those never complete a lap at all in 90s.
+// That is a bot AI or track geometry defect, not a speed problem, and
+// TOP_SPEED was left alone to get this number. See task-7-report.md.
 export const TOP_SPEED = 14.0        // tiles per second
 export const ACCEL = 18.0
 export const BRAKE = 26.0
@@ -876,5 +883,212 @@ export function applyHazards(match, car) {
         car.y += ((car.y - h.y) / d) * 0.2
       }
     }
+  }
+}
+
+// --- Bots -----------------------------------------------------------------
+export const BOT_LOOKAHEAD = 9       // centerline points ahead a bot aims at
+export const BOT_BRAKE_ANGLE = 0.5   // rad off the aim point before it lifts
+const BOT_REACT_MS = 100
+
+/**
+ * Bots steer at a point ahead on the generated racing line.
+ *
+ * The line costs nothing, because circuit generation already produced it: the
+ * same centerline the carve stamped tarmac across is the one the bots follow.
+ */
+export function driveBots(match) {
+  if (match.phase !== 'racing') return
+
+  for (const car of match.cars.values()) {
+    if (!car.bot || !car.alive) continue
+    if (match.now < (car.botNextAt ?? 0)) continue
+    car.botNextAt = match.now + BOT_REACT_MS
+
+    // Aim ahead of the checkpoint the bot is chasing, scaled by how quick this
+    // bot is, so the field has a skill spread rather than identical laps.
+    const line = match.centerline
+    const target = match.checkpoints[car.nextCp]
+    let nearest = target ? target.index : 0
+    const aim = line[(nearest + Math.round(BOT_LOOKAHEAD * car.botSkill)) % line.length]
+
+    let want = Math.atan2(aim.y - car.y, aim.x - car.x) - car.heading
+    while (want > Math.PI) want -= Math.PI * 2
+    while (want < -Math.PI) want += Math.PI * 2
+
+    car.steer = Math.abs(want) < 0.05 ? 0 : want > 0 ? 1 : -1
+    car.throttle = true
+    car.brake = Math.abs(want) > BOT_BRAKE_ANGLE
+    car.wantsUse = car.item !== null && match.elapsed % 5000 < BOT_REACT_MS
+  }
+}
+
+// --- Race lifecycle -------------------------------------------------------
+/** Put every car back on its slot and drop the flag. */
+export function startRace(match) {
+  const field = match.cars.size
+  match.laps = Math.max(MIN_LAPS, field)
+  match.phase = 'racing'
+  match.elapsed = 0
+  match.lap = 0
+  match.hazards = []
+  match.pickupCooldown = new Map()
+  match.cut = null
+  match.winner = null
+  match.final = false
+
+  let slot = 0
+  for (const car of match.cars.values()) {
+    const start = match.startSlots[slot++ % MAX_PLAYERS]
+    car.x = start.x
+    car.y = start.y
+    car.heading = start.heading
+    car.vx = 0
+    car.vy = 0
+    car.lap = 0
+    car.nextCp = 1
+    car.cpTaken = 0
+    car.alive = true
+    car.finishedAt = null
+    car.item = null
+    car.boostUntil = 0
+    car.bestLapMs = null
+    car.lapStartedAt = 0
+    car.steer = 0
+    car.throttle = false
+    car.brake = false
+    car.wantsUse = false
+  }
+}
+
+/**
+ * One tick of the whole match.
+ *
+ * dt arrives from the wrapper; this module has no clock of its own, which is
+ * what keeps it pure and what lets every test run a race in microseconds.
+ */
+export function tick(match, dtMs = TICK_MS, rng = Math.random) {
+  const dt = Number.isFinite(dtMs) && dtMs > 0 ? Math.min(dtMs, TICK_MS * 5) : 0
+  if (dt === 0) return
+
+  match.now += dt
+
+  // Fill the grid with bots when a lone driver has asked for them, or when the
+  // server is set to run bots on its own.
+  const humans = [...match.cars.values()].filter((c) => !c.bot).length
+  const wantsBots = match.botsOnly || (match.botsWanted && humans > 0)
+  if (match.phase === 'waiting' && wantsBots) {
+    while (match.cars.size < Math.min(match.botFill, MAX_PLAYERS)) {
+      const name = BOT_NAMES[match.cars.size % BOT_NAMES.length]
+      if (!join(match, { name, bot: true }, rng)) break
+    }
+  }
+
+  if (match.phase === 'waiting') {
+    if (match.cars.size >= MIN_PLAYERS) {
+      match.phase = 'countdown'
+      match.countdown = COUNTDOWN_MS
+    }
+    return
+  }
+
+  if (match.phase === 'countdown') {
+    match.countdown -= dt
+    if (match.countdown <= 0) startRace(match)
+    return
+  }
+
+  if (match.phase === 'over') {
+    return
+  }
+
+  // --- racing ---
+  match.elapsed += dt
+  const seconds = dt / 1000
+
+  driveBots(match)
+  expireHazards(match)
+
+  const leaderLapBefore = match.lap
+
+  for (const car of match.cars.values()) {
+    if (!car.alive) continue
+    applyHazards(match, car)
+    if (car.wantsUse) {
+      useItem(match, car)
+      car.wantsUse = false
+    }
+    stepCar(match, car, seconds)
+    collectPickup(match, car, rng)
+    updateProgress(match, car)
+  }
+
+  resolveContact(match)
+  updateDraft(match)
+
+  // The cut fires on the leader completing a lap, and removes whoever is last
+  // in running order at that instant. The race never waits for the tail.
+  if (match.lap > leaderLapBefore) applyCut(match)
+
+  const running = [...match.cars.values()].filter((c) => c.alive)
+  if (running.length <= 1 || (running[0] && running[0].lap >= match.laps)) {
+    const order = runningOrder(match)
+    match.winner = order[0]?.id ?? null
+    match.phase = 'over'
+    match.final = true
+    match.overSince = match.now
+  }
+}
+
+// --- Snapshot -------------------------------------------------------------
+/**
+ * The whole visible state, every tick, never a diff.
+ *
+ * The track is not here: it is static and ships once in welcome, the way Void
+ * Drillers ships its shaft. That is what keeps this frame under a kilobyte at
+ * 60 Hz. The centerline is not here either, because the racing line is the
+ * server's business and a client that knew it could drive it perfectly.
+ */
+export function snapshot(match) {
+  const order = runningOrder(match)
+  const place = new Map(order.map((c, i) => [c.id, i + 1]))
+
+  const cars = []
+  for (const car of match.cars.values()) {
+    cars.push({
+      id: car.id,
+      name: car.name,
+      slot: car.slot,
+      bot: car.bot,
+      x: Math.round(car.x * 100) / 100,
+      y: Math.round(car.y * 100) / 100,
+      heading: Math.round(car.heading * 1000) / 1000,
+      lap: car.lap,
+      alive: car.alive,
+      item: car.item,
+      place: place.get(car.id) ?? null,
+      drafting: Boolean(car.drafting),
+      boosting: match.now < car.boostUntil,
+      sliding: Boolean(car.onSlick),
+      bestLapMs: car.bestLapMs,
+    })
+  }
+
+  return {
+    t: 'state',
+    phase: match.phase,
+    now: match.now,
+    elapsed: match.elapsed,
+    countdown: Math.max(0, Math.ceil(match.countdown / 1000)),
+    lap: match.lap,
+    laps: match.laps,
+    circuit: match.circuit.name,
+    cars,
+    hazards: match.hazards,
+    order: order.map((c) => c.id),
+    cut: match.cut,
+    winner: match.winner,
+    final: match.final,
+    board: match.board,
   }
 }

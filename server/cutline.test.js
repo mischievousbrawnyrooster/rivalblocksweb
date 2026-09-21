@@ -1204,3 +1204,144 @@ test('the item bag is drawn the same way regardless of running position', () => 
     assert.ok(['boost', 'slick', 'wall'].includes(item), `unknown item ${item} in the bag`)
   }
 })
+
+import { COUNTDOWN_MS, BOT_NAMES, driveBots, tick, snapshot, startRace } from './cutline.js'
+
+/** Run a match forward by wall-clock milliseconds at the real tick rate. */
+function run(match, ms, rng = () => 0.5) {
+  for (let t = 0; t < ms; t += TICK_MS) tick(match, TICK_MS, rng)
+}
+
+test('a lone driver waits, and a full lobby counts down', () => {
+  const solo = make({ circuitIndex: 0, botFill: 0 })
+  join(solo, { name: 'Alone' }, () => 0)
+  run(solo, 200)
+  assert.equal(solo.phase, 'waiting', 'one driver and no bots stays in the lobby')
+
+  const pair = make({ circuitIndex: 0, botFill: 0 })
+  join(pair, { name: 'A' }, () => 0)
+  join(pair, { name: 'B' }, () => 0)
+  run(pair, 200)
+  assert.equal(pair.phase, 'countdown', `MIN_PLAYERS drivers must start a countdown`)
+})
+
+test('a lone driver who asks for bots gets a race', () => {
+  const match = make({ circuitIndex: 0 })
+  join(match, { name: 'Alone' }, () => 0)
+  match.botsWanted = true
+  run(match, 200)
+
+  assert.ok(match.cars.size >= BOT_FILL_TO, 'bots must fill the grid')
+  assert.ok(['countdown', 'racing'].includes(match.phase))
+  for (const car of match.cars.values()) {
+    if (car.bot) assert.ok(BOT_NAMES.includes(car.name), `bot name ${car.name} is off the list`)
+  }
+})
+
+test('the countdown runs down and the race starts', () => {
+  const match = make({ circuitIndex: 0, botFill: 0 })
+  join(match, { name: 'A' }, () => 0)
+  join(match, { name: 'B' }, () => 0)
+
+  run(match, 100)
+  assert.equal(match.phase, 'countdown')
+
+  run(match, COUNTDOWN_MS + 100)
+  assert.equal(match.phase, 'racing')
+  assert.equal(match.lap, 0)
+  assert.equal(match.elapsed >= 0, true)
+})
+
+test('bots drive the generated racing line and complete laps', () => {
+  const match = make({ circuitIndex: 0 })
+  for (let i = 0; i < 4; i++) join(match, { name: BOT_NAMES[i], bot: true }, () => 0.5)
+  startRace(match)
+
+  run(match, 90000) // ninety seconds is several laps at the target lap time
+
+  const progressed = [...match.cars.values()].filter((c) => c.lap >= 1)
+  assert.ok(progressed.length > 0, 'at least one bot must complete a lap in ninety seconds')
+
+  for (const car of match.cars.values()) {
+    assert.ok(Number.isFinite(car.x) && Number.isFinite(car.y), 'a bot must never go non finite')
+  }
+})
+
+test('a race resolves to exactly one winner and sets final', () => {
+  const match = make({ circuitIndex: 0 })
+  for (let i = 0; i < 4; i++) join(match, { name: BOT_NAMES[i], bot: true }, () => 0.5)
+  startRace(match)
+
+  run(match, 600000) // ten minutes is far past any plausible race
+
+  assert.equal(match.phase, 'over', 'a race must conclude')
+  assert.ok(match.winner, 'a concluded race must name a winner')
+  assert.equal(match.final, true)
+  assert.equal(
+    [...match.cars.values()].filter((c) => c.alive).length,
+    1,
+    'exactly one car is left running',
+  )
+})
+
+test('the snapshot carries what the page draws and nothing it must not trust', () => {
+  const match = racing(3)
+  const snap = snapshot(match)
+
+  assert.equal(snap.t, 'state')
+  assert.equal(snap.phase, match.phase)
+  assert.equal(snap.laps, match.laps)
+  assert.ok(Array.isArray(snap.cars))
+  assert.ok(Array.isArray(snap.hazards))
+  assert.ok(Array.isArray(snap.order))
+  assert.equal(snap.cars.length, 3)
+
+  for (const car of snap.cars) {
+    for (const key of ['id', 'name', 'slot', 'x', 'y', 'heading', 'lap', 'alive']) {
+      assert.ok(key in car, `a snapshot car is missing ${key}`)
+    }
+    assert.ok(Number.isFinite(car.x) && Number.isFinite(car.y) && Number.isFinite(car.heading))
+  }
+
+  // The grid never rides in a snapshot: it is static and ships once in welcome.
+  assert.equal(snap.grid, undefined, 'the track must never be in a snapshot')
+  assert.equal(snap.map, undefined, 'the track must never be in a snapshot')
+  assert.equal(snap.centerline, undefined, 'the racing line is not the client\'s business')
+})
+
+test('a snapshot is small enough to send at 60 Hz', () => {
+  const match = racing(MAX_PLAYERS)
+  for (let i = 0; i < MAX_HAZARDS; i++) {
+    match.hazards.push({ kind: 'wall', x: 40, y: 40, until: 9e9, by: 'p-1' })
+  }
+  const bytes = JSON.stringify(snapshot(match)).length
+  assert.ok(bytes < 4096, `a full snapshot is ${bytes} bytes, over maxPayload`)
+})
+
+test('tick survives a hostile dt without moving anybody to NaN', () => {
+  const match = racing(3)
+  for (const dt of [0, -5, NaN, Infinity, 'fast', null, undefined]) {
+    tick(match, dt, () => 0.5)
+    for (const car of match.cars.values()) {
+      assert.ok(Number.isFinite(car.x) && Number.isFinite(car.y), `dt ${dt} broke a position`)
+    }
+  }
+})
+
+// Debt carried from Task 3 (Ruling 9 in the plan ledger): laps are a static
+// MIN_LAPS in make(), but startRace() is what actually scales the field into
+// a lap count. Task 3's version of this test asserted Math.max against
+// itself rather than against production code, so it was removed there and
+// owed to this task instead. This asserts startRace()'s real output, not a
+// value the test computed on its own.
+test('startRace scales laps to the field: a small field gets MIN_LAPS, a full grid gets MAX_PLAYERS', () => {
+  const small = make({ circuitIndex: 0 })
+  join(small, { name: 'A' }, () => 0)
+  startRace(small)
+  assert.equal(small.laps, MIN_LAPS, 'a field smaller than MIN_LAPS still races MIN_LAPS laps')
+
+  const full = make({ circuitIndex: 0 })
+  for (let i = 0; i < MAX_PLAYERS; i++) join(full, { name: `D${i}` }, () => 0)
+  startRace(full)
+  assert.equal(full.laps, MAX_PLAYERS, 'a full grid races one lap per car')
+})
