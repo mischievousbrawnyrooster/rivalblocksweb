@@ -11,6 +11,7 @@ import PlayIndex from './pages/PlayIndex.jsx'
 import Blastworks from './pages/Blastworks.jsx'
 import VoidDrillers from './pages/VoidDrillers.jsx'
 import CipherRun from './pages/CipherRun.jsx'
+import Cutline from './pages/Cutline.jsx'
 import LeaderboardPage from './pages/LeaderboardPage.jsx'
 import Admin from './pages/Admin.jsx'
 import About from './pages/About.jsx'
@@ -76,6 +77,7 @@ export default function App() {
         <Route path="play/blastworks" element={<Blastworks />} />
         <Route path="play/void-drillers" element={<VoidDrillers />} />
         <Route path="play/cipher-run" element={<CipherRun />} />
+        <Route path="play/cutline" element={<Cutline />} />
         <Route
           path="play/blockout-royale-3d"
           element={

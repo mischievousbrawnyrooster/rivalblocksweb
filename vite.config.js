@@ -61,6 +61,9 @@ export default defineConfig({
       '/blockout3d-ws': { target: 'ws://127.0.0.1:8085', ws: true },
       '/voiddrillers-ws': { target: 'ws://127.0.0.1:8086', ws: true },
       '/cipherrun-ws': { target: 'ws://127.0.0.1:8087', ws: true },
+      // Not '/ws…': proxy keys match by prefix, here and in nginx, so anything
+      // starting '/ws' is swallowed by the Blockout rule above.
+      '/cutline-ws': { target: 'ws://127.0.0.1:8088', ws: true },
     },
   },
 })
