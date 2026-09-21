@@ -1007,18 +1007,29 @@ test('a pickup fills an empty slot, not a full one, and starts a cooldown', () =
   const ty = Math.round(car.y)
   match.grid[ty * GRID + tx] = S_PICKUP
 
-  collectPickup(match, car, () => 0)
+  // A counter rng whose first and second draws land on genuinely different
+  // ITEM_BAG entries (index 0 is 'boost', index 5 is 'wall'; ITEM_BAG repeats
+  // entries, so two different indices are not automatically two different
+  // items, this pair is chosen to be safe). If the full-slot guard failed to
+  // block a second draw, that draw would consume this rng's second value and
+  // swap the held item for a different one, not silently redraw the same
+  // value the way a fixed rng would.
+  let calls = 0
+  const rng = () => (calls++ === 0 ? 0 : 0.9)
+
+  collectPickup(match, car, rng)
   assert.ok(car.item, 'an empty slot must fill')
   const held = car.item
+  assert.equal(held, 'boost', 'the first draw must be ITEM_BAG[0]')
 
   // The tile is on cooldown, so a second pass takes nothing even once emptied.
   car.item = null
-  collectPickup(match, car, () => 0)
+  collectPickup(match, car, rng)
   assert.equal(car.item, null, 'a tile on cooldown gives nothing')
 
   car.item = held
   match.now += PICKUP_RESPAWN_MS + 1
-  collectPickup(match, car, () => 0)
+  collectPickup(match, car, rng)
   assert.equal(car.item, held, 'a full slot must not be overwritten')
 })
 
@@ -1087,16 +1098,34 @@ test('hazards are capped, oldest evicted first', () => {
   const match = racing(1)
   const [car] = [...match.cars.values()]
 
-  for (let i = 0; i < MAX_HAZARDS + 5; i++) {
+  // A sorted-until check cannot tell "kept the newest" from "kept the
+  // oldest": until increases every iteration, so either half of the array is
+  // already sorted ascending on its own. Identifying each hazard by a unique
+  // x instead lets the assertion check which ones actually survived, not
+  // merely whether survivors are in order.
+  const totalDrops = MAX_HAZARDS + 5
+  const droppedX = []
+  for (let i = 0; i < totalDrops; i++) {
     car.item = 'wall'
-    car.x = 30 + (i % 10)
+    car.x = 30 + i // distinct per drop, so each hazard is identifiable later
     match.now += 1
     useItem(match, car)
+    // The hazard just added is always last: useItem pushes, then evicts from
+    // the front, so the tail is never touched by that eviction.
+    droppedX.push(match.hazards[match.hazards.length - 1].x)
   }
 
   assert.equal(match.hazards.length, MAX_HAZARDS, 'the hazard list must stay capped')
-  const times = match.hazards.map((h) => h.until)
-  assert.deepEqual([...times].sort((a, b) => a - b), times, 'the survivors must be the newest')
+
+  const survivingX = new Set(match.hazards.map((h) => h.x))
+  const evictedCount = totalDrops - MAX_HAZARDS
+
+  for (let i = 0; i < evictedCount; i++) {
+    assert.ok(!survivingX.has(droppedX[i]), `drop ${i}, the earliest, must have been evicted`)
+  }
+  for (let i = evictedCount; i < totalDrops; i++) {
+    assert.ok(survivingX.has(droppedX[i]), `drop ${i}, the most recent, must still be present`)
+  }
 })
 
 test('a slick is not survived by its expiry, and a car on one loses grip', () => {
@@ -1112,6 +1141,39 @@ test('a slick is not survived by its expiry, and a car on one loses grip', () =>
   match.now += SLICK_TTL_MS + 1
   expireHazards(match)
   assert.equal(match.hazards.length, 0)
+})
+
+test('a car on a dropped slick keeps markedly more lateral velocity than the same car on tarmac', () => {
+  const match = racing(1)
+  const [car] = [...match.cars.values()]
+
+  // A genuinely on-track tile. stepCar treats a wall tile as offTrack and
+  // takes an entirely different branch, one that never reads GRIP at all, so
+  // a test run on wall would never exercise the code this test names.
+  const cp = match.checkpoints[3]
+  const tx = Math.round(cp.x)
+  const ty = Math.round(cp.y)
+  match.grid[ty * GRID + tx] = S_TARMAC
+
+  // Control: the same lateral slide, on plain tarmac, no hazard involved.
+  placed(match, car, { x: tx, y: ty, heading: 0, speed: 0, lateral: 4 })
+  stepCar(match, car, 0.1)
+  const control = Math.abs(-car.vx * Math.sin(0) + car.vy * Math.cos(0))
+
+  // Same tile, same slide, but now a dropped slick sits under the car. The
+  // hazard must first mark the car via applyHazards, exactly as it would in
+  // the real tick order, before stepCar ever runs.
+  placed(match, car, { x: tx, y: ty, heading: 0, speed: 0, lateral: 4 })
+  match.hazards.push({ kind: 'slick', x: tx, y: ty, until: match.now + SLICK_TTL_MS, by: car.id })
+  applyHazards(match, car)
+  assert.ok(car.onSlick, 'the hazard must mark the car before the physics check means anything')
+  stepCar(match, car, 0.1)
+  const onSlick = Math.abs(-car.vx * Math.sin(0) + car.vy * Math.cos(0))
+
+  assert.ok(
+    onSlick > control * 2,
+    `a dropped slick must preserve markedly more lateral velocity than tarmac (onSlick ${onSlick.toFixed(3)}, control ${control.toFixed(3)})`,
+  )
 })
 
 test('the item bag is drawn the same way regardless of running position', () => {
