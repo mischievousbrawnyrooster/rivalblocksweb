@@ -660,3 +660,91 @@ function resolveContact(match) {
     }
   }
 }
+
+// --- Laps, running order and the cut --------------------------------------
+// Generous enough that a car cannot thread between two ticks at top speed:
+// TOP_SPEED * TICK_MS / 1000 is about 0.22 tiles, well inside this.
+export const CHECKPOINT_RADIUS = 4.0
+
+/**
+ * Advance a car's checkpoint ring and count its laps.
+ *
+ * Checkpoints must be taken in order. A car holds nextCp and only ever
+ * registers the one it is actually waiting for, so cutting the infield skips
+ * checkpoints and the lap does not count. That ordering is the whole
+ * anti-shortcut mechanism, and it is why the checkpoint ring is generated with
+ * the circuit rather than bolted on.
+ */
+export function updateProgress(match, car) {
+  if (!car.alive) return
+
+  const ring = match.checkpoints
+  const target = ring[car.nextCp]
+  if (!target) return
+
+  if (Math.hypot(car.x - target.x, car.y - target.y) > CHECKPOINT_RADIUS) return
+
+  // Checkpoint 0 is the cut line. Reaching it counts a lap, but only from a
+  // car that has taken every checkpoint behind it.
+  if (car.nextCp === 0) {
+    if (car.cpTaken < ring.length - 1) return
+
+    const lapMs = match.elapsed - car.lapStartedAt
+    // A lap only sets a record if it was raced, not if it was the roll off the
+    // grid before the clock started.
+    if (car.lap > 0 && lapMs > 0 && (car.bestLapMs === null || lapMs < car.bestLapMs)) {
+      car.bestLapMs = lapMs
+    }
+    car.lap += 1
+    car.lapStartedAt = match.elapsed
+    car.cpTaken = 0
+    car.nextCp = 1
+    if (car.lap > match.lap) match.lap = car.lap
+    return
+  }
+
+  car.cpTaken += 1
+  car.nextCp = (car.nextCp + 1) % ring.length
+}
+
+/**
+ * Live cars, best first.
+ *
+ * The HUD needs this for the position display regardless, so the cut costs
+ * nothing extra to compute. Ordered by lap, then by checkpoints taken this
+ * lap, then by how close the car is to the checkpoint it is chasing.
+ */
+export function runningOrder(match) {
+  return [...match.cars.values()]
+    .filter((c) => c.alive)
+    .sort((a, b) => {
+      if (b.lap !== a.lap) return b.lap - a.lap
+      if (b.cpTaken !== a.cpTaken) return b.cpTaken - a.cpTaken
+      const at = match.checkpoints[a.nextCp]
+      const bt = match.checkpoints[b.nextCp]
+      const ad = at ? Math.hypot(a.x - at.x, a.y - at.y) : Infinity
+      const bd = bt ? Math.hypot(b.x - bt.x, b.y - bt.y) : Infinity
+      return ad - bd
+    })
+}
+
+/**
+ * The cut: when the leader crosses the line, whoever is last in running order
+ * right now leaves the race, wherever they happen to be on the track.
+ *
+ * The race never waits for the tail to trail in. A car about to be lapped is
+ * gone before it is lapped, which is the point of the format and the reason
+ * the pressure sits mid-pack instead of at the front.
+ */
+export function applyCut(match) {
+  if (match.lap <= GRACE_LAPS) return null
+
+  const order = runningOrder(match)
+  if (order.length <= 1) return null
+
+  const doomed = order[order.length - 1]
+  doomed.alive = false
+  doomed.finishedAt = match.elapsed
+  match.cut = { id: doomed.id, name: doomed.name, at: match.elapsed }
+  return doomed
+}

@@ -710,3 +710,146 @@ test('a prototype key as an id is not a car', () => {
     assert.equal(applyInput(match, hostile, { throttle: 1 }), false, `${hostile} must not resolve`)
   }
 })
+
+import {
+  GRACE_LAPS,
+  CHECKPOINT_RADIUS,
+  updateProgress,
+  runningOrder,
+  applyCut,
+} from './cutline.js'
+
+/** Drive a car onto a checkpoint and register it. */
+function takeCheckpoint(match, car, index) {
+  const cp = match.checkpoints[index]
+  car.x = cp.x
+  car.y = cp.y
+  updateProgress(match, car)
+}
+
+/** Walk a car cleanly through every checkpoint and back over the line. */
+function completeLap(match, car) {
+  for (let i = 1; i < match.checkpoints.length; i++) takeCheckpoint(match, car, i)
+  takeCheckpoint(match, car, 0)
+}
+
+test('a checkpoint taken out of order does not advance progress', () => {
+  const match = racing(2)
+  const [car] = [...match.cars.values()]
+
+  const before = car.nextCp
+  takeCheckpoint(match, car, 5) // skipping 1 through 4
+  assert.equal(car.nextCp, before, 'a checkpoint out of order must be ignored')
+  assert.equal(car.cpTaken, 0)
+})
+
+test('checkpoints taken in order advance progress and wrap', () => {
+  const match = racing(2)
+  const [car] = [...match.cars.values()]
+
+  for (let i = 1; i < match.checkpoints.length; i++) {
+    takeCheckpoint(match, car, i)
+    assert.equal(car.nextCp, (i + 1) % match.checkpoints.length, `after checkpoint ${i}`)
+  }
+  assert.equal(car.cpTaken, match.checkpoints.length - 1)
+})
+
+test('crossing the line with checkpoints missed does not count a lap', () => {
+  const match = racing(2)
+  const [car] = [...match.cars.values()]
+
+  // Straight back to the line without touching a single checkpoint: the
+  // infield shortcut this whole mechanism exists to refuse.
+  takeCheckpoint(match, car, 0)
+  assert.equal(car.lap, 0, 'a shortcut must not count')
+})
+
+test('a clean lap counts and resets the checkpoint ring', () => {
+  const match = racing(2)
+  const [car] = [...match.cars.values()]
+
+  completeLap(match, car)
+  assert.equal(car.lap, 1)
+  assert.equal(car.nextCp, 1, 'the ring must reset for the next lap')
+  assert.equal(car.cpTaken, 0)
+})
+
+test('running order sorts by lap, then checkpoints, then distance to the next', () => {
+  const match = racing(3)
+  const [a, b, c] = [...match.cars.values()]
+
+  completeLap(match, a)                       // one lap up
+  takeCheckpoint(match, b, 1)                 // same lap, one checkpoint
+  takeCheckpoint(match, b, 2)                 // same lap, two checkpoints
+  takeCheckpoint(match, c, 1)                 // same lap, one checkpoint
+
+  const order = runningOrder(match)
+  assert.equal(order[0].id, a.id, 'the car a lap up leads')
+  assert.equal(order[1].id, b.id, 'more checkpoints beats fewer')
+  assert.equal(order[2].id, c.id)
+})
+
+test('the cut removes the car last in running order, not the last to finish', () => {
+  const match = racing(3)
+  const [leader, middle, trailer] = [...match.cars.values()]
+
+  completeLap(match, leader)
+  takeCheckpoint(match, middle, 1)
+  // trailer has taken nothing at all, so it is last
+
+  match.lap = GRACE_LAPS + 1 // past the grace lap, so a cut is due
+  applyCut(match)
+
+  assert.equal(trailer.alive, false, 'the car last in running order is cut')
+  assert.equal(leader.alive, true)
+  assert.equal(middle.alive, true)
+  assert.equal(match.cut?.id, trailer.id, 'the cut is announced for the HUD')
+})
+
+test('lap 1 takes no cut', () => {
+  const match = racing(3)
+  match.lap = GRACE_LAPS // still the grace lap
+  applyCut(match)
+  assert.equal([...match.cars.values()].filter((c) => c.alive).length, 3, 'nobody leaves on lap 1')
+})
+
+test('the cut never empties the grid below one car', () => {
+  const match = racing(2)
+  match.lap = GRACE_LAPS + 1
+  applyCut(match)
+  assert.equal([...match.cars.values()].filter((c) => c.alive).length, 1)
+
+  applyCut(match)
+  assert.equal(
+    [...match.cars.values()].filter((c) => c.alive).length,
+    1,
+    'a race with one car left cuts nobody',
+  )
+})
+
+test('an eliminated car is skipped by the cut and by running order', () => {
+  const match = racing(3)
+  const cars = [...match.cars.values()]
+  cars[2].alive = false
+
+  assert.equal(runningOrder(match).length, 2, 'a dead car is not in the order')
+
+  match.lap = GRACE_LAPS + 1
+  applyCut(match)
+  assert.equal(cars.filter((c) => c.alive).length, 1)
+})
+
+test('a checkpoint is only taken from within CHECKPOINT_RADIUS', () => {
+  const match = racing(2)
+  const [car] = [...match.cars.values()]
+  const cp = match.checkpoints[1]
+
+  car.x = cp.x + CHECKPOINT_RADIUS * 4
+  car.y = cp.y
+  updateProgress(match, car)
+  assert.equal(car.nextCp, 1, 'a distant car must not register the checkpoint')
+
+  car.x = cp.x
+  updateProgress(match, car)
+  assert.equal(car.nextCp, 2, 'a car on the checkpoint must register it')
+})
