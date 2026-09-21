@@ -922,3 +922,223 @@ test('a checkpoint is only taken from within CHECKPOINT_RADIUS', () => {
   updateProgress(match, car)
   assert.equal(car.nextCp, 2, 'a car on the checkpoint must register it')
 })
+
+import {
+  SLIP_RANGE,
+  SLIP_BOOST,
+  SLICK_TTL_MS,
+  WALL_TTL_MS,
+  PICKUP_RESPAWN_MS,
+  MAX_HAZARDS,
+  ITEM_BAG,
+  BOOST_MS,
+  S_BOOST,
+  updateDraft,
+  collectPickup,
+  useItem,
+  expireHazards,
+  applyHazards,
+} from './cutline.js'
+
+test('a car in the wake of another gains slipstream', () => {
+  const match = racing(2)
+  const [lead, chase] = [...match.cars.values()]
+
+  lead.x = 40
+  lead.y = 40
+  lead.heading = 0
+  chase.x = 40 - SLIP_RANGE * 0.5 // directly behind the leader's tail
+  chase.y = 40
+  chase.heading = 0
+
+  updateDraft(match)
+  assert.equal(chase.drafting, true, 'a car in the wake must draft')
+  assert.equal(lead.drafting, false, 'the leader drafts nobody')
+  assert.ok(topSpeedOf(match, chase) > topSpeedOf(match, lead))
+  assert.ok(Math.abs(topSpeedOf(match, chase) - TOP_SPEED * SLIP_BOOST) < 0.001)
+})
+
+test('slipstream does not apply out of range, alongside, or ahead', () => {
+  const match = racing(2)
+  const [lead, chase] = [...match.cars.values()]
+  lead.x = 40
+  lead.y = 40
+  lead.heading = 0
+
+  chase.heading = 0
+  chase.x = 40 - SLIP_RANGE * 3 // too far back
+  chase.y = 40
+  updateDraft(match)
+  assert.equal(chase.drafting, false, 'out of range must not draft')
+
+  chase.x = 40 // alongside
+  chase.y = 40 - SLIP_RANGE * 0.5
+  updateDraft(match)
+  assert.equal(chase.drafting, false, 'alongside must not draft')
+
+  chase.x = 40 + SLIP_RANGE * 0.5 // ahead of the leader
+  chase.y = 40
+  updateDraft(match)
+  assert.equal(chase.drafting, false, 'ahead must not draft')
+})
+
+test('an eliminated car gives no slipstream', () => {
+  const match = racing(2)
+  const [lead, chase] = [...match.cars.values()]
+  lead.x = 40
+  lead.y = 40
+  lead.heading = 0
+  lead.alive = false
+  chase.x = 40 - SLIP_RANGE * 0.5
+  chase.y = 40
+  chase.heading = 0
+
+  updateDraft(match)
+  assert.equal(chase.drafting, false, 'a dead car must not tow a live one')
+})
+
+test('a pickup fills an empty slot, not a full one, and starts a cooldown', () => {
+  const match = racing(1)
+  const [car] = [...match.cars.values()]
+
+  // Write a pickup tile under the car so the test does not depend on where
+  // decoration landed.
+  const tx = Math.round(car.x)
+  const ty = Math.round(car.y)
+  match.grid[ty * GRID + tx] = S_PICKUP
+
+  collectPickup(match, car, () => 0)
+  assert.ok(car.item, 'an empty slot must fill')
+  const held = car.item
+
+  // The tile is on cooldown, so a second pass takes nothing even once emptied.
+  car.item = null
+  collectPickup(match, car, () => 0)
+  assert.equal(car.item, null, 'a tile on cooldown gives nothing')
+
+  car.item = held
+  match.now += PICKUP_RESPAWN_MS + 1
+  collectPickup(match, car, () => 0)
+  assert.equal(car.item, held, 'a full slot must not be overwritten')
+})
+
+test('using an empty slot is a no-op', () => {
+  const match = racing(1)
+  const [car] = [...match.cars.values()]
+  car.item = null
+  assert.equal(useItem(match, car), false)
+  assert.equal(match.hazards.length, 0)
+})
+
+test('boost raises the speed cap for BOOST_MS and then lapses', () => {
+  const match = racing(1)
+  const [car] = [...match.cars.values()]
+  car.item = 'boost'
+
+  assert.equal(useItem(match, car), true)
+  assert.equal(car.item, null, 'using an item empties the slot')
+  assert.ok(topSpeedOf(match, car) > TOP_SPEED)
+
+  match.now += BOOST_MS + 1
+  assert.ok(Math.abs(topSpeedOf(match, car) - TOP_SPEED) < 0.001, 'boost must lapse')
+})
+
+test('crossing a boost strip grants the same boost the item does', () => {
+  const match = racing(1)
+  const [car] = [...match.cars.values()]
+  const tx = Math.round(car.x)
+  const ty = Math.round(car.y)
+  match.grid[ty * GRID + tx] = S_BOOST
+
+  applyHazards(match, car)
+  assert.ok(topSpeedOf(match, car) > TOP_SPEED, 'a strip must boost')
+})
+
+test('a slick drops behind the car, never on it', () => {
+  const match = racing(1)
+  const [car] = [...match.cars.values()]
+  car.x = 40
+  car.y = 40
+  car.heading = 0 // facing positive x
+  car.item = 'slick'
+
+  useItem(match, car)
+  assert.equal(match.hazards.length, 1)
+  const [hazard] = match.hazards
+  assert.equal(hazard.kind, 'slick')
+  assert.ok(hazard.x < car.x, 'the slick must land behind the nose')
+})
+
+test('a wall drops behind the car and expires', () => {
+  const match = racing(1)
+  const [car] = [...match.cars.values()]
+  car.item = 'wall'
+  useItem(match, car)
+
+  assert.equal(match.hazards.length, 1)
+  assert.equal(match.hazards[0].kind, 'wall')
+
+  match.now += WALL_TTL_MS + 1
+  expireHazards(match)
+  assert.equal(match.hazards.length, 0, 'an expired hazard must be swept')
+})
+
+test('hazards are capped, oldest evicted first', () => {
+  const match = racing(1)
+  const [car] = [...match.cars.values()]
+
+  for (let i = 0; i < MAX_HAZARDS + 5; i++) {
+    car.item = 'wall'
+    car.x = 30 + (i % 10)
+    match.now += 1
+    useItem(match, car)
+  }
+
+  assert.equal(match.hazards.length, MAX_HAZARDS, 'the hazard list must stay capped')
+  const times = match.hazards.map((h) => h.until)
+  assert.deepEqual([...times].sort((a, b) => a - b), times, 'the survivors must be the newest')
+})
+
+test('a slick is not survived by its expiry, and a car on one loses grip', () => {
+  const match = racing(1)
+  const [car] = [...match.cars.values()]
+  car.x = 40
+  car.y = 40
+  match.hazards.push({ kind: 'slick', x: 40, y: 40, until: match.now + SLICK_TTL_MS, by: car.id })
+
+  applyHazards(match, car)
+  assert.ok(car.onSlick, 'a car standing on a slick must be marked')
+
+  match.now += SLICK_TTL_MS + 1
+  expireHazards(match)
+  assert.equal(match.hazards.length, 0)
+})
+
+test('the item bag is drawn the same way regardless of running position', () => {
+  // A car running last must draw from exactly the same odds as the leader.
+  // There are no rubber banded catch-up items in this game: slipstream is the
+  // catch-up mechanic, because it rewards closing the gap rather than having
+  // failed to.
+  const match = racing(2)
+  const order = runningOrder(match)
+  const leader = order[0]
+  const last = order[order.length - 1]
+
+  for (const car of [leader, last]) {
+    const tx = Math.round(car.x)
+    const ty = Math.round(car.y)
+    match.grid[ty * GRID + tx] = S_PICKUP
+  }
+
+  // The same rng draw must give both cars the same item.
+  leader.item = null
+  last.item = null
+  collectPickup(match, leader, () => 0.5)
+  collectPickup(match, last, () => 0.5)
+  assert.equal(leader.item, last.item, 'position must not change what the bag gives')
+
+  assert.ok(ITEM_BAG.length > 0)
+  for (const item of ITEM_BAG) {
+    assert.ok(['boost', 'slick', 'wall'].includes(item), `unknown item ${item} in the bag`)
+  }
+})

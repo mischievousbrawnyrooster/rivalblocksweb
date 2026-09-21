@@ -437,6 +437,7 @@ export function make(options = {}) {
     laps: MIN_LAPS,
     lap: 0,           // laps the leader has completed
     hazards: [],
+    pickupCooldown: new Map(), // tile index -> the time it refills
     cut: null,        // { id, name, at } for the most recent elimination
     winner: null,
     final: false,
@@ -601,7 +602,10 @@ export function stepCar(match, car, dt) {
   fwd -= fwd * (offTrack ? OFFTRACK_DRAG : DRAG) * dt
 
   // 4. Lateral bleeds off at the surface's grip.
-  const grip = offTrack ? GRIP[S_TARMAC] : (GRIP[surface] ?? GRIP[S_TARMAC])
+  const base = offTrack ? GRIP[S_TARMAC] : (GRIP[surface] ?? GRIP[S_TARMAC])
+  // A dropped slick is oil that happens to be a hazard rather than a tile, so
+  // it resolves to the same grip and needs no second physics path.
+  const grip = car.onSlick ? Math.min(base, GRIP[S_OIL]) : base
   lat *= Math.max(0, 1 - grip * dt)
 
   // 5. Clamp and recompose.
@@ -747,4 +751,130 @@ export function applyCut(match) {
   doomed.finishedAt = match.elapsed
   match.cut = { id: doomed.id, name: doomed.name, at: match.elapsed }
   return doomed
+}
+
+// --- Slipstream -------------------------------------------------------------
+export const SLIP_RANGE = 3.5
+export const SLIP_CONE = 0.7         // dot product against the leader's nose
+
+/**
+ * The only catch-up mechanic in the game.
+ *
+ * A car sitting in another's wake gains top speed. This is deliberately the
+ * whole of catch-up: the item bag is flat, so nothing is handed to a driver for
+ * running last. Slipstream rewards having closed the gap rather than having
+ * failed to, which is the studio's position on ranked integrity.
+ */
+export function updateDraft(match) {
+  const cars = [...match.cars.values()]
+  for (const car of cars) car.drafting = false
+
+  for (const car of cars) {
+    if (!car.alive) continue
+    for (const lead of cars) {
+      if (lead === car || !lead.alive) continue
+
+      const dx = lead.x - car.x
+      const dy = lead.y - car.y
+      const d = Math.hypot(dx, dy)
+      if (d === 0 || d > SLIP_RANGE) continue
+
+      // The gap must point along the leader's nose: that is what makes this
+      // "behind them" rather than "near them".
+      const dot = (dx / d) * Math.cos(lead.heading) + (dy / d) * Math.sin(lead.heading)
+      if (dot < SLIP_CONE) continue
+
+      car.drafting = true
+      break
+    }
+  }
+}
+
+// --- The kit ----------------------------------------------------------------
+export const SLICK_TTL_MS = 9000
+export const SLICK_RADIUS = 1.1
+export const WALL_TTL_MS = 8000
+export const WALL_RADIUS = 0.9
+export const PICKUP_RESPAWN_MS = 6000
+export const MAX_HAZARDS = 16
+export const DROP_BACK = 1.4         // tiles behind the nose a hazard lands
+
+// Flat by construction. The weighting is in how many copies of each item the
+// bag holds, never in who is drawing from it.
+export const ITEM_BAG = ['boost', 'boost', 'boost', 'slick', 'slick', 'wall']
+
+/** Driving over a pickup tile fills an empty slot and puts that tile on cooldown. */
+export function collectPickup(match, car, rng = Math.random) {
+  if (!car.alive || car.item) return false
+
+  const tx = Math.round(car.x)
+  const ty = Math.round(car.y)
+  if (surfaceAt(match.grid, tx, ty) !== S_PICKUP) return false
+
+  const key = ty * GRID + tx
+  const readyAt = match.pickupCooldown.get(key) ?? 0
+  if (match.now < readyAt) return false
+
+  match.pickupCooldown.set(key, match.now + PICKUP_RESPAWN_MS)
+  car.item = ITEM_BAG[Math.floor(rng() * ITEM_BAG.length)] ?? ITEM_BAG[0]
+  return true
+}
+
+/** Spend the held item. Hazards land behind the nose, never under it. */
+export function useItem(match, car) {
+  if (!car.alive || !car.item) return false
+
+  const item = car.item
+  car.item = null
+
+  if (item === 'boost') {
+    car.boostUntil = match.now + BOOST_MS
+    return true
+  }
+
+  const bx = car.x - Math.cos(car.heading) * DROP_BACK
+  const by = car.y - Math.sin(car.heading) * DROP_BACK
+  const ttl = item === 'slick' ? SLICK_TTL_MS : WALL_TTL_MS
+
+  match.hazards.push({ kind: item, x: bx, y: by, until: match.now + ttl, by: car.id })
+  // Capped rather than unbounded: the snapshot carries this list every tick.
+  while (match.hazards.length > MAX_HAZARDS) match.hazards.shift()
+  return true
+}
+
+export function expireHazards(match) {
+  match.hazards = match.hazards.filter((h) => h.until > match.now)
+}
+
+/**
+ * What the surface and the hazards do to a car this tick.
+ *
+ * A boost strip sets the same boost window the item does, for STRIP_BOOST_MS
+ * rather than BOOST_MS. There is one boost effect in the game and two ways to
+ * acquire it, so the strip needs no code path of its own.
+ */
+export function applyHazards(match, car) {
+  if (!car.alive) return
+
+  car.onSlick = false
+
+  if (surfaceAt(match.grid, Math.round(car.x), Math.round(car.y)) === S_BOOST) {
+    car.boostUntil = Math.max(car.boostUntil, match.now + STRIP_BOOST_MS)
+  }
+
+  for (const h of match.hazards) {
+    const d = Math.hypot(car.x - h.x, car.y - h.y)
+    if (h.kind === 'slick' && d <= SLICK_RADIUS) {
+      car.onSlick = true
+    } else if (h.kind === 'wall' && d <= WALL_RADIUS + CAR_RADIUS) {
+      // A barrier scrubs speed the way a wall does, and shoves the car clear
+      // so it cannot sit inside the hazard.
+      car.vx *= -WALL_HIT_KEEP
+      car.vy *= -WALL_HIT_KEEP
+      if (d > 0) {
+        car.x += ((car.x - h.x) / d) * 0.2
+        car.y += ((car.y - h.y) / d) * 0.2
+      }
+    }
+  }
 }
