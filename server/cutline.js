@@ -622,25 +622,15 @@ export function stepCar(match, car, dt) {
   // 6. Integrate, then resolve contact one axis at a time so a car sliding
   //    along a wall keeps the component that is not blocked.
   const nx = car.x + car.vx * dt
-  const hitX = surfaceAt(match.grid, Math.round(nx), Math.round(car.y)) === S_WALL
-  if (hitX && !offTrack) {
+  if (surfaceAt(match.grid, Math.round(nx), Math.round(car.y)) === S_WALL && !offTrack) {
     car.vx *= -WALL_HIT_KEEP
-    const sin = Math.sin(car.heading)
-    const cos = Math.cos(car.heading)
-    const awayX = nx > car.x ? -Math.abs(cos) : Math.abs(cos)
-    car.heading = Math.atan2(sin, awayX)
   } else {
     car.x = nx
   }
 
   const ny = car.y + car.vy * dt
-  const hitY = surfaceAt(match.grid, Math.round(car.x), Math.round(ny)) === S_WALL
-  if (hitY && !offTrack) {
+  if (surfaceAt(match.grid, Math.round(car.x), Math.round(ny)) === S_WALL && !offTrack) {
     car.vy *= -WALL_HIT_KEEP
-    const sin = Math.sin(car.heading)
-    const cos = Math.cos(car.heading)
-    const awayY = ny > car.y ? -Math.abs(sin) : Math.abs(sin)
-    car.heading = Math.atan2(awayY, cos)
   } else {
     car.y = ny
   }

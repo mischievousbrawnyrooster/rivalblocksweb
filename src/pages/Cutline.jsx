@@ -695,54 +695,114 @@ export default function Cutline() {
           }
         }
 
-        // 4 Wheels / Tires
-        const tw = L * 0.24
-        const th = W * 0.2
+        // 4 Wheels / Tires (Precision Rounded Rubber & Alloy Rims)
+        const tw = L * 0.28
+        const th = W * 0.24
         const steerAngle = (car.steer ?? 0) * 0.32
 
-        // Rear tires (fixed)
-        ctx.fillStyle = '#18181b'
-        ctx.fillRect(-halfL * 0.65 - tw / 2, -halfW * 0.95, tw, th)
-        ctx.fillRect(-halfL * 0.65 - tw / 2, halfW * 0.95 - th, tw, th)
-        ctx.fillStyle = '#52525b'
-        ctx.fillRect(-halfL * 0.65 - tw / 4, -halfW * 0.95 + 1, tw / 2, th - 2)
-        ctx.fillRect(-halfL * 0.65 - tw / 4, halfW * 0.95 - th + 1, tw / 2, th - 2)
+        // Mechanical dark axle bars
+        ctx.strokeStyle = '#27272a'
+        ctx.lineWidth = 2.5
+        // Front axle
+        ctx.beginPath()
+        ctx.moveTo(halfL * 0.52, -halfW * 0.78)
+        ctx.lineTo(halfL * 0.52, halfW * 0.78)
+        ctx.stroke()
+        // Rear axle
+        ctx.beginPath()
+        ctx.moveTo(-halfL * 0.52, -halfW * 0.78)
+        ctx.lineTo(-halfL * 0.52, halfW * 0.78)
+        ctx.stroke()
 
-        // Front tires (steer rotation)
-        for (const side of [-1, 1]) {
+        // Helper to render one high-fidelity wheel
+        const renderWheel = (wx, wy, ang = 0) => {
           ctx.save()
-          const fty = side === -1 ? -halfW * 0.95 + th / 2 : halfW * 0.95 - th / 2
-          ctx.translate(halfL * 0.55, fty)
-          ctx.rotate(steerAngle)
-          ctx.fillStyle = '#18181b'
-          ctx.fillRect(-tw / 2, -th / 2, tw, th)
-          ctx.fillStyle = '#52525b'
-          ctx.fillRect(-tw / 4, -th / 2 + 1, tw / 2, th - 2)
+          ctx.translate(wx, wy)
+          if (ang !== 0) ctx.rotate(ang)
+
+          // Tire drop shadow
+          ctx.fillStyle = 'rgba(0, 0, 0, 0.4)'
+          if (typeof ctx.roundRect === 'function') {
+            ctx.beginPath()
+            ctx.roundRect(-tw / 2 + 1, -th / 2 + 1.5, tw, th, 2.5)
+            ctx.fill()
+          }
+
+          // Outer rubber tire (rounded)
+          ctx.fillStyle = '#141417'
+          if (typeof ctx.roundRect === 'function') {
+            ctx.beginPath()
+            ctx.roundRect(-tw / 2, -th / 2, tw, th, 2.5)
+            ctx.fill()
+          } else {
+            ctx.fillRect(-tw / 2, -th / 2, tw, th)
+          }
+
+          // Center tire tread line
+          ctx.strokeStyle = '#27272a'
+          ctx.lineWidth = 1
+          ctx.beginPath()
+          ctx.moveTo(-tw / 2 + 2, 0)
+          ctx.lineTo(tw / 2 - 2, 0)
+          ctx.stroke()
+
+          // Metallic alloy rim
+          ctx.fillStyle = '#71717a'
+          if (typeof ctx.roundRect === 'function') {
+            ctx.beginPath()
+            ctx.roundRect(-tw * 0.28, -th * 0.32, tw * 0.56, th * 0.64, 1.5)
+            ctx.fill()
+          } else {
+            ctx.fillRect(-tw * 0.28, -th * 0.32, tw * 0.56, th * 0.64)
+          }
+
+          // Chrome center hubcap
+          ctx.fillStyle = '#f4f4f5'
+          ctx.beginPath()
+          ctx.arc(0, 0, 1.2, 0, Math.PI * 2)
+          ctx.fill()
+
           ctx.restore()
         }
+
+        // Rear tires (fixed)
+        renderWheel(-halfL * 0.52, -halfW * 0.78, 0)
+        renderWheel(-halfL * 0.52, halfW * 0.78, 0)
+
+        // Front tires (steered)
+        renderWheel(halfL * 0.52, -halfW * 0.78, steerAngle)
+        renderWheel(halfL * 0.52, halfW * 0.78, steerAngle)
 
         // Car Body Drop Shadow
         ctx.fillStyle = 'rgba(0, 0, 0, 0.45)'
         ctx.beginPath()
         if (typeof ctx.roundRect === 'function') {
-          ctx.roundRect(-halfL * 0.85 + 2, -halfW * 0.75 + 2, L * 0.85, W * 0.75, 4)
+          ctx.roundRect(-halfL * 0.85 + 2, -halfW * 0.55 + 2, L * 0.85, W * 0.55, 4)
         } else {
-          ctx.rect(-halfL * 0.85 + 2, -halfW * 0.75 + 2, L * 0.85, W * 0.75)
+          ctx.rect(-halfL * 0.85 + 2, -halfW * 0.55 + 2, L * 0.85, W * 0.55)
         }
         ctx.fill()
 
-        // Aerodynamic Chassis Body
+        // Aerodynamic GT Chassis Body with sculpted wheel arches
         ctx.fillStyle = color
         ctx.beginPath()
-        ctx.moveTo(halfL * 0.85, 0)
-        ctx.lineTo(halfL * 0.75, -halfW * 0.65)
-        ctx.lineTo(halfL * 0.2, -halfW * 0.7)
-        ctx.lineTo(-halfL * 0.6, -halfW * 0.7)
-        ctx.lineTo(-halfL * 0.85, -halfW * 0.55)
-        ctx.lineTo(-halfL * 0.85, halfW * 0.55)
-        ctx.lineTo(-halfL * 0.6, halfW * 0.7)
-        ctx.lineTo(halfL * 0.2, halfW * 0.7)
-        ctx.lineTo(halfL * 0.75, halfW * 0.65)
+        ctx.moveTo(halfL * 0.88, 0)
+        ctx.lineTo(halfL * 0.76, -halfW * 0.52)
+        ctx.lineTo(halfL * 0.58, -halfW * 0.52)
+        ctx.lineTo(halfL * 0.42, -halfW * 0.48)
+        ctx.lineTo(halfL * 0.2, -halfW * 0.52)
+        ctx.lineTo(-halfL * 0.35, -halfW * 0.52)
+        ctx.lineTo(-halfL * 0.45, -halfW * 0.48)
+        ctx.lineTo(-halfL * 0.65, -halfW * 0.52)
+        ctx.lineTo(-halfL * 0.88, -halfW * 0.46)
+        ctx.lineTo(-halfL * 0.88, halfW * 0.46)
+        ctx.lineTo(-halfL * 0.65, halfW * 0.52)
+        ctx.lineTo(-halfL * 0.45, halfW * 0.48)
+        ctx.lineTo(-halfL * 0.35, halfW * 0.52)
+        ctx.lineTo(halfL * 0.2, halfW * 0.52)
+        ctx.lineTo(halfL * 0.42, halfW * 0.48)
+        ctx.lineTo(halfL * 0.58, halfW * 0.52)
+        ctx.lineTo(halfL * 0.76, halfW * 0.52)
         ctx.closePath()
         ctx.fill()
 
@@ -752,7 +812,7 @@ export default function Cutline() {
 
         // Front Splitter Lip
         ctx.fillStyle = '#111115'
-        ctx.fillRect(halfL * 0.72, -halfW * 0.6, L * 0.12, W * 1.2)
+        ctx.fillRect(halfL * 0.75, -halfW * 0.52, L * 0.1, W * 1.04)
 
         // Cockpit / Windshield Glass
         ctx.fillStyle = '#0a0e17'
