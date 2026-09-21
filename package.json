@@ -14,7 +14,8 @@
     "blast:dm": "node server/blastworks-dm.js",
     "blockout3d": "node server/blockout3d-server.js",
     "drillers": "node server/voiddrillers-server.js",
-    "cipher": "node server/cipherrun-server.js"
+    "cipher": "node server/cipherrun-server.js",
+    "cutline": "node server/cutline-server.js"
   },
   "dependencies": {
     "react": "^19.2.8",
