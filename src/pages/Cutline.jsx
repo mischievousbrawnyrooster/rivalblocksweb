@@ -245,19 +245,11 @@ function statusLine(hud, myId) {
     }
     return 'Race concluded. Restarting shortly.'
   }
-  if (me && !me.alive) {
-    return 'Eliminated on the cut. Spectating the remaining field.'
-  }
   if (hud.phase === 'countdown') {
     return `Grid countdown active. Green flag in ${hud.countdown}s.`
   }
-  const lastId = hud.order?.[hud.order.length - 1]
-  const lastCar = hud.cars?.find((c) => c.id === lastId)
-  if (lastCar?.id === myId) {
-    return 'Warning: you are running in elimination position on the cut.'
-  }
-  if (lastCar) {
-    return `Race under way. ${lastCar.name} is running last on the cut.`
+  if (me?.place != null) {
+    return `Race under way. Lap ${hud.lap + 1} of ${hud.laps}. Running in P${me.place}.`
   }
   return 'Race under way.'
 }
@@ -447,7 +439,7 @@ export default function Cutline() {
       const cars = sampled.players ?? sampled.cars ?? []
       const palette = resolvePalette()
 
-      // --- 1. Follow Camera Viewport ----------------------------------------
+      // --- 1. Follow Camera & Heading-Up Orientation -------------------------
       const me = cars.find((c) => c.id === myIdRef.current)
       const aliveCars = cars.filter((c) => c.alive)
       const leaderCar = aliveCars[0] ?? cars[0]
@@ -455,34 +447,28 @@ export default function Cutline() {
 
       const focusX = focusCar ? focusCar.x : GRID / 2
       const focusY = focusCar ? focusCar.y : GRID / 2
+      const focusHeading = focusCar ? focusCar.heading : -Math.PI / 2
 
       const viewW = VIEW_CELLS
       const u = CANVAS / viewW // Screen pixels per world tile (e.g. 768 / 22 = 34.9px)
-      const viewH = CANVAS / u
 
-      const camX = Math.max(0, Math.min(GRID - viewW, focusX - viewW / 2))
-      const camY = Math.max(0, Math.min(GRID - viewH, focusY - viewH / 2))
-      const offX = camX * u
-      const offY = camY * u
+      // Screen anchor position for the followed car (centered horizontally, 56% down vertically)
+      const screenX = CANVAS / 2
+      const screenY = CANVAS * 0.56
 
-      // --- 2. Background Track Blit -----------------------------------------
-      if (track) {
-        ctx.drawImage(
-          track,
-          camX * TILE_RES,
-          camY * TILE_RES,
-          viewW * TILE_RES,
-          viewH * TILE_RES,
-          0,
-          0,
-          CANVAS,
-          CANVAS,
-        )
-      }
+      // Rotate camera so car heading always points North (-Y in screen coordinates)
+      const camRot = -Math.PI / 2 - focusHeading
 
-      // --- 3. World Space Elements (Camera Offset) --------------------------
+      // --- 2. Render World Inside Rotated & Translated Camera Transform ---
       ctx.save()
-      ctx.setTransform(1, 0, 0, 1, -offX, -offY)
+      ctx.translate(screenX, screenY)
+      ctx.rotate(camRot)
+      ctx.translate(-focusX * u, -focusY * u)
+
+      // Background Track Blit (draws the full circuit into world coordinates)
+      if (track) {
+        ctx.drawImage(track, 0, 0, track.width, track.height, 0, 0, GRID * u, GRID * u)
+      }
 
       // 3a. Update & Draw Dynamic Skid Marks
       for (const car of cars) {
@@ -856,65 +842,57 @@ export default function Cutline() {
           ctx.fill()
         }
 
-        // Roof Number Roundel / Place Badge
+        // Roof Number Roundel / Place Badge (kept upright relative to screen)
         if (alive && car.place != null) {
           ctx.fillStyle = '#ffffff'
           ctx.beginPath()
           ctx.ellipse(-L * 0.02, 0, 7.5, 7.5, 0, 0, Math.PI * 2)
           ctx.fill()
 
+          ctx.save()
+          ctx.translate(-L * 0.02, 0)
+          ctx.rotate(-car.heading - camRot)
           ctx.fillStyle = '#09090b'
           ctx.font = 'bold 9px monospace'
           ctx.textAlign = 'center'
           ctx.textBaseline = 'middle'
-          ctx.fillText(String(car.place), -L * 0.02, 0.5)
-        }
-
-        // Eliminated Cross Mark
-        if (!alive) {
-          ctx.strokeStyle = '#ef4444'
-          ctx.lineWidth = 2.5
-          ctx.beginPath()
-          ctx.moveTo(-halfL * 0.6, -halfW * 0.6)
-          ctx.lineTo(halfL * 0.6, halfW * 0.6)
-          ctx.moveTo(-halfL * 0.6, halfW * 0.6)
-          ctx.lineTo(halfL * 0.6, -halfW * 0.6)
-          ctx.stroke()
+          ctx.fillText(String(car.place), 0, 0.5)
+          ctx.restore()
         }
 
         ctx.restore()
-
-        // Local Car "YOU" Floating Indicator
-        if (isMe && alive) {
-          ctx.save()
-          const bob = Math.sin(now / 150) * 2.5
-          const indicatorY = cy - u * 1.1 + bob
-
-          ctx.fillStyle = '#3ad1c4'
-          ctx.beginPath()
-          ctx.moveTo(cx, indicatorY + 5)
-          ctx.lineTo(cx - 5, indicatorY - 2)
-          ctx.lineTo(cx + 5, indicatorY - 2)
-          ctx.closePath()
-          ctx.fill()
-
-          ctx.fillStyle = 'rgba(11, 11, 13, 0.85)'
-          ctx.fillRect(cx - 14, indicatorY - 15, 28, 12)
-          ctx.strokeStyle = '#3ad1c4'
-          ctx.lineWidth = 1
-          ctx.strokeRect(cx - 14, indicatorY - 15, 28, 12)
-
-          ctx.fillStyle = '#3ad1c4'
-          ctx.font = 'bold 8px monospace'
-          ctx.textAlign = 'center'
-          ctx.textBaseline = 'middle'
-          ctx.fillText('YOU', cx, indicatorY - 9)
-
-          ctx.restore()
-        }
       }
 
-      ctx.restore() // Restore world transform
+      ctx.restore() // Restore world transform to screen space
+
+      // --- 3. Screen Space UI Elements --------------------------------------
+      // Local Car "YOU" Floating Indicator (always upright on screen)
+      if (me && me.alive) {
+        ctx.save()
+        const bob = Math.sin(now / 150) * 2.5
+        const indicatorY = screenY - u * 1.25 + bob
+
+        ctx.fillStyle = '#3ad1c4'
+        ctx.beginPath()
+        ctx.moveTo(screenX, indicatorY + 5)
+        ctx.lineTo(screenX - 5, indicatorY - 2)
+        ctx.lineTo(screenX + 5, indicatorY - 2)
+        ctx.closePath()
+        ctx.fill()
+
+        ctx.fillStyle = 'rgba(11, 11, 13, 0.85)'
+        ctx.fillRect(screenX - 14, indicatorY - 15, 28, 12)
+        ctx.strokeStyle = '#3ad1c4'
+        ctx.lineWidth = 1
+        ctx.strokeRect(screenX - 14, indicatorY - 15, 28, 12)
+
+        ctx.fillStyle = '#3ad1c4'
+        ctx.font = 'bold 8px monospace'
+        ctx.textAlign = 'center'
+        ctx.textBaseline = 'middle'
+        ctx.fillText('YOU', screenX, indicatorY - 9)
+        ctx.restore()
+      }
 
       // --- 4. Top-Right Minimap (Circuit Radar) ------------------------------
       const pad = 14
@@ -923,12 +901,16 @@ export default function Cutline() {
       const mmX = CANVAS - mmW - pad
       const mmY = pad
 
-      // Dynamic fade when any car is under the minimap
+      // Dynamic fade when any car is under the minimap in screen space
       const nearMap = u * 1.5
+      const cosCam = Math.cos(camRot)
+      const sinCam = Math.sin(camRot)
       const behindMap = cars.some((c) => {
         if (!c.alive) return false
-        const sx = c.x * u - offX
-        const sy = c.y * u - offY
+        const dx = (c.x - focusX) * u
+        const dy = (c.y - focusY) * u
+        const sx = screenX + dx * cosCam - dy * sinCam
+        const sy = screenY + dx * sinCam + dy * cosCam
         return (
           sx > mmX - nearMap &&
           sx < mmX + mmW + nearMap &&
@@ -964,48 +946,32 @@ export default function Cutline() {
         ctx.drawImage(track, 0, 0, track.width, track.height, mmX + 4, mmY + 4, mmW - 8, mmH - 8)
       }
 
-      // Camera Viewport Box on Minimap
-      const camVx = mmX + 4 + (camX / GRID) * (mmW - 8)
-      const camVy = mmY + 4 + (camY / GRID) * (mmH - 8)
-      const camVw = (viewW / GRID) * (mmW - 8)
-      const camVh = (viewH / GRID) * (mmH - 8)
-
-      ctx.fillStyle = 'rgba(58, 209, 196, 0.1)'
-      ctx.fillRect(camVx, camVy, camVw, camVh)
+      // Camera FOV Wedge & Heading on Minimap
+      const fx = mmX + 4 + (focusX / GRID) * (mmW - 8)
+      const fy = mmY + 4 + (focusY / GRID) * (mmH - 8)
+      const fovAngle = 0.55
+      const fovLen = 14
+      ctx.fillStyle = 'rgba(58, 209, 196, 0.22)'
+      ctx.beginPath()
+      ctx.moveTo(fx, fy)
+      ctx.arc(fx, fy, fovLen, focusHeading - fovAngle, focusHeading + fovAngle)
+      ctx.closePath()
+      ctx.fill()
       ctx.strokeStyle = '#3ad1c4'
       ctx.lineWidth = 1.2
-      ctx.strokeRect(camVx, camVy, camVw, camVh)
+      ctx.stroke()
 
       // Driver Blips
-      const lastCarId = sampled.order?.[sampled.order.length - 1]
       for (const car of cars) {
         const bx = mmX + 4 + (car.x / GRID) * (mmW - 8)
         const by = mmY + 4 + (car.y / GRID) * (mmH - 8)
         const isMeCar = car.id === myIdRef.current
-        const isCarLast = sampled.phase === 'racing' && car.id === lastCarId
         const carColor = palette[car.slot % 8]
-
-        if (!car.alive) {
-          ctx.fillStyle = '#52525b'
-          ctx.beginPath()
-          ctx.arc(bx, by, 2, 0, Math.PI * 2)
-          ctx.fill()
-          continue
-        }
 
         ctx.fillStyle = carColor
         ctx.beginPath()
         ctx.arc(bx, by, 3.5, 0, Math.PI * 2)
         ctx.fill()
-
-        if (isCarLast) {
-          const pulse = 1 + 0.3 * Math.sin(now / 120)
-          ctx.strokeStyle = '#ef4444'
-          ctx.lineWidth = 1.5
-          ctx.beginPath()
-          ctx.arc(bx, by, 5 * pulse, 0, Math.PI * 2)
-          ctx.stroke()
-        }
 
         if (isMeCar) {
           ctx.strokeStyle = '#ffffff'
@@ -1024,42 +990,6 @@ export default function Cutline() {
       ctx.fillText('CIRCUIT RADAR', mmX + 8, mmY + 8)
 
       ctx.restore()
-
-      // Cutline elimination banner toast (shown for 3.5s after any cut)
-      if (sampled.cut && sampled.phase === 'racing') {
-        const cutAge = sampled.elapsed - sampled.cut.at
-        if (cutAge >= 0 && cutAge < 3500) {
-          const cutFade = cutAge > 2800 ? (3500 - cutAge) / 700 : 1
-          ctx.save()
-          ctx.globalAlpha = cutFade
-          const bannerW = 380
-          const bannerH = 34
-          const bannerX = (CANVAS - bannerW) / 2
-          const bannerY = 16
-          ctx.fillStyle = 'rgba(17, 17, 22, 0.94)'
-          if (typeof ctx.roundRect === 'function') {
-            ctx.beginPath()
-            ctx.roundRect(bannerX, bannerY, bannerW, bannerH, 4)
-            ctx.fill()
-          } else {
-            ctx.fillRect(bannerX, bannerY, bannerW, bannerH)
-          }
-          ctx.strokeStyle = '#ef4444'
-          ctx.lineWidth = 1.5
-          if (typeof ctx.roundRect === 'function') {
-            ctx.stroke()
-          } else {
-            ctx.strokeRect(bannerX, bannerY, bannerW, bannerH)
-          }
-
-          ctx.fillStyle = '#ef4444'
-          ctx.font = 'bold 12px monospace'
-          ctx.textAlign = 'center'
-          ctx.textBaseline = 'middle'
-          ctx.fillText(`CUTLINE: ${sampled.cut.name.toUpperCase()} ELIMINATED`, CANVAS / 2, bannerY + bannerH / 2)
-          ctx.restore()
-        }
-      }
 
       // --- 5. Non-Racing Overlay Banners ------------------------------------
       if (sampled.phase !== 'racing') {
@@ -1112,8 +1042,8 @@ export default function Cutline() {
         <p className="rule-label">Cutline</p>
         <h1 className="display mt-2 text-4xl sm:text-5xl">Cutline</h1>
         <p className="mt-5 leading-relaxed text-muted">
-          Eight haulers, one shared asphalt loop, and no chase camera. The car running last on the
-          leader crossing the line gets cut on the spot. Last driver standing takes the flag.
+          Eight haulers, one shared asphalt loop. Chase camera locked forward to your car. Complete
+          the circuit laps and take the checkered flag.
         </p>
 
         <form
@@ -1198,25 +1128,7 @@ export default function Cutline() {
   const cars = hud?.cars ?? []
   const me = cars.find((c) => c.id === myId)
   const aliveCars = cars.filter((c) => c.alive)
-  const lastCarId = hud?.order?.[hud.order.length - 1]
-  const lastCar = cars.find((c) => c.id === lastCarId)
-  const isMeLast = Boolean(lastCar && lastCar.id === myId)
-
-  let cutWarningText = 'CLEAR'
-  if (hud?.phase === 'racing') {
-    if (isMeLast) {
-      cutWarningText = `YOU (P${lastCar.place})`
-    } else if (lastCar) {
-      cutWarningText = `${lastCar.name} (P${lastCar.place})`
-    }
-  } else if (hud?.phase === 'countdown') {
-    cutWarningText = `GRID [${hud.countdown}s]`
-  } else if (hud?.phase === 'over') {
-    const winnerCar = cars.find((c) => c.id === hud.winner)
-    cutWarningText = winnerCar ? `${winnerCar.name} WINS` : 'FINISHED'
-  } else {
-    cutWarningText = 'LOBBY'
-  }
+  const leaderCar = aliveCars[0] ?? cars[0]
 
   // Sorted roster by place/order
   const sortedRoster = [...cars].sort((a, b) => {
@@ -1229,7 +1141,7 @@ export default function Cutline() {
       <div className="flex flex-wrap items-baseline justify-between gap-3">
         <div className="flex flex-wrap items-baseline gap-3">
           <h1 className="display text-3xl">Cutline</h1>
-          <span className="rule-label">{circuitName || 'Circuit'} Elimination</span>
+          <span className="rule-label">{circuitName || 'Circuit'} Circuit</span>
         </div>
         <Link
           to="/games/cutline"
@@ -1278,7 +1190,7 @@ export default function Cutline() {
             <div className="bg-bg p-2.5 h-16 flex flex-col justify-center">
               <p className="rule-label">Place</p>
               <p className="mt-0.5 font-mono text-base font-bold tabular-nums text-fg">
-                {me?.place != null ? `P${me.place}/${aliveCars.length}` : '-'}
+                {me?.place != null ? `P${me.place}/${cars.length}` : '-'}
               </p>
             </div>
             <div className="bg-bg p-2.5 h-16 flex flex-col justify-center">
@@ -1294,13 +1206,9 @@ export default function Cutline() {
               </p>
             </div>
             <div className="bg-bg p-2.5 h-16 flex flex-col justify-center">
-              <p className="rule-label">Cut Warning</p>
-              <p
-                className={`mt-0.5 font-mono text-sm font-bold truncate ${
-                  isMeLast ? 'text-red-400 animate-pulse' : 'text-warn'
-                }`}
-              >
-                {cutWarningText}
+              <p className="rule-label">Leader</p>
+              <p className="mt-0.5 font-mono text-sm font-bold truncate text-fg">
+                {leaderCar ? `${leaderCar.name} (P1)` : '-'}
               </p>
             </div>
           </div>
@@ -1319,7 +1227,6 @@ export default function Cutline() {
                 const isCarMe = car.id === myId
                 const isAlive = car.alive
                 const color = getPlayerColor(car.slot)
-                const isCarOnCut = hud?.phase === 'racing' && car.id === lastCarId
 
                 return (
                   <li key={car.id} className="flex items-center gap-2.5 text-sm">
@@ -1337,11 +1244,6 @@ export default function Cutline() {
                     </span>
                     {isCarMe && <span className="rule-label shrink-0">you</span>}
                     {car.bot && <span className="rule-label shrink-0">bot</span>}
-                    {isCarOnCut && (
-                      <span className="text-[0.625rem] text-red-400 font-mono uppercase tracking-wider font-bold">
-                        ON CUT
-                      </span>
-                    )}
                     {car.boosting && isAlive && (
                       <span className="text-[0.625rem] text-flare font-mono uppercase tracking-wider">
                         Boost
@@ -1428,7 +1330,7 @@ export default function Cutline() {
               </li>
               <li className="flex items-center gap-2">
                 <span className="font-mono font-bold text-fg">▦ Line:</span>
-                <span>Chequered checkpoint and cut execution line.</span>
+                <span>Chequered start, finish and timing line.</span>
               </li>
             </ul>
           </div>

@@ -739,24 +739,10 @@ export function runningOrder(match) {
 }
 
 /**
- * The cut: when the leader crosses the line, whoever is last in running order
- * right now leaves the race, wherever they happen to be on the track.
- *
- * The race never waits for the tail to trail in. A car about to be lapped is
- * gone before it is lapped, which is the point of the format and the reason
- * the pressure sits mid-pack instead of at the front.
+ * Eliminations disabled per user instruction: all cars stay alive throughout the race.
  */
 export function applyCut(match) {
-  if (match.lap <= GRACE_LAPS) return null
-
-  const order = runningOrder(match)
-  if (order.length <= 1) return null
-
-  const doomed = order[order.length - 1]
-  doomed.alive = false
-  doomed.finishedAt = match.elapsed
-  match.cut = { id: doomed.id, name: doomed.name, at: match.elapsed }
-  return doomed
+  return null
 }
 
 // --- Slipstream -------------------------------------------------------------
@@ -1042,13 +1028,11 @@ export function tick(match, dtMs = TICK_MS, rng = Math.random) {
   resolveContact(match)
   updateDraft(match)
 
-  // The cut fires on the leader completing a lap, and removes whoever is last
-  // in running order at that instant. The race never waits for the tail.
+  // Eliminations disabled: cars remain alive.
   if (match.lap > leaderLapBefore) applyCut(match)
 
-  const running = [...match.cars.values()].filter((c) => c.alive)
-  if (running.length <= 1 || (running[0] && running[0].lap >= match.laps)) {
-    const order = runningOrder(match)
+  const order = runningOrder(match)
+  if (order[0] && order[0].lap >= match.laps) {
     match.winner = order[0]?.id ?? null
     match.phase = 'over'
     match.final = true

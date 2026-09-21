@@ -843,34 +843,20 @@ test('running order sorts by lap, then checkpoints, then distance to the next', 
   )
 })
 
-test('the cut removes the car last in running order, not the last to finish', () => {
+test('applyCut does not eliminate cars (eliminations disabled)', () => {
   const match = racing(3)
-  // Join order is deliberately the reverse of running order: c, joined
-  // last, is given the most progress, and a, joined first, is given the
-  // least. An implementation that cut by insertion order instead of
-  // runningOrder would reach for c here, not a, so the two cannot agree by
-  // accident.
   const [a, b, c] = [...match.cars.values()]
 
-  completeLap(match, c)                       // joined last, one lap up: leads
-  takeCheckpoint(match, b, 1)                 // joined second, middling progress
-  // a has taken nothing at all: joined first, but genuinely last in running order
+  completeLap(match, c)
+  takeCheckpoint(match, b, 1)
 
-  match.lap = GRACE_LAPS + 1 // past the grace lap, so a cut is due
-  applyCut(match)
+  match.lap = GRACE_LAPS + 1
+  const cut = applyCut(match)
 
-  assert.equal(
-    a.alive,
-    false,
-    `expected a (last in running order, first joined) to be cut; instead cut was ${match.cut?.id}`,
-  )
-  assert.equal(b.alive, true, 'b is not last in running order and must survive the cut')
-  assert.equal(c.alive, true, 'c leads and must survive the cut')
-  assert.equal(
-    match.cut?.id,
-    a.id,
-    `expected the cut to name a (${a.id}), got ${match.cut?.id}`,
-  )
+  assert.equal(cut, null, 'applyCut must return null when eliminations are disabled')
+  assert.equal(a.alive, true, 'a must survive with eliminations disabled')
+  assert.equal(b.alive, true, 'b must survive with eliminations disabled')
+  assert.equal(c.alive, true, 'c must survive with eliminations disabled')
 })
 
 test('lap 1 takes no cut', () => {
@@ -880,21 +866,21 @@ test('lap 1 takes no cut', () => {
   assert.equal([...match.cars.values()].filter((c) => c.alive).length, 3, 'nobody leaves on lap 1')
 })
 
-test('the cut never empties the grid below one car', () => {
+test('the cut never empties the grid', () => {
   const match = racing(2)
   match.lap = GRACE_LAPS + 1
   applyCut(match)
-  assert.equal([...match.cars.values()].filter((c) => c.alive).length, 1)
+  assert.equal([...match.cars.values()].filter((c) => c.alive).length, 2)
 
   applyCut(match)
   assert.equal(
     [...match.cars.values()].filter((c) => c.alive).length,
-    1,
-    'a race with one car left cuts nobody',
+    2,
+    'cars remain on grid with eliminations disabled',
   )
 })
 
-test('an eliminated car is skipped by the cut and by running order', () => {
+test('an eliminated car is skipped by running order', () => {
   const match = racing(3)
   const cars = [...match.cars.values()]
   cars[2].alive = false
@@ -903,7 +889,7 @@ test('an eliminated car is skipped by the cut and by running order', () => {
 
   match.lap = GRACE_LAPS + 1
   applyCut(match)
-  assert.equal(cars.filter((c) => c.alive).length, 1)
+  assert.equal(cars.filter((c) => c.alive).length, 2)
 })
 
 test('a checkpoint is only taken from within CHECKPOINT_RADIUS', () => {
@@ -1277,8 +1263,8 @@ test('a race resolves to exactly one winner and sets final', () => {
   assert.equal(match.final, true)
   assert.equal(
     [...match.cars.values()].filter((c) => c.alive).length,
-    1,
-    'exactly one car is left running',
+    4,
+    'all four cars finish without elimination',
   )
 })
 
@@ -1404,6 +1390,6 @@ test('every circuit resolves to exactly one winner with bots only', () => {
 
     const alive = [...match.cars.values()].filter((c) => c.alive).length
     assert.equal(match.phase, 'over', `${CIRCUITS[ci].name} did not resolve`)
-    assert.equal(alive, 1, `${CIRCUITS[ci].name} ended with ${alive} car(s) alive, not 1`)
+    assert.equal(alive, 4, `${CIRCUITS[ci].name} ended with ${alive} car(s) alive, not 4`)
   }
 })
