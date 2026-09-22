@@ -2137,6 +2137,7 @@ test('at least some circuits contain a chicane, and a chicane counter turns', ()
 import {
   RAMP_MIN_SPEED,
   AIR_MS,
+  AIR_STEER,
 } from './cutline.js'
 
 test('a ramp launches a car that is fast enough, and ignores one that is not', () => {
@@ -2164,11 +2165,15 @@ test('an airborne car ignores hazards and walls, then lands', () => {
   const match = racing(1)
   const [car] = [...match.cars.values()]
   const cp = match.checkpoints[3]
+  const tx = Math.round(cp.x)
+  const ty = Math.round(cp.y)
 
-  car.x = cp.x
-  car.y = cp.y
+  // Ensure known tarmac tile at checkpoint
+  match.grid[ty * GRID + tx] = S_TARMAC
+  car.x = tx
+  car.y = ty
   car.heading = 0
-  car.vx = 10
+  car.vx = RAMP_MIN_SPEED + 2
   car.vy = 0
   car.airUntil = match.now + AIR_MS
 
@@ -2183,10 +2188,64 @@ test('an airborne car ignores hazards and walls, then lands', () => {
   assert.ok(!(match.now < (car.spinUntil ?? 0)), 'an airborne car must not be spun')
   assert.ok(!match.hazards.some((h) => h.spent), 'a banana must not be consumed from the air')
 
-  // And it lands.
+  // Wall bypass: a wall directly in front of the airborne car is passed over.
+  match.grid[ty * GRID + (tx + 1)] = S_WALL
+  car.x = tx
+  car.y = ty
+  car.heading = 0
+  car.vx = RAMP_MIN_SPEED
+  car.vy = 0
+  car.airUntil = match.now + AIR_MS
+  stepCar(match, car, 0.05)
+  assert.ok(car.vx > 0, 'airborne car must not bounce off wall')
+  assert.ok(car.x > tx, 'airborne car must advance over the wall')
+
+  // Grounded car facing a wall rebounds with -WALL_HIT_KEEP.
+  car.x = tx
+  car.y = ty
+  car.heading = 0
+  car.vx = RAMP_MIN_SPEED
+  car.vy = 0
+  car.airUntil = 0
+  stepCar(match, car, 0.05)
+  assert.ok(car.vx < 0, 'grounded car must rebound with negative velocity')
+
+  // Airborne steering: angular turn rate is scaled down by AIR_STEER.
+  match.grid[ty * GRID + (tx + 1)] = S_TARMAC
+  car.x = tx
+  car.y = ty
+  car.heading = 0
+  car.vx = RAMP_MIN_SPEED
+  car.vy = 0
+  car.steer = 1
+  car.airUntil = match.now + AIR_MS
+  stepCar(match, car, 0.05)
+  const airTurn = car.heading
+
+  car.x = tx
+  car.y = ty
+  car.heading = 0
+  car.vx = RAMP_MIN_SPEED
+  car.vy = 0
+  car.steer = 1
+  car.airUntil = 0
+  stepCar(match, car, 0.05)
+  const groundTurn = car.heading
+
+  assert.ok(groundTurn > 0, 'grounded car must turn with positive steer')
+  assert.ok(
+    Math.abs(airTurn - groundTurn * AIR_STEER) < 1e-6,
+    `airborne steering (${airTurn}) must scale ground turn (${groundTurn}) by AIR_STEER (${AIR_STEER})`,
+  )
+
+  // And it lands: hazards now affect the car again.
+  car.x = tx
+  car.y = ty
+  car.airUntil = match.now + AIR_MS
   match.now += AIR_MS + 1
   applyHazards(match, car)
   assert.ok(!(match.now < car.airUntil), 'the car must come down')
+  assert.equal(car.onSlick, true, 'a landed car is now affected by a slick')
 })
 
 test('the snapshot tells the page a car is airborne', () => {
