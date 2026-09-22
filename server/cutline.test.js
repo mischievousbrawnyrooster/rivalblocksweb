@@ -1705,3 +1705,99 @@ test('the finish line counts a crossing anywhere across the road, not a circle',
   updateProgress(match, car)
   assert.equal(car.lap, after, 'a stationary car must not bank a second lap')
 })
+
+import {
+  CAR_LENGTH,
+  CAR_WIDTH,
+  CAR_RADIUS,
+  carCorners,
+  resolveContact,
+} from './cutline.js'
+
+test('a car nose-first into a wall registers contact before its centre is inside', () => {
+  // Walls were tested at the car's rounded centre alone. The body is
+  // CAR_LENGTH long, so the nose reached most of a tile into a wall with
+  // nothing registering, which is why contact felt unassuming.
+  const match = racing(1)
+  const [car] = [...match.cars.values()]
+
+  // Find an on-track tile with a wall directly beside it, derived from real
+  // circuit data rather than a guessed coordinate.
+  const line = match.centerline
+  let onX = null
+  let onY = null
+  let dirX = 0
+  let dirY = 0
+  for (let i = 0; i < line.length && onX === null; i++) {
+    const p = line[i]
+    const a = line[(i - 1 + line.length) % line.length]
+    const b = line[(i + 1) % line.length]
+    const tx = b.x - a.x
+    const ty = b.y - a.y
+    const len = Math.hypot(tx, ty) || 1
+    const nx = -ty / len
+    const ny = tx / len
+    for (let step = 1; step < GRID; step++) {
+      const cx = Math.round(p.x + nx * step)
+      const cy = Math.round(p.y + ny * step)
+      if (surfaceAt(match.grid, cx, cy) === S_WALL) {
+        onX = Math.round(p.x + nx * (step - 1))
+        onY = Math.round(p.y + ny * (step - 1))
+        dirX = nx
+        dirY = ny
+        break
+      }
+    }
+  }
+  assert.ok(onX !== null, 'the circuit must have a wall beside the road')
+
+  // Place the car so its CENTRE is still on track and its NOSE drives into the wall.
+  car.heading = Math.atan2(dirY, dirX)
+  car.x = onX - dirX * 0.5
+  car.y = onY - dirY * 0.5
+  car.vx = Math.cos(car.heading) * 6
+  car.vy = Math.sin(car.heading) * 6
+  const speedBefore = Math.hypot(car.vx, car.vy)
+
+  for (let i = 0; i < 6; i++) stepCar(match, car, TICK_MS / 1000)
+
+  // The nose must have been stopped. Without corner testing the centre walks
+  // in before anything happens and the car keeps its speed.
+  const noseX = car.x + Math.cos(car.heading) * (CAR_LENGTH / 2)
+  const noseY = car.y + Math.sin(car.heading) * (CAR_LENGTH / 2)
+  assert.notEqual(
+    surfaceAt(match.grid, Math.round(noseX), Math.round(noseY)),
+    S_WALL,
+    'the nose must never come to rest inside a wall',
+  )
+  assert.ok(Math.hypot(car.vx, car.vy) < speedBefore, 'contact must scrub speed')
+})
+
+test('two cars overlapping nose to tail register contact', () => {
+  // One circle of radius 0.45 covered 62% of a body 1.45 long, so cars visibly
+  // overlapped end to end without ever touching.
+  const match = racing(2)
+  const [a, b] = [...match.cars.values()]
+  const cp = match.checkpoints[3]
+
+  a.heading = 0
+  b.heading = 0
+  a.x = cp.x
+  a.y = cp.y
+  // Nose to tail, closer than the body length but further than one old circle.
+  b.x = cp.x + CAR_LENGTH * 0.7
+  b.y = cp.y
+
+  const gapBefore = Math.hypot(b.x - a.x, b.y - a.y)
+  resolveContact(match)
+  const gapAfter = Math.hypot(b.x - a.x, b.y - a.y)
+
+  assert.ok(gapAfter > gapBefore, `overlapping cars must be pushed apart, ${gapBefore} to ${gapAfter}`)
+})
+
+test('the collision shape is derived from the drawn car, not written twice', () => {
+  assert.equal(CAR_RADIUS, CAR_WIDTH / 2, 'CAR_RADIUS must derive from CAR_WIDTH')
+  assert.ok(CAR_LENGTH > CAR_WIDTH, 'a car is longer than it is wide')
+  assert.equal(carCorners({ x: 0, y: 0, heading: 0 }).length, 4)
+})
+

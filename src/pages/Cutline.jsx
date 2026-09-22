@@ -19,6 +19,8 @@ import {
   S_LINE,
   SURFACE_CHARS,
   decodeMap,
+  CAR_LENGTH,
+  CAR_WIDTH,
 } from '../../server/cutline.js'
 
 const CANVAS = 768
@@ -679,8 +681,10 @@ export default function Cutline() {
         ctx.translate(cx, cy)
         ctx.rotate(car.heading)
 
-        const L = u * 1.45 // ~50px
-        const W = u * 0.82 // ~29px
+        // Drawn from the same constants the collision shape derives from, so
+        // the car you see and the car you hit are the same size.
+        const L = u * CAR_LENGTH
+        const W = u * CAR_WIDTH
         const halfL = L / 2
         const halfW = W / 2
 

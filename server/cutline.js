@@ -563,7 +563,39 @@ export const TURN_FALLOFF = 0.45     // fraction of turn rate lost at top speed
 export const OFFTRACK_CAP = 6.5
 export const OFFTRACK_DRAG = 6.0
 export const WALL_HIT_KEEP = 0.25
-export const CAR_RADIUS = 0.45
+
+// The car's collision shape is DERIVED from the car that is drawn, so the two
+// cannot drift apart. They drifted in the first place because the page invented
+// its own numbers: it drew a body 1.45 by 0.82 while the rules used one circle
+// of radius 0.45 and tested walls at a single point at the car's centre. The
+// nose reaches CAR_LENGTH / 2 past that point, so a car could sit most of a
+// tile inside a wall with nothing registering.
+export const CAR_LENGTH = 1.45
+export const CAR_WIDTH = 0.82
+export const CAR_RADIUS = CAR_WIDTH / 2
+
+/** The four corners of a car's oriented body, nose-left, nose-right, tail-right, tail-left. */
+export function carCorners(car) {
+  const c = Math.cos(car.heading)
+  const s = Math.sin(car.heading)
+  const hl = CAR_LENGTH / 2
+  const hw = CAR_WIDTH / 2
+  return [
+    { x: car.x + c * hl - s * hw, y: car.y + s * hl + c * hw },
+    { x: car.x + c * hl + s * hw, y: car.y + s * hl - c * hw },
+    { x: car.x - c * hl + s * hw, y: car.y - s * hl - c * hw },
+    { x: car.x - c * hl - s * hw, y: car.y - s * hl + c * hw },
+  ]
+}
+
+/** Whether any corner of a car's body sits in a wall at a hypothetical position. */
+function bodyHitsWall(match, car, atX, atY) {
+  const probe = { x: atX, y: atY, heading: car.heading }
+  for (const p of carCorners(probe)) {
+    if (surfaceAt(match.grid, Math.round(p.x), Math.round(p.y)) === S_WALL) return true
+  }
+  return false
+}
 
 export const BOOST_MS = 3000         // the carried boost item
 export const STRIP_BOOST_MS = 1200   // crossing an S_BOOST strip on the track
@@ -670,14 +702,14 @@ export function stepCar(match, car, dt) {
   // 6. Integrate, then resolve contact one axis at a time so a car sliding
   //    along a wall keeps the component that is not blocked.
   const nx = car.x + car.vx * dt
-  if (surfaceAt(match.grid, Math.round(nx), Math.round(car.y)) === S_WALL && !offTrack) {
+  if (bodyHitsWall(match, car, nx, car.y) && !offTrack) {
     car.vx *= -WALL_HIT_KEEP
   } else {
     car.x = nx
   }
 
   const ny = car.y + car.vy * dt
-  if (surfaceAt(match.grid, Math.round(car.x), Math.round(ny)) === S_WALL && !offTrack) {
+  if (bodyHitsWall(match, car, car.x, ny) && !offTrack) {
     car.vy *= -WALL_HIT_KEEP
   } else {
     car.y = ny
@@ -695,22 +727,38 @@ export function stepCar(match, car, dt) {
   car.y = Math.max(0, Math.min(GRID - 1, car.y))
 }
 
-/** Cars push each other apart. Contact is a nuisance, never a weapon. */
-function resolveContact(match) {
+/** The two circle centres that make up a car's capsule, fore and aft. */
+function capsule(car) {
+  const off = CAR_LENGTH / 2 - CAR_RADIUS
+  const c = Math.cos(car.heading)
+  const s = Math.sin(car.heading)
+  return [
+    { x: car.x + c * off, y: car.y + s * off },
+    { x: car.x - c * off, y: car.y - s * off },
+  ]
+}
+
+export function resolveContact(match) {
   const cars = [...match.cars.values()].filter((c) => c.alive)
   for (let i = 0; i < cars.length; i++) {
     for (let j = i + 1; j < cars.length; j++) {
       const a = cars[i]
       const b = cars[j]
-      const dx = b.x - a.x
-      const dy = b.y - a.y
-      const d = Math.hypot(dx, dy)
+      // Nearest pair of circles between the two capsules. A car is two circles,
+      // so four pairs, and the closest one decides whether they touch.
+      let best = null
+      for (const pa of capsule(a)) {
+        for (const pb of capsule(b)) {
+          const d = Math.hypot(pb.x - pa.x, pb.y - pa.y)
+          if (!best || d < best.d) best = { d, pa, pb }
+        }
+      }
       const min = CAR_RADIUS * 2
-      if (d >= min || d === 0) continue
+      if (!best || best.d >= min || best.d === 0) continue
 
-      const push = (min - d) / 2
-      const ux = dx / d
-      const uy = dy / d
+      const push = (min - best.d) / 2
+      const ux = (best.pb.x - best.pa.x) / best.d
+      const uy = (best.pb.y - best.pa.y) / best.d
       a.x -= ux * push
       a.y -= uy * push
       b.x += ux * push
