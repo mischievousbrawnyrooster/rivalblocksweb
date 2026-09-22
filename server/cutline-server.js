@@ -175,26 +175,40 @@ wss.on('connection', (ws) => {
 // Tick loop
 let last = Date.now()
 setInterval(() => {
-  const now = Date.now()
-  const dt = Math.min(now - last, TICK_MS * 5)
-  last = now
+  try {
+    const now = Date.now()
+    const dt = Math.min(now - last, TICK_MS * 5)
+    last = now
 
-  tick(match, dt)
+    tick(match, dt)
 
-  if (keep.bank(match.phase === 'over' && match.final, raced)) {
-    match.board = keep.top()
-  }
+    if (keep.bank(match.phase === 'over' && match.final, raced)) {
+      match.board = keep.top()
+    }
 
-  if (match.phase === 'over' && match.cars.size > 0 && match.now - match.overSince >= POST_RACE_GRACE_MS) {
-    restartMatch()
-  }
+    if (match.phase === 'over' && match.cars.size > 0 && match.now - match.overSince >= POST_RACE_GRACE_MS) {
+      restartMatch()
+    }
 
-  // Stringified synchronously in the same turn as tick(), which is the only
-  // reason snapshot() may return live references. Never retain a frame.
-  const frame = JSON.stringify(snapshot(match))
-  for (const client of wss.clients) {
-    if (client.readyState === WebSocket.OPEN) client.send(frame)
+    // Stringified synchronously in the same turn as tick(), which is the only
+    // reason snapshot() may return live references. Never retain a frame.
+    const frame = JSON.stringify(snapshot(match))
+    for (const client of wss.clients) {
+      if (client.readyState === WebSocket.OPEN) {
+        try {
+          client.send(frame)
+        } catch {
+          // Socket write failed, ws close event will clean up
+        }
+      }
+    }
+  } catch (err) {
+    console.error('[Cutline Tick Error]', err)
   }
 }, TICK_MS)
+
+process.on('uncaughtException', (err) => {
+  console.error('[Cutline Server Uncaught Exception]', err)
+})
 
 console.log(`Cutline match server on ws://${HOST}:${PORT}`)
