@@ -4,7 +4,7 @@ import {
   GRID,
   CIRCUITS,
   MAX_CORNER_RAD,
-  TRACK_WIDTH,
+  SEGMENT_WIDTH_MAX,
   POINT_SPACING,
   CHECKPOINT_COUNT,
   createRng,
@@ -48,7 +48,7 @@ test('every named circuit has a unique name and seed', () => {
 
 test('every circuit centerline is a closed loop of unit-spaced points', () => {
   for (const circuit of CIRCUITS) {
-    const line = buildCenterline(circuit.seed)
+    const { centerline: line } = buildCenterline(circuit.seed)
 
     assert.ok(line.length > 100, `${circuit.name}: centerline is implausibly short`)
 
@@ -79,9 +79,10 @@ test('every circuit centerline is a closed loop of unit-spaced points', () => {
 })
 
 test('every circuit fits the grid with room for the track width', () => {
-  const half = (TRACK_WIDTH - 1) / 2
+  const half = SEGMENT_WIDTH_MAX / 2
   for (const circuit of CIRCUITS) {
-    for (const p of buildCenterline(circuit.seed)) {
+    const { centerline } = buildCenterline(circuit.seed)
+    for (const p of centerline) {
       assert.ok(
         p.x - half >= 0 && p.x + half < GRID && p.y - half >= 0 && p.y + half < GRID,
         `${circuit.name}: point (${p.x.toFixed(1)}, ${p.y.toFixed(1)}) puts track off the grid`,
@@ -96,7 +97,7 @@ test('no circuit has a corner sharper than a hauler can take', () => {
   // corner is taken at roughly 57% of top speed, which is a real corner rather
   // than an undrivable hairpin.
   for (const circuit of CIRCUITS) {
-    const line = buildCenterline(circuit.seed)
+    const { centerline: line } = buildCenterline(circuit.seed)
     for (let i = 0; i < line.length; i++) {
       const a = line[i]
       const b = line[(i + 1) % line.length]
@@ -176,7 +177,9 @@ test('every circuit places its checkpoints, its line and enough starting slots',
     // Checkpoints are in increasing order around the loop, which is what lets
     // nextCp advance by one and wrap.
     for (let i = 1; i < checkpoints.length; i++) {
-      assert.ok(checkpoints[i].index > checkpoints[i - 1].index, `${circuit.name}: checkpoints out of order`)
+      const prevDist = (checkpoints[i - 1].index - checkpoints[0].index + centerline.length) % centerline.length
+      const curDist = (checkpoints[i].index - checkpoints[0].index + centerline.length) % centerline.length
+      assert.ok(curDist > prevDist, `${circuit.name}: checkpoints out of order`)
     }
 
     assert.ok(
@@ -737,8 +740,9 @@ function takeCheckpoint(match, car, index) {
 function crossLine(match, car, across = 0) {
   const p = match.checkpoints[0]
   const line = match.centerline
-  const a = line[line.length - 1]
-  const b = line[1]
+  const idx = p.index
+  const a = line[(idx - 1 + line.length) % line.length]
+  const b = line[(idx + 1) % line.length]
   const dx = b.x - a.x
   const dy = b.y - a.y
   const len = Math.hypot(dx, dy) || 1
@@ -1625,11 +1629,11 @@ test('the bag carries bananas, and every entry is a real item', () => {
 })
 
 test('every checkpoint is reachable from the full width of the road', () => {
-  // CHECKPOINT_RADIUS and TRACK_WIDTH are one setting in two places. While the
+  // CHECKPOINT_RADIUS and SEGMENT_WIDTH_MAX are linked. While the
   // radius was a hardcoded 4.0 and the road was widened to 11, a car running 4
   // tiles off centre, entirely legally, missed 10 of 11 checkpoints and its lap
   // never counted. Derived from the road, this cannot drift apart again.
-  const half = (TRACK_WIDTH - 1) / 2
+  const half = SEGMENT_WIDTH_MAX / 2
   assert.ok(
     CHECKPOINT_RADIUS >= half,
     `a checkpoint must reach the edge of the road: radius ${CHECKPOINT_RADIUS} against half-width ${half}`,
@@ -1669,13 +1673,13 @@ test('the finish line counts a crossing anywhere across the road, not a circle',
   // same time. This is a real crossing test, so it must bank a lap for a car
   // passing the line on the outside line, and must not bank one for a car merely
   // sitting near it.
-  const half = (TRACK_WIDTH - 1) / 2
+  const half = SEGMENT_WIDTH_MAX / 2
   const match = racing(1)
   const [car] = [...match.cars.values()]
   const p = match.checkpoints[0]
   const line = match.centerline
-  const a = line[line.length - 1]
-  const b = line[1]
+  const a = line[(p.index - 1 + line.length) % line.length]
+  const b = line[(p.index + 1) % line.length]
   const tx = b.x - a.x
   const ty = b.y - a.y
   const len = Math.hypot(tx, ty) || 1
@@ -1873,7 +1877,6 @@ import {
   LATTICE_CELL,
   LATTICE_ORIGIN,
   MIN_WALL,
-  SEGMENT_WIDTH_MAX,
   SEGMENT_WIDTH_MIN,
   MIN_CYCLE_EDGES,
   MIN_DIRECTION_CHANGES,
@@ -2262,4 +2265,143 @@ test('the snapshot tells the page a car is airborne', () => {
   const after = snapshot(match).cars.find((c) => c.id === car.id)
   assert.equal(after.airborne, false)
 })
+
+test('a carved circuit is one connected region at every width', () => {
+  for (const circuit of CIRCUITS) {
+    const { grid } = carve(circuit.seed)
+    let start = -1
+    let total = 0
+    for (let i = 0; i < grid.length; i++) {
+      if (grid[i] !== S_WALL) {
+        if (start < 0) start = i
+        total++
+      }
+    }
+    assert.ok(start >= 0, `${circuit.name}: carved no surface`)
+
+    const seen = new Uint8Array(grid.length)
+    const stack = [start]
+    seen[start] = 1
+    let reached = 0
+    while (stack.length) {
+      const idx = stack.pop()
+      reached++
+      const x = idx % GRID
+      const y = (idx / GRID) | 0
+      for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+        const nx = x + dx
+        const ny = y + dy
+        if (nx < 0 || ny < 0 || nx >= GRID || ny >= GRID) continue
+        const n = ny * GRID + nx
+        if (seen[n] || grid[n] === S_WALL) continue
+        seen[n] = 1
+        stack.push(n)
+      }
+    }
+    assert.equal(reached, total, `${circuit.name}: surface is in more than one piece`)
+  }
+})
+
+test('the carved road is as wide as its meta says, within a tile', () => {
+  // Width is the setting everything geometric derives from. If the carve and the
+  // meta disagree, the checkpoint reach and the pickup spread are both wrong.
+  const { grid, centerline, meta } = carve(CIRCUITS[0].seed)
+  for (let i = 0; i < centerline.length; i += 7) {
+    const p = centerline[i]
+    const a = centerline[(i - 1 + centerline.length) % centerline.length]
+    const b = centerline[(i + 1) % centerline.length]
+    const tx = b.x - a.x
+    const ty = b.y - a.y
+    const len = Math.hypot(tx, ty) || 1
+    const nx = -ty / len
+    const ny = tx / len
+
+    let span = 0
+    const half = meta[i].width / 2
+    for (let off = -half; off <= half; off += 0.5) {
+      const s = surfaceAt(grid, Math.round(p.x + nx * off), Math.round(p.y + ny * off))
+      if (s !== S_WALL && s !== S_GRAVEL) span += 0.5
+    }
+    assert.ok(
+      Math.abs(span - meta[i].width) <= 2,
+      `point ${i}: carved span ${span} against meta width ${meta[i].width}`,
+    )
+  }
+})
+
+test('gravel sits outside fast corners, never in the racing surface', () => {
+  const { grid, centerline, meta } = carve(CIRCUITS[0].seed)
+  let gravel = 0
+  for (const v of grid) if (v === S_GRAVEL) gravel++
+  assert.ok(gravel > 0, 'a circuit must have run off somewhere')
+
+  // No gravel on the centreline itself: run off is outside the road.
+  for (let i = 0; i < centerline.length; i++) {
+    const p = centerline[i]
+    assert.notEqual(
+      surfaceAt(grid, Math.round(p.x), Math.round(p.y)),
+      S_GRAVEL,
+      `point ${i}: gravel on the racing line`,
+    )
+  }
+})
+
+test('every checkpoint is reachable from the full width of its own segment', () => {
+  // The lap counting bug, generalised. With per-segment width the reach must
+  // clear the WIDEST segment, since one radius serves every checkpoint.
+  assert.ok(CHECKPOINT_RADIUS >= SEGMENT_WIDTH_MAX / 2, 'reach must clear the widest road')
+
+  for (const circuit of CIRCUITS) {
+    const match = make({ circuitIndex: CIRCUITS.indexOf(circuit) })
+    join(match, { name: 'W' }, () => 0)
+    startRace(match)
+    const [car] = [...match.cars.values()]
+    const line = match.centerline
+
+    car.lap = 0
+    car.nextCp = 1
+    car.cpTaken = 0
+    for (let c = 1; c < match.checkpoints.length; c++) {
+      const cp = match.checkpoints[c]
+      const i = cp.index
+      const a = line[(i - 1 + line.length) % line.length]
+      const b = line[(i + 1) % line.length]
+      const tx = b.x - a.x
+      const ty = b.y - a.y
+      const len = Math.hypot(tx, ty) || 1
+      const off = match.meta[i].width / 2
+      car.x = cp.x - (ty / len) * off
+      car.y = cp.y + (tx / len) * off
+      updateProgress(match, car)
+    }
+    assert.equal(
+      car.cpTaken,
+      match.checkpoints.length - 1,
+      `${circuit.name}: a car on the outer edge missed a checkpoint`,
+    )
+  }
+})
+
+test('start slots sit on a straight and on the racing surface', () => {
+  for (const circuit of CIRCUITS) {
+    const { grid, meta, startSlots } = carve(circuit.seed)
+    assert.ok(startSlots.length >= MAX_PLAYERS, `${circuit.name}: not enough slots`)
+    for (const slot of startSlots.slice(0, MAX_PLAYERS)) {
+      assert.notEqual(
+        surfaceAt(grid, Math.round(slot.x), Math.round(slot.y)),
+        S_WALL,
+        `${circuit.name}: a slot is in a wall`,
+      )
+      assert.equal(meta[slot.index].corner, null, `${circuit.name}: the grid must sit on a straight`)
+    }
+  }
+})
+
+test('an encoded circuit still fits a welcome frame', () => {
+  for (const circuit of CIRCUITS) {
+    const encoded = encodeMap(carve(circuit.seed).grid)
+    assert.ok(encoded.length < 4096, `${circuit.name}: encoded to ${encoded.length} bytes`)
+  }
+})
+
 

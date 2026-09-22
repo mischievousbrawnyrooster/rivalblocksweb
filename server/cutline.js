@@ -4,12 +4,6 @@
 
 // --- Dimensions -----------------------------------------------------------
 export const GRID = 96               // square, the circuit is carved out of it
-// Tiles of racing surface across. Widened from 7: the grid now starts four
-// abreast and pickups land as a rank of four, and both were crowding a 7-wide
-// road with no room left to pick a line. Bounded by the grid rather than by
-// taste: BASE_RADIUS + 3 * AMP_MAX + HALF_WIDTH must stay inside GRID / 2,
-// which is 30 + 10.5 + 5 = 45.5 against 48.
-export const TRACK_WIDTH = 11
 export const CHECKPOINT_COUNT = 12
 
 // --- Centerline generation ------------------------------------------------
@@ -189,10 +183,6 @@ export function createRng(seed = 12345) {
   }
 }
 
-const CENTERLINE_ITERATOR = function* () {
-  yield* this.centerline
-}
-
 /** Lattice vertex to world tile. */
 function latticeToWorld(v) {
   return {
@@ -351,13 +341,7 @@ export function buildCenterline(seed) {
     meta[i].width = Math.max(SEGMENT_WIDTH_MIN, Math.min(SEGMENT_WIDTH_MAX, width[i]))
   }
 
-  const result = { centerline, meta }
-  result[Symbol.iterator] = CENTERLINE_ITERATOR
-  Object.defineProperty(result, 'length', { get: () => centerline.length, enumerable: false, configurable: true })
-  for (let i = 0; i < centerline.length; i++) {
-    Object.defineProperty(result, i, { get: () => centerline[i], enumerable: false, configurable: true })
-  }
-  return result
+  return { centerline, meta }
 }
 
 /**
@@ -419,6 +403,7 @@ export const S_RAMP = 8
 export const SURFACE_CHARS = ['W', 'T', 'K', 'B', 'O', 'P', 'L', 'G', 'R']
 
 export const GRAVEL_DRAG = 3.0       // scrubs speed without stopping the car
+export const GRAVEL_DEPTH = 3        // tiles of run off outside a corner
 
 // Derived from the starting slots the carve lays down, the way Blockout derives
 // its capacity from SPAWNS.length. To raise capacity, lay more slots; never
@@ -432,7 +417,6 @@ export const START_ROWS = 2
 export const START_COLUMNS = 4
 export const MAX_PLAYERS = START_ROWS * START_COLUMNS
 
-const HALF_WIDTH = (TRACK_WIDTH - 1) / 2
 export const PICKUP_MIN_SPACING = 16
 export const PICKUP_RANDOM_SPACING = 16
 const START_ROW_GAP = 2              // centerline points between starting rows
@@ -508,7 +492,7 @@ export function walkLine(x0, y0, x1, y1, visit) {
  * across the normal at every centerline point, walking the closed set of
  * adjacent pairs, wrap from the last point back to the first included, and
  * rasterizing the segment between each pair rather than dropping a lone dot.
- * Points are POINT_SPACING apart and the track is TRACK_WIDTH wide, so most
+ * Points are POINT_SPACING apart and the track is SEGMENT_WIDTH_MAX wide, so most
  * consecutive stamps already overlap, but on a tight corner the outer rail
  * travels further per index than the centerline does, so two consecutive
  * stamps on it can round tiles apart. walkLine's rasterized, elbow-aware
@@ -518,7 +502,8 @@ export function walkLine(x0, y0, x1, y1, visit) {
  * Exported so the bridging can be exercised directly against a synthetic
  * centerline, not only against the eight fixed seeds in CIRCUITS.
  */
-export function stampTrack(grid, centerline) {
+export function stampTrack(grid, centerline, width = SEGMENT_WIDTH_MAX) {
+  const half = Math.round(width / 2)
   const railAt = (i, off) => {
     const p = centerline[i]
     const t = tangentAt(centerline, i)
@@ -527,8 +512,8 @@ export function stampTrack(grid, centerline) {
 
   for (let i = 0; i < centerline.length; i++) {
     const next = (i + 1) % centerline.length
-    for (let off = -HALF_WIDTH; off <= HALF_WIDTH; off++) {
-      const edge = Math.abs(off) === HALF_WIDTH
+    for (let off = -half; off <= half; off++) {
+      const edge = Math.abs(off) === half
       const surface = edge ? S_KERB : S_TARMAC
       const a = railAt(i, off)
       const b = railAt(next, off)
@@ -545,57 +530,68 @@ export function stampTrack(grid, centerline) {
  * which is why none of them is separate code.
  */
 export function carve(seed) {
-  // Task 4 changed buildCenterline's return shape. The full pipeline arrives in
-  // Task 7; until then this keeps the existing carve working on the new shape so
-  // the suite never goes red across tasks.
-  const { centerline } = buildCenterline(seed)
-  const grid = new Uint8Array(GRID * GRID) // S_WALL is 0, so this starts solid
-  const rng = createRng(seed ^ 0x9e3779b9) // a stream of its own, so surface
-  //                                          decoration cannot shift the shape
+  const { centerline, meta } = buildCenterline(seed)
+  const grid = new Uint8Array(GRID * GRID)
+  const rng = createRng(seed ^ 0x9e3779b9)
 
   const put = (x, y, surface) => putTile(grid, x, y, surface)
 
-  // Curvature per point, so decoration can tell a straight from a corner exit.
-  const curvature = centerline.map((_, i) => {
-    const a = centerline[i]
-    const b = centerline[(i + 1) % centerline.length]
-    const c = centerline[(i + 2) % centerline.length]
-    const h1 = Math.atan2(b.y - a.y, b.x - a.x)
-    const h2 = Math.atan2(c.y - b.y, c.x - b.x)
-    let turn = Math.abs(h2 - h1)
-    if (turn > Math.PI) turn = Math.PI * 2 - turn
-    return turn
-  })
-
-  // 1. Stamp the racing surface. See stampTrack for why it walks the closed
-  //    set of adjacent pairs, wrap included, rather than dropping a lone dot
-  //    per point.
-  stampTrack(grid, centerline)
-
-  // 2. Decorate. A boost strip rewards a straight; oil punishes a corner exit
-  //    that was taken too fast. Both come from the decoration stream, so a
-  //    circuit's shape and its surfaces are independent.
+  // 1. Racing surface, at each point's own width. stampTrack walks the closed
+  //    set of adjacent pairs including the wrap, so rails stay 4-connected.
   for (let i = 0; i < centerline.length; i++) {
-    const straight = curvature[i] < MAX_CORNER_RAD * 0.25
-    const cornerExit = curvature[(i - 6 + curvature.length) % curvature.length] > MAX_CORNER_RAD * 0.6
-
-    let surface = null
-    if (straight && rng() < 0.05) surface = S_BOOST
-    else if (cornerExit && rng() < 0.04) surface = S_OIL
-    if (!surface) continue
-
+    const half = Math.round(meta[i].width / 2)
     const p = centerline[i]
     const t = tangentAt(centerline, i)
-    for (let off = -1; off <= 1; off++) {
+    const q = centerline[(i + 1) % centerline.length]
+    const tq = tangentAt(centerline, (i + 1) % centerline.length)
+    for (let off = -half; off <= half; off++) {
+      const edge = Math.abs(off) === half
+      const surface = edge ? S_KERB : S_TARMAC
+      walkLine(
+        Math.round(p.x - t.y * off),
+        Math.round(p.y + t.x * off),
+        Math.round(q.x - tq.y * off),
+        Math.round(q.y + tq.x * off),
+        (x, y) => put(x, y, surface),
+      )
+    }
+  }
+
+  // 2. Run off outside fast corners. Gravel replaces wall, never tarmac, so a
+  //    car that runs wide loses time instead of its race.
+  for (let i = 0; i < centerline.length; i++) {
+    const m = meta[i]
+    if (m.corner === null || m.corner === 'sweeper') continue
+    const p = centerline[i]
+    const t = tangentAt(centerline, i)
+    const half = Math.round(m.width / 2)
+    const side = m.sign > 0 ? -1 : 1
+    const x0 = Math.round(p.x - t.y * half * side)
+    const y0 = Math.round(p.y + t.x * half * side)
+    const x1 = Math.round(p.x - t.y * (half + GRAVEL_DEPTH) * side)
+    const y1 = Math.round(p.y + t.x * (half + GRAVEL_DEPTH) * side)
+    walkLine(x0, y0, x1, y1, (x, y) => {
+      if (surfaceAt(grid, x, y) === S_WALL) put(x, y, S_GRAVEL)
+    })
+  }
+
+  // 3. Decorate. Boost on straights, oil on corner exits, ramps on long straights.
+  for (let i = 0; i < centerline.length; i++) {
+    const m = meta[i]
+    const p = centerline[i]
+    const t = tangentAt(centerline, i)
+    let surface = null
+    if (m.corner === null && rng() < 0.04) surface = S_BOOST
+    else if (m.corner === null && rng() < 0.02) surface = S_RAMP
+    else if (meta[(i - 6 + meta.length) % meta.length].corner === 'hairpin' && rng() < 0.05) surface = S_OIL
+    if (!surface) continue
+    const half = Math.round(m.width / 2) - 1
+    for (let off = -half; off <= half; off++) {
       put(p.x - t.y * off, p.y + t.x * off, surface)
     }
   }
 
-  // 3. Powerups land as a rank across the road, not one dot on the centerline.
-  //    Each box in a row carries its own key and therefore its own cooldown, so
-  //    taking one lane leaves the rest of the row standing for the cars behind.
-  //    That turns arriving at a row into a choice of lane under pressure rather
-  //    than a free collect for whoever is nearest the middle.
+  // 4. Pickup ranks, spread to the local width.
   const pickups = []
   const seen = new Set()
   let nextPickup = 14 + Math.floor(rng() * 8)
@@ -603,14 +599,14 @@ export function carve(seed) {
     if (i < nextPickup) continue
     const p = centerline[i]
     const t = tangentAt(centerline, i)
+    const laneGap = Math.max(1, (meta[i].width - 2) / PICKUP_ROW)
     for (let lane = 0; lane < PICKUP_ROW; lane++) {
-      const off = (lane - (PICKUP_ROW - 1) / 2) * LANE_GAP
+      const off = (lane - (PICKUP_ROW - 1) / 2) * laneGap
       const px = Math.round(p.x - t.y * off)
       const py = Math.round(p.y + t.x * off)
       const key = py * GRID + px
-      // A tight corner can round two lanes onto the same tile. One box per tile,
-      // or the second would sit on a cooldown it never set.
       if (seen.has(key)) continue
+      if (surfaceAt(grid, px, py) === S_WALL) continue
       seen.add(key)
       put(px, py, S_PICKUP)
       pickups.push({ x: px, y: py, key })
@@ -618,28 +614,28 @@ export function carve(seed) {
     nextPickup = i + PICKUP_MIN_SPACING + Math.floor(rng() * PICKUP_RANDOM_SPACING)
   }
 
-  // 4. The cut line, across the full width at index 0.
+  // 5. The finish line, across the full local width at the chosen start index.
+  const startIndex = pickStartIndex(meta)
   {
-    const p = centerline[0]
-    const t = tangentAt(centerline, 0)
-    for (let off = -HALF_WIDTH + 1; off <= HALF_WIDTH - 1; off++) {
+    const p = centerline[startIndex]
+    const t = tangentAt(centerline, startIndex)
+    const half = Math.round(meta[startIndex].width / 2) - 1
+    for (let off = -half; off <= half; off++) {
       put(p.x - t.y * off, p.y + t.x * off, S_LINE)
     }
   }
 
-  // 5. Checkpoints, evenly spaced indices around the loop. Taken in order, they
-  //    are what stops a driver cutting the infield.
+  // 6. Checkpoints, evenly spaced from the start index.
   const checkpoints = []
   for (let c = 0; c < CHECKPOINT_COUNT; c++) {
-    const index = Math.floor((c * centerline.length) / CHECKPOINT_COUNT)
+    const index = (startIndex + Math.floor((c * centerline.length) / CHECKPOINT_COUNT)) % centerline.length
     checkpoints.push({ index, x: centerline[index].x, y: centerline[index].y })
   }
 
-  // 6. Starting slots, staggered back from the line. Index 0 is the line, so
-  //    the grid runs backwards from it around the end of the loop.
+  // 7. Starting slots, back from the line and always on a straight.
   const startSlots = []
   for (let row = 0; row < START_ROWS; row++) {
-    const index = (centerline.length - (row + 1) * START_ROW_GAP) % centerline.length
+    const index = (startIndex - (row + 1) * START_ROW_GAP + centerline.length) % centerline.length
     const p = centerline[index]
     const t = tangentAt(centerline, index)
     for (let col = 0; col < START_COLUMNS; col++) {
@@ -653,7 +649,34 @@ export function carve(seed) {
     }
   }
 
-  return { grid, centerline, checkpoints, startSlots, pickups }
+  return { grid, centerline, meta, checkpoints, startSlots, pickups }
+}
+
+/**
+ * Where the finish line goes: the middle of the longest straight, so the grid
+ * sits on a straight and the run to the flag is a straight rather than a corner.
+ */
+function pickStartIndex(meta) {
+  let bestStart = 0
+  let bestLen = 0
+  let runStart = 0
+  let run = 0
+  for (let i = 0; i < meta.length * 2; i++) {
+    const m = meta[i % meta.length]
+    if (m.corner === null) {
+      if (run === 0) runStart = i
+      run++
+      if (run > bestLen) {
+        bestLen = run
+        bestStart = runStart
+      }
+    } else {
+      run = 0
+    }
+  }
+  // Far enough into the straight that the whole starting grid fits behind it.
+  const need = START_ROWS * START_ROW_GAP + 2
+  return (bestStart + Math.max(need, Math.floor(bestLen / 2))) % meta.length
 }
 
 // --- Map encoding ---------------------------------------------------------
@@ -734,13 +757,14 @@ export function make(options = {}) {
     ? ((options.circuitIndex % CIRCUITS.length) + CIRCUITS.length) % CIRCUITS.length
     : 0
   const circuit = CIRCUITS[circuitIndex]
-  const { grid, centerline, checkpoints, startSlots, pickups } = carve(circuit.seed)
+  const { grid, centerline, meta, checkpoints, startSlots, pickups } = carve(circuit.seed)
 
   return {
     circuit,
     circuitIndex,
     grid,
     centerline,
+    meta,
     checkpoints,
     startSlots,
     pickups: pickups ?? [],
@@ -1056,19 +1080,19 @@ export function resolveContact(match) {
 // while the road was 7 wide, and widening the road to 11 silently put the outer
 // racing line out of reach: a car running 4 tiles off centre missed 10 of 11
 // checkpoints and its lap never counted at all. CHECKPOINT_RADIUS and
-// TRACK_WIDTH are one setting in two places.
+// SEGMENT_WIDTH_MAX are linked.
 // The slack covers a car that has run wide onto the kerb or a tile beyond it.
 // Kept below half the checkpoint spacing (centerline length / CHECKPOINT_COUNT,
 // about 16) so two checkpoints are never in reach at once.
 export const CHECKPOINT_SLACK = 2
-export const CHECKPOINT_RADIUS = (TRACK_WIDTH - 1) / 2 + CHECKPOINT_SLACK
+export const CHECKPOINT_RADIUS = SEGMENT_WIDTH_MAX / 2 + CHECKPOINT_SLACK
 
 // The finish line is NOT judged by a circle. A circle cannot be both accurate
 // along the track and wide enough across it: tight enough to stop a lap banking
 // early is too narrow for a car crossing on the outside line, and wide enough
 // for the outside line banks the lap tiles before the car reaches the paint.
 // It is judged as a real crossing instead, which is exact in both axes.
-export const LINE_HALF_SPAN = (TRACK_WIDTH - 1) / 2 + CHECKPOINT_SLACK
+export const LINE_HALF_SPAN = SEGMENT_WIDTH_MAX / 2 + CHECKPOINT_SLACK
 
 /**
  * Advance a car's checkpoint ring and count its laps.
@@ -1128,12 +1152,8 @@ export function updateProgress(match, car) {
 /** The unit tangent of the centerline where the finish line is painted. */
 function lineTangent(match) {
   const line = match.centerline
-  const a = line[line.length - 1]
-  const b = line[1]
-  const dx = b.x - a.x
-  const dy = b.y - a.y
-  const len = Math.hypot(dx, dy) || 1
-  return { x: dx / len, y: dy / len }
+  const idx = match.checkpoints?.[0]?.index ?? 0
+  return tangentAt(line, idx)
 }
 
 /**
@@ -1556,7 +1576,7 @@ export function snapshot(match) {
       // because an absent field reads as a falsy one.
       steer: car.steer ?? 0,
       brake: Boolean(car.brake),
-      bestLapMs: car.bestLapMs,
+      bestLapMs: car.bestLapMs ?? undefined,
     })
   }
 
