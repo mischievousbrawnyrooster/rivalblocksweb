@@ -4,7 +4,12 @@
 
 // --- Dimensions -----------------------------------------------------------
 export const GRID = 96               // square, the circuit is carved out of it
-export const TRACK_WIDTH = 7         // tiles of racing surface across
+// Tiles of racing surface across. Widened from 7: the grid now starts four
+// abreast and pickups land as a rank of four, and both were crowding a 7-wide
+// road with no room left to pick a line. Bounded by the grid rather than by
+// taste: BASE_RADIUS + 3 * AMP_MAX + HALF_WIDTH must stay inside GRID / 2,
+// which is 30 + 10.5 + 5 = 45.5 against 48.
+export const TRACK_WIDTH = 11
 export const CHECKPOINT_COUNT = 12
 
 // --- Centerline generation ------------------------------------------------
@@ -144,14 +149,23 @@ export const SURFACE_CHARS = ['W', 'T', 'K', 'B', 'O', 'P', 'L']
 // Derived from the starting slots the carve lays down, the way Blockout derives
 // its capacity from SPAWNS.length. To raise capacity, lay more slots; never
 // edit this number, or a player is seated at undefined.
-export const START_ROWS = 4
-export const START_COLUMNS = 2
+// Two rows of four, not four rows of two. Every car must reach the line before
+// its first lap counts, so a deep grid charges the back row real distance over
+// the whole race: four rows at a 3 point gap spread the field over 9 centerline
+// points, 4.7% of a lap, which is about half a second that is never given back.
+// Two rows at a 2 point gap is 1.0%.
+export const START_ROWS = 2
+export const START_COLUMNS = 4
 export const MAX_PLAYERS = START_ROWS * START_COLUMNS
 
 const HALF_WIDTH = (TRACK_WIDTH - 1) / 2
 export const PICKUP_MIN_SPACING = 16
 export const PICKUP_RANDOM_SPACING = 16
-const START_ROW_GAP = 3              // centerline points between starting rows
+const START_ROW_GAP = 2              // centerline points between starting rows
+const LANE_GAP = 1.5                 // tiles between cars across the road
+// Pickups land as a rank across the road rather than one dot on the centerline,
+// so meeting a row is a choice of lane instead of a choice of whether to bother.
+export const PICKUP_ROW = 4
 
 /** The surface at a tile. Anything off the grid is wall, so no caller needs a bounds check. */
 export function surfaceAt(grid, x, y) {
@@ -300,18 +314,31 @@ export function carve(seed) {
     }
   }
 
-  // 3. Randomised powerup spawns right at the middle of the road (centerline).
+  // 3. Powerups land as a rank across the road, not one dot on the centerline.
+  //    Each box in a row carries its own key and therefore its own cooldown, so
+  //    taking one lane leaves the rest of the row standing for the cars behind.
+  //    That turns arriving at a row into a choice of lane under pressure rather
+  //    than a free collect for whoever is nearest the middle.
   const pickups = []
+  const seen = new Set()
   let nextPickup = 14 + Math.floor(rng() * 8)
   for (let i = 0; i < centerline.length - 14; i++) {
-    if (i >= nextPickup) {
-      const p = centerline[i]
-      const px = Math.round(p.x)
-      const py = Math.round(p.y)
+    if (i < nextPickup) continue
+    const p = centerline[i]
+    const t = tangentAt(centerline, i)
+    for (let lane = 0; lane < PICKUP_ROW; lane++) {
+      const off = (lane - (PICKUP_ROW - 1) / 2) * LANE_GAP
+      const px = Math.round(p.x - t.y * off)
+      const py = Math.round(p.y + t.x * off)
+      const key = py * GRID + px
+      // A tight corner can round two lanes onto the same tile. One box per tile,
+      // or the second would sit on a cooldown it never set.
+      if (seen.has(key)) continue
+      seen.add(key)
       put(px, py, S_PICKUP)
-      pickups.push({ x: px, y: py, key: py * GRID + px })
-      nextPickup = i + PICKUP_MIN_SPACING + Math.floor(rng() * PICKUP_RANDOM_SPACING)
+      pickups.push({ x: px, y: py, key })
     }
+    nextPickup = i + PICKUP_MIN_SPACING + Math.floor(rng() * PICKUP_RANDOM_SPACING)
   }
 
   // 4. The cut line, across the full width at index 0.
@@ -339,7 +366,7 @@ export function carve(seed) {
     const p = centerline[index]
     const t = tangentAt(centerline, index)
     for (let col = 0; col < START_COLUMNS; col++) {
-      const off = col === 0 ? -1.5 : 1.5
+      const off = (col - (START_COLUMNS - 1) / 2) * LANE_GAP
       startSlots.push({
         x: p.x - t.y * off,
         y: p.y + t.x * off,
@@ -396,6 +423,11 @@ export const DELAY_MS = 60           // client interpolation window
 export const MIN_PLAYERS = 2
 export const BOT_FILL_TO = 4
 export const MIN_LAPS = 3
+// Fixed rather than scaled by field size. Laps measure about 11.9s, so 5 is a
+// race of roughly a minute. Scaling by who happened to join made a two car race
+// three laps and an eight car race eight, so the same circuit ran for wildly
+// different lengths depending on the lobby.
+export const RACE_LAPS = 5
 export const GRACE_LAPS = 1          // lap 1 takes no cut
 export const COUNTDOWN_MS = 4000
 export const POST_RACE_GRACE_MS = 8000
@@ -600,7 +632,15 @@ export function stepCar(match, car, dt) {
   //    without client-side prediction.
   const speed = Math.hypot(car.vx, car.vy)
   const falloff = 1 - TURN_FALLOFF * Math.min(1, speed / TOP_SPEED)
-  car.heading += (car.steer ?? 0) * TURN_RATE * falloff * dt
+  const spinning = match.now < (car.spinUntil ?? 0)
+  if (spinning) {
+    // The wheel is not yours. Input is ignored outright rather than scaled, so a
+    // spin cannot be steered out of by holding the opposite lock.
+    car.heading += SPIN_RATE * dt
+  } else {
+    const steerAuthority = car.onSlick ? SLICK_TURN : 1
+    car.heading += (car.steer ?? 0) * TURN_RATE * falloff * steerAuthority * dt
+  }
 
   const cos = Math.cos(car.heading)
   const sin = Math.sin(car.heading)
@@ -610,7 +650,8 @@ export function stepCar(match, car, dt) {
   let lat = -car.vx * sin + car.vy * cos
 
   // 3. Thrust, braking and drag act on the forward component only.
-  if (car.throttle) fwd += ACCEL * (match.now < car.boostUntil ? BOOST_MULT : 1) * dt
+  const drive = spinning ? SPIN_THRUST : car.onSlick ? SLICK_THRUST : 1
+  if (car.throttle) fwd += ACCEL * (match.now < car.boostUntil ? BOOST_MULT : 1) * drive * dt
   if (car.brake) fwd -= BRAKE * dt
   fwd -= fwd * (offTrack ? OFFTRACK_DRAG : DRAG) * dt
 
@@ -681,7 +722,24 @@ function resolveContact(match) {
 // --- Laps, running order and the cut --------------------------------------
 // Generous enough that a car cannot thread between two ticks at top speed:
 // TOP_SPEED * TICK_MS / 1000 is about 0.22 tiles, well inside this.
-export const CHECKPOINT_RADIUS = 4.0
+// A checkpoint must be reachable from anywhere a car may legally be, so its
+// reach is DERIVED from the road rather than chosen. This was a hardcoded 4.0
+// while the road was 7 wide, and widening the road to 11 silently put the outer
+// racing line out of reach: a car running 4 tiles off centre missed 10 of 11
+// checkpoints and its lap never counted at all. CHECKPOINT_RADIUS and
+// TRACK_WIDTH are one setting in two places.
+// The slack covers a car that has run wide onto the kerb or a tile beyond it.
+// Kept below half the checkpoint spacing (centerline length / CHECKPOINT_COUNT,
+// about 16) so two checkpoints are never in reach at once.
+export const CHECKPOINT_SLACK = 2
+export const CHECKPOINT_RADIUS = (TRACK_WIDTH - 1) / 2 + CHECKPOINT_SLACK
+
+// The finish line is NOT judged by a circle. A circle cannot be both accurate
+// along the track and wide enough across it: tight enough to stop a lap banking
+// early is too narrow for a car crossing on the outside line, and wide enough
+// for the outside line banks the lap tiles before the car reaches the paint.
+// It is judged as a real crossing instead, which is exact in both axes.
+export const LINE_HALF_SPAN = (TRACK_WIDTH - 1) / 2 + CHECKPOINT_SLACK
 
 /**
  * Advance a car's checkpoint ring and count its laps.
@@ -699,11 +757,23 @@ export function updateProgress(match, car) {
   const target = ring[car.nextCp]
   if (!target) return
 
-  if (Math.hypot(car.x - target.x, car.y - target.y) > CHECKPOINT_RADIUS) return
-
-  // Checkpoint 0 is the cut line. Reaching it counts a lap, but only from a
-  // car that has taken every checkpoint behind it.
+  // Checkpoint 0 is the finish line, and it is judged as a crossing rather than
+  // a proximity: the car must pass through the line's plane, travelling forward,
+  // somewhere within the width of the road.
   if (car.nextCp === 0) {
+    const t = lineTangent(match)
+    const dx = car.x - target.x
+    const dy = car.y - target.y
+    const along = dx * t.x + dy * t.y          // signed: behind the line is negative
+    const across = Math.abs(-dx * t.y + dy * t.x)
+    const prev = car.lineSide
+
+    car.lineSide = along
+    // No previous sample means this is the first tick since a reset; record the
+    // side and wait, rather than treating an unknown as a crossing.
+    if (prev === undefined || prev === null) return
+    if (!(prev < 0 && along >= 0)) return
+    if (across > LINE_HALF_SPAN) return
     if (car.cpTaken < ring.length - 1) return
 
     const lapMs = match.elapsed - car.lapStartedAt
@@ -720,8 +790,21 @@ export function updateProgress(match, car) {
     return
   }
 
+  if (Math.hypot(car.x - target.x, car.y - target.y) > CHECKPOINT_RADIUS) return
+
   car.cpTaken += 1
   car.nextCp = (car.nextCp + 1) % ring.length
+}
+
+/** The unit tangent of the centerline where the finish line is painted. */
+function lineTangent(match) {
+  const line = match.centerline
+  const a = line[line.length - 1]
+  const b = line[1]
+  const dx = b.x - a.x
+  const dy = b.y - a.y
+  const len = Math.hypot(dx, dy) || 1
+  return { x: dx / len, y: dy / len }
 }
 
 /**
@@ -790,17 +873,36 @@ export function updateDraft(match) {
 }
 
 // --- The kit ----------------------------------------------------------------
+// A slick used to change only lateral grip, which meant a car pointed where it
+// was going felt nothing at all, and a car already sliding kept MORE of its
+// slide and came out faster. Oil now also takes away drive and steering: you
+// keep every bit of the momentum you arrived with and lose the ability to do
+// anything about it, which reads whether you are straight or turning.
+// A banana is the opposite trade to a slick. Oil is a puddle that stays put and
+// punishes anyone who keeps driving through it; a banana is consumed by the first
+// car to touch it and punishes that one car hard. It spins you: heading spirals,
+// steering does nothing, drive is nearly gone, and you keep every bit of the
+// momentum that carried you in. You are a passenger for SPIN_MS.
+export const BANANA_TTL_MS = 12000   // lies around longer than oil, being one use
+export const BANANA_RADIUS = 0.8
+export const SPIN_MS = 900
+export const SPIN_RATE = 9.0         // rad/s, about 1.3 turns before it lets go
+export const SPIN_THRUST = 0.1
+
+export const SLICK_THRUST = 0.15     // fraction of throttle that still bites
+export const SLICK_TURN = 0.35       // fraction of steering authority left
 export const SLICK_TTL_MS = 9000
 export const SLICK_RADIUS = 1.1
-export const WALL_TTL_MS = 8000
-export const WALL_RADIUS = 0.9
 export const PICKUP_RESPAWN_MS = 6000
 export const MAX_HAZARDS = 16
 export const DROP_BACK = 1.4         // tiles behind the nose a hazard lands
 
 // Flat by construction. The weighting is in how many copies of each item the
 // bag holds, never in who is drawing from it.
-export const ITEM_BAG = ['boost', 'boost', 'boost', 'slick', 'slick', 'wall']
+// The wall is gone: a near stop is the wrong verb for a game whose handling is
+// all momentum and sliding, and it punished whoever hit it more than it rewarded
+// whoever dropped it. The bag is deliberately thin until the new kit lands.
+export const ITEM_BAG = ['boost', 'boost', 'boost', 'slick', 'slick', 'banana', 'banana']
 
 /** Driving over a pickup tile fills an empty slot and puts that tile on cooldown. */
 export function collectPickup(match, car, rng = Math.random) {
@@ -848,7 +950,7 @@ export function useItem(match, car) {
 
   const bx = car.x - Math.cos(car.heading) * DROP_BACK
   const by = car.y - Math.sin(car.heading) * DROP_BACK
-  const ttl = item === 'slick' ? SLICK_TTL_MS : WALL_TTL_MS
+  const ttl = item === 'banana' ? BANANA_TTL_MS : SLICK_TTL_MS
 
   match.hazards.push({ kind: item, x: bx, y: by, until: match.now + ttl, by: car.id })
   // Capped rather than unbounded: the snapshot carries this list every tick.
@@ -857,7 +959,7 @@ export function useItem(match, car) {
 }
 
 export function expireHazards(match) {
-  match.hazards = match.hazards.filter((h) => h.until > match.now)
+  match.hazards = match.hazards.filter((h) => h.until > match.now && !h.spent)
 }
 
 /**
@@ -878,17 +980,13 @@ export function applyHazards(match, car) {
 
   for (const h of match.hazards) {
     const d = Math.hypot(car.x - h.x, car.y - h.y)
-    if (h.kind === 'slick' && d <= SLICK_RADIUS) {
+    if (h.kind === 'banana' && !h.spent && d <= BANANA_RADIUS + CAR_RADIUS) {
+      // One use. Marked rather than spliced, because this runs inside a loop over
+      // the very list a splice would reindex; expireHazards sweeps it next tick.
+      h.spent = true
+      car.spinUntil = match.now + SPIN_MS
+    } else if (h.kind === 'slick' && d <= SLICK_RADIUS) {
       car.onSlick = true
-    } else if (h.kind === 'wall' && d <= WALL_RADIUS + CAR_RADIUS) {
-      // A barrier scrubs speed the way a wall does, and shoves the car clear
-      // so it cannot sit inside the hazard.
-      car.vx *= -WALL_HIT_KEEP
-      car.vy *= -WALL_HIT_KEEP
-      if (d > 0) {
-        car.x += ((car.x - h.x) / d) * 0.2
-        car.y += ((car.y - h.y) / d) * 0.2
-      }
     }
   }
 }
@@ -951,7 +1049,7 @@ export function driveBots(match) {
 /** Put every car back on its slot and drop the flag. */
 export function startRace(match) {
   const field = match.cars.size
-  match.laps = Math.max(MIN_LAPS, field)
+  match.laps = RACE_LAPS
   match.phase = 'racing'
   match.elapsed = 0
   match.lap = 0
@@ -976,6 +1074,8 @@ export function startRace(match) {
     car.finishedAt = null
     car.item = null
     car.boostUntil = 0
+    car.spinUntil = 0
+    car.lineSide = undefined
     car.bestLapMs = null
     car.lapStartedAt = 0
     car.steer = 0
@@ -1092,6 +1192,13 @@ export function snapshot(match) {
       drafting: Boolean(car.drafting),
       boosting: match.now < car.boostUntil,
       sliding: Boolean(car.onSlick),
+      spinning: match.now < (car.spinUntil ?? 0),
+      // The page turns the front wheels by `steer` and lights the brake lamps by
+      // `brake`. Both are held input the server already owns, and without them on
+      // the wire the page silently drew straight wheels and dark lamps forever,
+      // because an absent field reads as a falsy one.
+      steer: car.steer ?? 0,
+      brake: Boolean(car.brake),
       bestLapMs: car.bestLapMs,
     })
   }

@@ -121,6 +121,8 @@ test('the same seed rebuilds an identical centerline', () => {
 
 
 const drivable = (s) => s !== S_WALL
+// LANE_GAP is module private; this is its value, used only to bound a search.
+const LANE_GAP_MAX = 1.5
 
 test('every circuit carves a racing surface that is one connected region', () => {
   for (const circuit of CIRCUITS) {
@@ -330,6 +332,7 @@ import {
   MIN_PLAYERS,
   BOT_FILL_TO,
   MIN_LAPS,
+  RACE_LAPS,
   make,
   join,
   leave,
@@ -725,10 +728,35 @@ function takeCheckpoint(match, car, index) {
   updateProgress(match, car)
 }
 
+/**
+ * Drive a car through the finish line, approaching from behind and coming out
+ * the far side. The line is judged as a crossing rather than a proximity, so a
+ * car teleported onto the paint has not crossed anything: it needs a sample
+ * behind the line and then one past it.
+ */
+function crossLine(match, car, across = 0) {
+  const p = match.checkpoints[0]
+  const line = match.centerline
+  const a = line[line.length - 1]
+  const b = line[1]
+  const dx = b.x - a.x
+  const dy = b.y - a.y
+  const len = Math.hypot(dx, dy) || 1
+  const t = { x: dx / len, y: dy / len }
+  const place = (along) => {
+    car.x = p.x + t.x * along - t.y * across
+    car.y = p.y + t.y * along + t.x * across
+  }
+  place(-1.5)
+  updateProgress(match, car)
+  place(0.5)
+  updateProgress(match, car)
+}
+
 /** Walk a car cleanly through every checkpoint and back over the line. */
 function completeLap(match, car) {
   for (let i = 1; i < match.checkpoints.length; i++) takeCheckpoint(match, car, i)
-  takeCheckpoint(match, car, 0)
+  crossLine(match, car)
 }
 
 test('a checkpoint taken out of order does not advance progress', () => {
@@ -911,9 +939,11 @@ import {
   SLIP_RANGE,
   SLIP_BOOST,
   SLICK_TTL_MS,
-  WALL_TTL_MS,
   PICKUP_RESPAWN_MS,
   MAX_HAZARDS,
+  PICKUP_ROW,
+  BANANA_TTL_MS,
+  SPIN_MS,
   ITEM_BAG,
   BOOST_MS,
   S_BOOST,
@@ -992,7 +1022,8 @@ test('a pickup fills an empty slot, not a full one, and starts a cooldown', () =
   match.grid[ty * GRID + tx] = S_PICKUP
 
   // A counter rng whose first and second draws land on genuinely different
-  // ITEM_BAG entries (index 0 is 'boost', index 5 is 'wall'; ITEM_BAG repeats
+  // ITEM_BAG entries (index 0 is 'boost', the last index is 'slick'; ITEM_BAG
+  // repeats
   // entries, so two different indices are not automatically two different
   // items, this pair is chosen to be safe). If the full-slot guard failed to
   // block a second draw, that draw would consume this rng's second value and
@@ -1017,28 +1048,68 @@ test('a pickup fills an empty slot, not a full one, and starts a cooldown', () =
   assert.equal(car.item, held, 'a full slot must not be overwritten')
 })
 
-test('powerups spawn right at the middle of the road and their spacing is randomised', () => {
+test('powerups spawn as a rank across the road, every box on the racing surface', () => {
   for (const circuit of CIRCUITS) {
-    const { centerline, pickups } = carve(circuit.seed)
+    const { grid, centerline, pickups } = carve(circuit.seed)
     assert.ok(pickups.length > 0, `${circuit.name}: must spawn at least one pickup`)
 
+    // Every box must be drivable. A box stamped into a wall is a box nobody can
+    // ever take, and it would sit in the snapshot forever looking available.
     for (const p of pickups) {
-      // Every pickup must sit right on the centerline (middle of the road)
-      const closestDist = centerline.reduce((min, cp) => {
-        const d = Math.hypot(p.x - cp.x, p.y - cp.y)
-        return d < min ? d : min
-      }, Infinity)
-      assert.ok(
-        closestDist <= 0.75,
-        `${circuit.name}: pickup at (${p.x}, ${p.y}) is ${closestDist} away from centerline, not in middle of road`,
+      assert.notEqual(
+        surfaceAt(grid, p.x, p.y),
+        S_WALL,
+        `${circuit.name}: pickup at (${p.x}, ${p.y}) is in a wall`,
       )
     }
+
+    // Every box must carry its own key, or taking one lane would silently put
+    // the rest of its row on cooldown too.
+    const keys = new Set(pickups.map((p) => p.key))
+    assert.equal(keys.size, pickups.length, `${circuit.name}: two boxes share a key`)
+
+    // The boxes must actually form ranks rather than a single file down the
+    // middle: at least one group of boxes must span the road laterally. Boxes in
+    // one row sit within a couple of tiles of each other along the track but
+    // apart from each other across it.
+    let widest = 0
+    for (const a of pickups) {
+      let span = 0
+      for (const b of pickups) {
+        const d = Math.hypot(a.x - b.x, a.y - b.y)
+        if (d > 0 && d <= PICKUP_ROW * LANE_GAP_MAX) span = Math.max(span, d)
+      }
+      widest = Math.max(widest, span)
+    }
+    assert.ok(
+      widest >= 1.5,
+      `${circuit.name}: boxes never span the road, widest neighbour gap was ${widest.toFixed(2)}`,
+    )
   }
 
   // Spacing and coordinates are randomised across different circuit seeds
   const pickupsA = carve(CIRCUITS[0].seed).pickups
   const pickupsB = carve(CIRCUITS[1].seed).pickups
   assert.notDeepEqual(pickupsA, pickupsB, 'different circuits should have randomised pickup distributions')
+})
+
+test('taking one box in a row leaves the rest of that row standing', () => {
+  // The Mario Kart property: a row is a choice of lane, not a single pickup that
+  // the nearest car consumes for everybody.
+  const match = racing(2)
+  const [a, b] = [...match.cars.values()]
+  const row = match.pickups.slice(0, 2)
+  assert.equal(row.length, 2, 'need at least two boxes to test this')
+
+  a.item = null
+  a.x = row[0].x
+  a.y = row[0].y
+  assert.equal(collectPickup(match, a, () => 0), true, 'the first car takes its box')
+
+  b.item = null
+  b.x = row[1].x
+  b.y = row[1].y
+  assert.equal(collectPickup(match, b, () => 0), true, 'a neighbouring box must still be there')
 })
 
 test('using an empty slot is a no-op', () => {
@@ -1088,18 +1159,25 @@ test('a slick drops behind the car, never on it', () => {
   assert.ok(hazard.x < car.x, 'the slick must land behind the nose')
 })
 
-test('a wall drops behind the car and expires', () => {
+test('a dropped hazard expires and is swept', () => {
   const match = racing(1)
   const [car] = [...match.cars.values()]
-  car.item = 'wall'
+  car.item = 'slick'
   useItem(match, car)
 
   assert.equal(match.hazards.length, 1)
-  assert.equal(match.hazards[0].kind, 'wall')
+  assert.equal(match.hazards[0].kind, 'slick')
 
-  match.now += WALL_TTL_MS + 1
+  match.now += SLICK_TTL_MS + 1
   expireHazards(match)
   assert.equal(match.hazards.length, 0, 'an expired hazard must be swept')
+})
+
+test('the bag no longer carries a wall', () => {
+  // The wall was removed deliberately: a near stop is the wrong verb for a game
+  // whose handling is momentum and sliding. If it ever comes back it should come
+  // back as a decision, not because someone re-added a string.
+  assert.ok(!ITEM_BAG.includes('wall'), 'wall must not be in the bag')
 })
 
 test('hazards are capped, oldest evicted first', () => {
@@ -1114,7 +1192,7 @@ test('hazards are capped, oldest evicted first', () => {
   const totalDrops = MAX_HAZARDS + 5
   const droppedX = []
   for (let i = 0; i < totalDrops; i++) {
-    car.item = 'wall'
+    car.item = 'slick'
     car.x = 30 + i // distinct per drop, so each hazard is identifiable later
     match.now += 1
     useItem(match, car)
@@ -1209,7 +1287,7 @@ test('the item bag is drawn the same way regardless of running position', () => 
 
   assert.ok(ITEM_BAG.length > 0)
   for (const item of ITEM_BAG) {
-    assert.ok(['boost', 'slick', 'wall'].includes(item), `unknown item ${item} in the bag`)
+    assert.ok(['boost', 'slick', 'banana'].includes(item), `unknown item ${item} in the bag`)
   }
 })
 
@@ -1361,7 +1439,7 @@ test('collecting a powerup despawns it from snapshot until cooldown expires', ()
 test('a snapshot is small enough to send at 60 Hz', () => {
   const match = racing(MAX_PLAYERS)
   for (let i = 0; i < MAX_HAZARDS; i++) {
-    match.hazards.push({ kind: 'wall', x: 40, y: 40, until: 9e9, by: 'p-1' })
+    match.hazards.push({ kind: 'slick', x: 40, y: 40, until: 9e9, by: 'p-1' })
   }
   const bytes = JSON.stringify(snapshot(match)).length
   assert.ok(bytes < 4096, `a full snapshot is ${bytes} bytes, over maxPayload`)
@@ -1389,16 +1467,21 @@ test('tick survives a hostile dt without moving anybody to NaN', () => {
 // itself rather than against production code, so it was removed there and
 // owed to this task instead. This asserts startRace()'s real output, not a
 // value the test computed on its own.
-test('startRace scales laps to the field: a small field gets MIN_LAPS, a full grid gets MAX_PLAYERS', () => {
+test('startRace sets a fixed race length, whatever the field size', () => {
+  // Laps used to scale with the roster, so the same circuit ran three laps for
+  // two drivers and eight for eight. Race length is a property of the race, not
+  // of who happened to be in the lobby when it started.
   const small = make({ circuitIndex: 0 })
   join(small, { name: 'A' }, () => 0)
   startRace(small)
-  assert.equal(small.laps, MIN_LAPS, 'a field smaller than MIN_LAPS still races MIN_LAPS laps')
+  assert.equal(small.laps, RACE_LAPS, 'a lone driver races the full distance')
 
   const full = make({ circuitIndex: 0 })
   for (let i = 0; i < MAX_PLAYERS; i++) join(full, { name: `D${i}` }, () => 0)
   startRace(full)
-  assert.equal(full.laps, MAX_PLAYERS, 'a full grid races one lap per car')
+  assert.equal(full.laps, RACE_LAPS, 'a full grid races exactly the same distance')
+
+  assert.ok(RACE_LAPS >= MIN_LAPS, 'a race is never shorter than MIN_LAPS')
 })
 
 // Circuit 0 alone is not proof the aim-anchor fix generalises: the
@@ -1457,4 +1540,168 @@ test('every circuit resolves to exactly one winner with bots only', () => {
     assert.equal(match.phase, 'over', `${CIRCUITS[ci].name} did not resolve`)
     assert.equal(alive, 4, `${CIRCUITS[ci].name} ended with ${alive} car(s) alive, not 4`)
   }
+})
+
+test('the snapshot names its bodies `cars`, the key the page hands the buffer', () => {
+  // src/pages/Cutline.jsx calls makeBuffer(DELAY_MS, 'cars'). The buffer cannot
+  // tell a snapshot with no bodies from one whose bodies sit under a different
+  // name: both come back as an empty array with no error. Cutline shipped
+  // exactly that way once, rendering an empty track while the suite stayed
+  // green. Rename this field and that page goes blind again, so the name is
+  // part of the contract rather than an implementation detail.
+  const match = racing(3)
+  const snap = snapshot(match)
+
+  assert.ok(Array.isArray(snap.cars), 'bodies must be under `cars`')
+  assert.equal(snap.cars.length, 3)
+  assert.equal(snap.players, undefined, 'nothing should answer to `players` here')
+})
+
+test('the snapshot carries the held steer and brake the page draws with', () => {
+  // The page turns the front wheels by `steer` and lights the brake lamps by
+  // `brake`. An absent field reads as a falsy one, so leaving these off the
+  // wire drew straight wheels and dark lamps forever without erroring.
+  const match = racing(2)
+  const [car] = [...match.cars.values()]
+
+  applyInput(match, car.id, { steer: -1, brake: 1, throttle: 1 })
+  const left = snapshot(match).cars.find((c) => c.id === car.id)
+  assert.equal(left.steer, -1, 'steer must reach the page')
+  assert.equal(left.brake, true, 'brake must reach the page')
+
+  applyInput(match, car.id, { steer: 1, brake: 0, throttle: 1 })
+  const right = snapshot(match).cars.find((c) => c.id === car.id)
+  assert.equal(right.steer, 1, 'steer must track the held input, not a constant')
+  assert.equal(right.brake, false)
+})
+
+test('a banana spins the car that touches it and is consumed doing so', () => {
+  const match = racing(2)
+  const [victim] = [...match.cars.values()]
+  const cp = match.checkpoints[3]
+  victim.x = cp.x
+  victim.y = cp.y
+  victim.heading = 0
+  victim.vx = 8
+  victim.vy = 0
+
+  match.hazards.push({ kind: 'banana', x: victim.x, y: victim.y, until: match.now + BANANA_TTL_MS, by: 'p-9' })
+
+  const headingBefore = victim.heading
+  applyHazards(match, victim)
+  assert.ok(victim.spinUntil > match.now, 'contact must start a spin')
+
+  // The spin must actually turn the car, and must ignore the driver's input:
+  // holding full opposite lock changes nothing while it lasts.
+  victim.steer = -1
+  for (let i = 0; i < 10; i++) stepCar(match, victim, TICK_MS / 1000)
+  assert.ok(
+    victim.heading > headingBefore,
+    `a spin must rotate the car, heading went ${headingBefore} to ${victim.heading}`,
+  )
+
+  // One use: the peel is spent and swept, so the car behind drives through clean.
+  expireHazards(match)
+  assert.equal(match.hazards.length, 0, 'a banana must be consumed by the car that hits it')
+})
+
+test('a spin ends, and the car drives again afterwards', () => {
+  const match = racing(1)
+  const [car] = [...match.cars.values()]
+  car.spinUntil = match.now + SPIN_MS
+
+  match.now += SPIN_MS + 1
+  const before = car.heading
+  car.steer = 0
+  stepCar(match, car, TICK_MS / 1000)
+  assert.equal(car.heading, before, 'once the spin lapses the car stops rotating on its own')
+})
+
+test('the bag carries bananas, and every entry is a real item', () => {
+  assert.ok(ITEM_BAG.includes('banana'), 'banana must be drawable')
+  for (const item of ITEM_BAG) {
+    assert.ok(['boost', 'slick', 'banana'].includes(item), `unknown item ${item} in the bag`)
+  }
+})
+
+test('every checkpoint is reachable from the full width of the road', () => {
+  // CHECKPOINT_RADIUS and TRACK_WIDTH are one setting in two places. While the
+  // radius was a hardcoded 4.0 and the road was widened to 11, a car running 4
+  // tiles off centre, entirely legally, missed 10 of 11 checkpoints and its lap
+  // never counted. Derived from the road, this cannot drift apart again.
+  const half = (TRACK_WIDTH - 1) / 2
+  assert.ok(
+    CHECKPOINT_RADIUS >= half,
+    `a checkpoint must reach the edge of the road: radius ${CHECKPOINT_RADIUS} against half-width ${half}`,
+  )
+
+  const match = racing(1)
+  const [car] = [...match.cars.values()]
+  const line = match.centerline
+
+  // Drive the ring at the outermost legal line and require every checkpoint.
+  for (const off of [0, half / 2, half]) {
+    car.lap = 0
+    car.nextCp = 1
+    car.cpTaken = 0
+    for (let c = 1; c < match.checkpoints.length; c++) {
+      const cp = match.checkpoints[c]
+      const i = cp.index
+      const a = line[(i - 1 + line.length) % line.length]
+      const b = line[(i + 1) % line.length]
+      const tx = b.x - a.x
+      const ty = b.y - a.y
+      const len = Math.hypot(tx, ty) || 1
+      car.x = cp.x - (ty / len) * off
+      car.y = cp.y + (tx / len) * off
+      updateProgress(match, car)
+    }
+    assert.equal(
+      car.cpTaken,
+      match.checkpoints.length - 1,
+      `a car racing ${off} tiles off centre must take every checkpoint`,
+    )
+  }
+})
+
+test('the finish line counts a crossing anywhere across the road, not a circle', () => {
+  // A circle cannot be accurate along the track and wide enough across it at the
+  // same time. This is a real crossing test, so it must bank a lap for a car
+  // passing the line on the outside line, and must not bank one for a car merely
+  // sitting near it.
+  const half = (TRACK_WIDTH - 1) / 2
+  const match = racing(1)
+  const [car] = [...match.cars.values()]
+  const p = match.checkpoints[0]
+  const line = match.centerline
+  const a = line[line.length - 1]
+  const b = line[1]
+  const tx = b.x - a.x
+  const ty = b.y - a.y
+  const len = Math.hypot(tx, ty) || 1
+  const t = { x: tx / len, y: ty / len }
+
+  const place = (along, across) => {
+    car.x = p.x + t.x * along - t.y * across
+    car.y = p.y + t.y * along + t.x * across
+  }
+
+  // All checkpoints taken, approaching the line wide.
+  car.lap = 0
+  car.nextCp = 0
+  car.cpTaken = match.checkpoints.length - 1
+  car.lineSide = undefined
+
+  place(-1.5, half)          // behind the line, on the outside edge
+  updateProgress(match, car)
+  assert.equal(car.lap, 0, 'approaching must not bank a lap')
+
+  place(0.5, half)           // now past it, still on the outside edge
+  updateProgress(match, car)
+  assert.equal(car.lap, 1, 'crossing wide must bank the lap')
+
+  // Sitting still just past the line must not keep banking laps.
+  const after = car.lap
+  updateProgress(match, car)
+  assert.equal(car.lap, after, 'a stationary car must not bank a second lap')
 })
