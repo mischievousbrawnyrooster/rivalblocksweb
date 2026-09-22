@@ -60,8 +60,14 @@ local specs = {
   { 'fire',    'Firing',         'string' },
   { 'steer',   'Steering',       'string' },
   { 'throttle','Throttle',       'string' },
-  { 'drift',   'Drifting',       'string' },
-  { 'item',    'Use Item',       'string' },
+  -- Cutline's input frame is {steer, throttle, brake, use}. `brake` and `use`
+  -- were missing while `drift` and `item` were declared, and neither of those
+  -- is a wire field in any game: drift is a CSS confetti variable and the other
+  -- games spend an item with a bare {t:'use'} carrying no payload. A declared
+  -- field that never populates costs nothing, but a sent field that is not
+  -- declared cannot be filtered, which is the whole point of this file.
+  { 'brake',   'Braking',        'string' },
+  { 'use',     'Use item',       'string' },
   { 'bytes',   'Payload bytes',  'uint32' },
   { 'json',    'Raw JSON',       'string' },
 }
@@ -184,7 +190,7 @@ local function build(game)
     end
 
     local bits = {}
-    for _, key in ipairs({ 'name', 'dir', 'dx', 'dy', 'aim', 'fire', 'steer', 'throttle', 'drift', 'item' }) do
+    for _, key in ipairs({ 'name', 'dir', 'dx', 'dy', 'aim', 'fire', 'steer', 'throttle', 'brake', 'use' }) do
       local v = scrape(text, key)
       if v then
         sub:add(f[key], buf(0, 0), v)
