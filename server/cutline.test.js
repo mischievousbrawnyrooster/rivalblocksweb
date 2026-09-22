@@ -1988,5 +1988,92 @@ test('the lattice cell is wide enough to keep parallel corridors apart', () => {
   assert.ok(LATTICE_ORIGIN - SEGMENT_WIDTH_MAX / 2 > 0, 'a circuit runs off the near edge')
 })
 
+import {
+  CORNERS,
+  TURN_FALLOFF,
+} from './cutline.js'
 
+test('the corner vocabulary maps radius to a required speed', () => {
+  // Corner speeds are derived from the handling model, not chosen. At speed v a
+  // car turns TURN_RATE * (1 - TURN_FALLOFF * v / TOP_SPEED) / v rad per tile,
+  // so v = TURN_RATE / (k + TURN_RATE * TURN_FALLOFF / TOP_SPEED).
+  const speedFor = (k) => TURN_RATE / (k + (TURN_RATE * TURN_FALLOFF) / TOP_SPEED)
 
+  for (const c of CORNERS) {
+    const v = speedFor(c.rad)
+    assert.ok(v > 0 && v <= TOP_SPEED, `${c.name} needs an impossible speed ${v}`)
+    assert.ok(
+      Math.abs(v - c.speed) < 0.2,
+      `${c.name} claims speed ${c.speed} but the model says ${v.toFixed(2)}`,
+    )
+  }
+
+  // The vocabulary must span from flat out to needing a real brake, or corners
+  // do not vary and the whole exercise is pointless.
+  const fastest = Math.max(...CORNERS.map((c) => c.speed))
+  const slowest = Math.min(...CORNERS.map((c) => c.speed))
+  assert.ok(fastest > TOP_SPEED * 0.8, 'at least one corner must be near flat out')
+  assert.ok(slowest < TOP_SPEED * 0.4, 'at least one corner must demand hard braking')
+  assert.equal(MAX_CORNER_RAD, Math.max(...CORNERS.map((c) => c.rad)), 'MAX_CORNER_RAD is the tightest corner')
+})
+
+test('a built centreline is closed, evenly spaced and carries meta per point', () => {
+  for (let seed = 1; seed <= 12; seed++) {
+    const { centerline, meta } = buildCenterline(seed)
+
+    assert.ok(centerline.length > 80, `seed ${seed}: centreline implausibly short`)
+    assert.equal(meta.length, centerline.length, `seed ${seed}: meta must be parallel to the line`)
+
+    const gaps = []
+    for (let i = 0; i < centerline.length; i++) {
+      const a = centerline[i]
+      const b = centerline[(i + 1) % centerline.length]
+      gaps.push(Math.hypot(b.x - a.x, b.y - a.y))
+    }
+    const maxGap = Math.max(...gaps)
+    const minGap = Math.min(...gaps)
+    assert.ok(maxGap - minGap < 0.01, `seed ${seed}: spacing is uneven, ${minGap} to ${maxGap}`)
+
+    for (const m of meta) {
+      assert.ok(m.width >= SEGMENT_WIDTH_MIN && m.width <= SEGMENT_WIDTH_MAX, `width ${m.width} out of range`)
+      assert.ok([-1, 0, 1].includes(m.sign), `sign ${m.sign} is not a direction`)
+    }
+  }
+})
+
+test('a circuit contains corners in both directions and at more than one radius', () => {
+  // The defect being fixed, asserted directly. A circuit whose corners all turn
+  // the same way is the harmonic curve in a new costume.
+  for (let seed = 1; seed <= 12; seed++) {
+    const { meta } = buildCenterline(seed)
+    const left = meta.filter((m) => m.sign === -1).length
+    const right = meta.filter((m) => m.sign === 1).length
+    assert.ok(left > 0, `seed ${seed}: no left-hand corners`)
+    assert.ok(right > 0, `seed ${seed}: no right-hand corners`)
+
+    const kinds = new Set(meta.map((m) => m.corner).filter(Boolean))
+    assert.ok(kinds.size >= 2, `seed ${seed}: only one kind of corner, ${[...kinds]}`)
+
+    const straight = meta.filter((m) => m.corner === null).length
+    assert.ok(straight > meta.length * 0.2, `seed ${seed}: barely any straight`)
+  }
+})
+
+test('no corner is sharper than the tightest the vocabulary allows', () => {
+  for (let seed = 1; seed <= 12; seed++) {
+    const { centerline } = buildCenterline(seed)
+    for (let i = 0; i < centerline.length; i++) {
+      const a = centerline[i]
+      const b = centerline[(i + 1) % centerline.length]
+      const c = centerline[(i + 2) % centerline.length]
+      const h1 = Math.atan2(b.y - a.y, b.x - a.x)
+      const h2 = Math.atan2(c.y - b.y, c.x - b.x)
+      let turn = Math.abs(h2 - h1)
+      if (turn > Math.PI) turn = Math.PI * 2 - turn
+      assert.ok(
+        turn <= MAX_CORNER_RAD + 0.05,
+        `seed ${seed}: corner of ${turn.toFixed(3)} exceeds ${MAX_CORNER_RAD}`,
+      )
+    }
+  }
+})

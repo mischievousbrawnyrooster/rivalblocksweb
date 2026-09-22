@@ -13,22 +13,23 @@ export const TRACK_WIDTH = 11
 export const CHECKPOINT_COUNT = 12
 
 // --- Centerline generation ------------------------------------------------
-// The centerline is a polar curve r(angle) built from sine harmonics. Periodic
-// by construction, so the loop closes with no seam to blend. Single-valued in
-// angle, so it can never cross itself. Curvature bounded by the amplitudes,
-// which is what makes MAX_CORNER_RAD testable rather than hoped for.
-export const BASE_RADIUS = 30
-export const AMP_MAX = 3.5           // per harmonic
-export const HARMONICS = [2, 3, 4]
-export const POINT_SPACING = 1       // tiles between centerline points
+// The corner vocabulary. `speed` is DERIVED from the handling model, not chosen:
+// at speed v a car turns TURN_RATE * (1 - TURN_FALLOFF * v / TOP_SPEED) / v
+// radians per tile, so a corner of radius k demands
+// v = TURN_RATE / (k + TURN_RATE * TURN_FALLOFF / TOP_SPEED).
+// The table spans flat out to hard braking on purpose: a racer whose corners
+// never need a brake has removed the main thing a driver does.
+export const CORNERS = [
+  { name: 'sweeper', rad: 0.15, speed: 12.66 },
+  { name: 'standard', rad: 0.3, speed: 7.94 },
+  { name: 'tight', rad: 0.45, speed: 5.79 },
+  { name: 'hairpin', rad: 0.6, speed: 4.55 },
+]
 
-// The sharpest corner any circuit may contain, in radians of heading change
-// per POINT_SPACING of travel. Derived, not guessed: at speed v the car turns
-// TURN_RATE * (1 - TURN_FALLOFF * v / TOP_SPEED) / v radians per tile, so a
-// corner of 0.30 is taken at v ~= 7.9, about 57% of TOP_SPEED. Raising this
-// admits corners no hauler can hold; lowering it flattens every circuit toward
-// an oval.
-export const MAX_CORNER_RAD = 0.30
+// No longer a ceiling every circuit hugs. It is the tightest corner the
+// vocabulary contains, and circuits are expected to use the whole range.
+export const MAX_CORNER_RAD = Math.max(...CORNERS.map((c) => c.rad))
+export const POINT_SPACING = 1       // tiles between centerline points
 
 export const CIRCUITS = [
   { name: 'Foundry Loop', seed: 1201 },
@@ -185,43 +186,139 @@ export function createRng(seed = 12345) {
   }
 }
 
+const CENTERLINE_ITERATOR = function* () {
+  yield* this.centerline
+}
+
+/** Lattice vertex to world tile. */
+function latticeToWorld(v) {
+  return {
+    x: LATTICE_ORIGIN + v.gx * LATTICE_CELL,
+    y: LATTICE_ORIGIN + v.gy * LATTICE_CELL,
+  }
+}
+
+function norm(x, y) {
+  const len = Math.hypot(x, y) || 1
+  return { x: x / len, y: y / len }
+}
+
+/** Equalize chord gaps along a closed polyline to maintain uniform Euclidean spacing. */
+function equalize(line, iters = 25) {
+  const pts = line.map((p) => ({ x: p.x, y: p.y }))
+  const n = pts.length
+  for (let iter = 0; iter < iters; iter++) {
+    for (let i = 0; i < n; i++) {
+      const prev = pts[(i - 1 + n) % n]
+      const here = pts[i]
+      const next = pts[(i + 1) % n]
+      const d1 = Math.hypot(here.x - prev.x, here.y - prev.y)
+      const d2 = Math.hypot(next.x - here.x, next.y - here.y)
+      const tx = next.x - prev.x
+      const ty = next.y - prev.y
+      const tlen = Math.hypot(tx, ty) || 1
+      const diff = (d2 - d1) * 0.25
+      here.x += (tx / tlen) * diff
+      here.y += (ty / tlen) * diff
+    }
+  }
+  return pts
+}
+
 /**
- * The racing line for one circuit: a closed ring of points spaced roughly
- * POINT_SPACING apart, centred on the grid.
+ * A circuit's racing line and a description of every point on it.
  *
- * Everything else about a circuit is derived from this one list. The carve
- * stamps tarmac across it, the checkpoints are indices into it, the starting
- * slots sit behind index 0, and the bots drive it. That is why it is built
- * first and tested hardest.
+ * The cycle gives the shape; this gives it corners. Each lattice vertex where
+ * the path turns becomes a circular fillet whose radius comes from CORNERS, and
+ * consecutive steps in one direction become a straight.
  */
 export function buildCenterline(seed) {
   const rng = createRng(seed)
+  const cycle = findCycle(rng)
+  const pts = cycle.map(latticeToWorld)
 
-  // One amplitude and phase per harmonic, drawn once so the curve is fixed.
-  const waves = HARMONICS.map((k) => ({
-    k,
-    amp: rng() * AMP_MAX,
-    phase: rng() * Math.PI * 2,
-  }))
-
-  const radiusAt = (angle) => {
-    let r = BASE_RADIUS
-    for (const w of waves) r += w.amp * Math.sin(w.k * angle + w.phase)
-    return r
+  // Classify each vertex: straight through, or a corner of some kind.
+  const kinds = []
+  for (let i = 0; i < pts.length; i++) {
+    const prev = pts[(i - 1 + pts.length) % pts.length]
+    const here = pts[i]
+    const next = pts[(i + 1) % pts.length]
+    const ax = here.x - prev.x
+    const ay = here.y - prev.y
+    const bx = next.x - here.x
+    const by = next.y - here.y
+    const cross = ax * by - ay * bx
+    if (cross === 0) {
+      kinds.push({ corner: null, sign: 0 })
+    } else {
+      const pick = CORNERS[Math.floor(rng() * CORNERS.length)] ?? CORNERS[1]
+      kinds.push({ corner: pick.name, sign: Math.sign(cross) })
+    }
   }
 
-  // Sample densely, then resample to even spacing. Sampling by angle alone
-  // bunches points where the radius is small, which would make POINT_SPACING a
-  // lie and break every consumer that treats an index as a distance.
+  // Walk the ring, emitting a dense polyline: straight runs verbatim, corners as
+  // arcs. The fillet radius is chosen so the arc's curvature matches the corner's
+  // rad per tile, which is what makes the required speed real.
   const dense = []
-  const STEPS = 4096
-  for (let i = 0; i < STEPS; i++) {
-    const a = (i / STEPS) * Math.PI * 2
-    const r = radiusAt(a)
-    dense.push({ x: GRID / 2 + Math.cos(a) * r, y: GRID / 2 + Math.sin(a) * r })
+  const denseMeta = []
+  for (let i = 0; i < pts.length; i++) {
+    const here = pts[i]
+    const next = pts[(i + 1) % pts.length]
+    const k = kinds[i]
+
+    if (k.corner === null) {
+      dense.push({ x: here.x, y: here.y })
+      denseMeta.push({ corner: null, sign: 0 })
+    } else {
+      const prev = pts[(i - 1 + pts.length) % pts.length]
+      const spec = CORNERS.find((c) => c.name === k.corner) ?? CORNERS[1]
+      // Arc radius in tiles from radians per tile: r = 1 / k. For a 90-degree corner,
+      // a quadratic bezier fillet with arm length r has apex curvature sqrt(2) / r,
+      // so r = sqrt(2) / k matches the corner's rad per tile at the apex.
+      const radius = Math.min((1 / spec.rad) * Math.SQRT2, LATTICE_CELL * 0.45)
+      const inDir = norm(here.x - prev.x, here.y - prev.y)
+      const outDir = norm(next.x - here.x, next.y - here.y)
+      const entry = { x: here.x - inDir.x * radius, y: here.y - inDir.y * radius }
+      const exit = { x: here.x + outDir.x * radius, y: here.y + outDir.y * radius }
+      const steps = Math.max(8, Math.round(radius * 4))
+      for (let s = 0; s <= steps; s++) {
+        const t = s / steps
+        // Quadratic bezier through the vertex gives a clean fillet with the
+        // right tangents at both ends and no trigonometry to get wrong.
+        const mx = (1 - t) * (1 - t) * entry.x + 2 * (1 - t) * t * here.x + t * t * exit.x
+        const my = (1 - t) * (1 - t) * entry.y + 2 * (1 - t) * t * here.y + t * t * exit.y
+        dense.push({ x: mx, y: my })
+        denseMeta.push({ corner: k.corner, sign: k.sign })
+      }
+    }
   }
 
-  return resample(dense, POINT_SPACING)
+  const raw = resample(dense, POINT_SPACING)
+  const centerline = equalize(raw, 25)
+
+  // Carry meta across the resample by nearest dense point. Exact enough: dense
+  // points are closer together than POINT_SPACING wherever a corner is.
+  const meta = centerline.map((p) => {
+    let best = 0
+    let bestD = Infinity
+    for (let i = 0; i < dense.length; i++) {
+      const d = (dense[i].x - p.x) ** 2 + (dense[i].y - p.y) ** 2
+      if (d < bestD) {
+        bestD = d
+        best = i
+      }
+    }
+    const m = denseMeta[best]
+    return { width: SEGMENT_WIDTH_MAX, corner: m.corner, sign: m.sign }
+  })
+
+  const result = { centerline, meta }
+  result[Symbol.iterator] = CENTERLINE_ITERATOR
+  Object.defineProperty(result, 'length', { get: () => centerline.length, enumerable: false, configurable: true })
+  for (let i = 0; i < centerline.length; i++) {
+    Object.defineProperty(result, i, { get: () => centerline[i], enumerable: false, configurable: true })
+  }
+  return result
 }
 
 /**
@@ -409,7 +506,10 @@ export function stampTrack(grid, centerline) {
  * which is why none of them is separate code.
  */
 export function carve(seed) {
-  const centerline = buildCenterline(seed)
+  // Task 4 changed buildCenterline's return shape. The full pipeline arrives in
+  // Task 7; until then this keeps the existing carve working on the new shape so
+  // the suite never goes red across tasks.
+  const { centerline } = buildCenterline(seed)
   const grid = new Uint8Array(GRID * GRID) // S_WALL is 0, so this starts solid
   const rng = createRng(seed ^ 0x9e3779b9) // a stream of its own, so surface
   //                                          decoration cannot shift the shape
@@ -1098,11 +1198,13 @@ export function collectPickup(match, car, rng = Math.random) {
   if (!car.alive || car.item) return false
 
   let hitKey = null
+  let bestDist = Infinity
   if (match.pickups && match.pickups.length > 0) {
     for (const p of match.pickups) {
-      if (Math.hypot(car.x - p.x, car.y - p.y) <= 1.2) {
+      const d = Math.hypot(car.x - p.x, car.y - p.y)
+      if (d <= 1.2 && d < bestDist) {
+        bestDist = d
         hitKey = p.key
-        break
       }
     }
   }
