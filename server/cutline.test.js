@@ -1801,3 +1801,71 @@ test('the collision shape is derived from the drawn car, not written twice', () 
   assert.equal(carCorners({ x: 0, y: 0, heading: 0 }).length, 4)
 })
 
+import {
+  S_GRAVEL,
+  S_RAMP,
+  SURFACE_CHARS,
+} from './cutline.js'
+
+test('every surface has a char, a grip entry, and a distinct value', () => {
+  // Adding a surface touches SURFACE_CHARS, the GRIP table and the page's
+  // prerender. Miss one and the wire carries undefined and the page draws
+  // nothing, with no error anywhere. This covers the two the module owns.
+  const surfaces = [S_WALL, S_TARMAC, S_KERB, S_BOOST, S_OIL, S_PICKUP, S_LINE, S_GRAVEL, S_RAMP]
+
+  assert.equal(new Set(surfaces).size, surfaces.length, 'surface values must be distinct')
+  assert.equal(SURFACE_CHARS.length, surfaces.length, 'every surface needs a char')
+  assert.equal(new Set(SURFACE_CHARS).size, SURFACE_CHARS.length, 'chars must be distinct')
+
+  // Wall is the only surface with no grip entry, because a car is never on it.
+  for (const s of surfaces) {
+    if (s === S_WALL) continue
+    assert.ok(Number.isFinite(GRIP[s]), `surface ${s} has no grip entry`)
+  }
+
+  // Gravel must be grippier than oil and looser than kerb, or it is not run off.
+  assert.ok(GRIP[S_GRAVEL] < GRIP[S_KERB], 'gravel must be looser than kerb')
+  assert.ok(GRIP[S_GRAVEL] > GRIP[S_OIL], 'gravel must bite more than oil')
+})
+
+test('an encoded map round trips with the new surfaces', () => {
+  const grid = new Uint8Array(GRID * GRID)
+  grid[0] = S_GRAVEL
+  grid[1] = S_RAMP
+  grid[2] = S_TARMAC
+  const round = decodeMap(encodeMap(grid))
+  assert.equal(round[0], S_GRAVEL)
+  assert.equal(round[1], S_RAMP)
+  assert.equal(round[2], S_TARMAC)
+})
+
+test('gravel scrubs speed without counting as off track', () => {
+  // offTrack stays reserved for S_WALL. Gravel costs time; it does not apply
+  // the off-track cap, or running wide would be the same as hitting a wall.
+  const match = racing(1)
+  const [car] = [...match.cars.values()]
+  const cp = match.checkpoints[3]
+  const tx = Math.round(cp.x)
+  const ty = Math.round(cp.y)
+
+  const run = (surface) => {
+    match.grid[ty * GRID + tx] = surface
+    car.x = tx
+    car.y = ty
+    car.heading = 0
+    car.vx = 10
+    car.vy = 0
+    car.throttle = false
+    car.steer = 0
+    for (let i = 0; i < 10; i++) stepCar(match, car, TICK_MS / 1000)
+    return Math.hypot(car.vx, car.vy)
+  }
+
+  const onTarmac = run(S_TARMAC)
+  const onGravel = run(S_GRAVEL)
+
+  assert.ok(onGravel < onTarmac, `gravel must scrub speed: tarmac ${onTarmac}, gravel ${onGravel}`)
+  assert.ok(onGravel > 0, 'gravel must not stop the car dead')
+})
+
+

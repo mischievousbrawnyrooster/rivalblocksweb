@@ -17,6 +17,8 @@ import {
   S_OIL,
   S_PICKUP,
   S_LINE,
+  S_GRAVEL,
+  S_RAMP,
   SURFACE_CHARS,
   decodeMap,
   CAR_LENGTH,
@@ -217,6 +219,33 @@ function prerender(map) {
         g.strokeStyle = 'rgba(56, 189, 248, 0.3)'
         g.lineWidth = 1
         g.stroke()
+      } else if (surface === S_GRAVEL) {
+        // Loose stone. Stippled so it reads as run off rather than as tarmac in
+        // a different shade, which colour alone would not carry.
+        g.fillStyle = '#4a4438'
+        g.fillRect(tx, ty, T, T)
+        g.fillStyle = 'rgba(0, 0, 0, 0.35)'
+        for (let d = 0; d < 6; d++) {
+          const gx = tx + ((x * 7 + y * 13 + d * 11) % T)
+          const gy = ty + ((x * 17 + y * 5 + d * 19) % T)
+          g.fillRect(gx, gy, 2, 2)
+        }
+      } else if (surface === S_RAMP) {
+        // A ramp reads as raised: a bright leading lip and chevrons pointing the
+        // way it launches, so it is never mistaken for a boost strip.
+        g.fillStyle = '#2b2118'
+        g.fillRect(tx, ty, T, T)
+        g.fillStyle = cWarn
+        g.fillRect(tx, ty, T, Math.max(2, T * 0.18))
+        g.strokeStyle = cWarn
+        g.lineWidth = 2
+        for (const cy of [ty + T * 0.45, ty + T * 0.72]) {
+          g.beginPath()
+          g.moveTo(tx + T * 0.2, cy + T * 0.12)
+          g.lineTo(tx + T * 0.5, cy - T * 0.08)
+          g.lineTo(tx + T * 0.8, cy + T * 0.12)
+          g.stroke()
+        }
       }
     }
   }

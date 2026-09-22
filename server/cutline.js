@@ -143,8 +143,16 @@ export const S_BOOST = 3
 export const S_OIL = 4
 export const S_PICKUP = 5
 export const S_LINE = 6
+// Run off, not wall. Running wide outside a fast corner costs time instead of
+// ending the race, which is what makes a hard braking zone a risk worth taking.
+// offTrack stays reserved for S_WALL, so the off-track cap does not apply here.
+export const S_GRAVEL = 7
+// A ramp. Crossing it above RAMP_MIN_SPEED launches the car.
+export const S_RAMP = 8
 
-export const SURFACE_CHARS = ['W', 'T', 'K', 'B', 'O', 'P', 'L']
+export const SURFACE_CHARS = ['W', 'T', 'K', 'B', 'O', 'P', 'L', 'G', 'R']
+
+export const GRAVEL_DRAG = 3.0       // scrubs speed without stopping the car
 
 // Derived from the starting slots the carve lays down, the way Blockout derives
 // its capacity from SPAWNS.length. To raise capacity, lay more slots; never
@@ -612,6 +620,8 @@ export const GRIP = {
   [S_OIL]: 0.6,
   [S_PICKUP]: 7.0,
   [S_LINE]: 7.0,
+  [S_GRAVEL]: 2.0,
+  [S_RAMP]: 7.0,
 }
 
 /**
@@ -685,7 +695,8 @@ export function stepCar(match, car, dt) {
   const drive = spinning ? SPIN_THRUST : car.onSlick ? SLICK_THRUST : 1
   if (car.throttle) fwd += ACCEL * (match.now < car.boostUntil ? BOOST_MULT : 1) * drive * dt
   if (car.brake) fwd -= BRAKE * dt
-  fwd -= fwd * (offTrack ? OFFTRACK_DRAG : DRAG) * dt
+  const surfaceDrag = surface === S_GRAVEL ? GRAVEL_DRAG : DRAG
+  fwd -= fwd * (offTrack ? OFFTRACK_DRAG : surfaceDrag) * dt
 
   // 4. Lateral bleeds off at the surface's grip.
   const base = offTrack ? GRIP[S_TARMAC] : (GRIP[surface] ?? GRIP[S_TARMAC])
