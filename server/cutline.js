@@ -41,6 +41,136 @@ export const CIRCUITS = [
   { name: 'Tap Hole', seed: 2064 },
 ]
 
+// --- Lattice --------------------------------------------------------------
+// A circuit is a closed cycle on a coarse lattice, smoothed into real corners.
+// The harmonic curve this replaces was single valued in angle, so it always
+// bent around the grid centre: every corner turned the same way and curvature
+// was global, which is why every circuit read as the same deformed circle.
+export const MIN_WALL = 3
+export const SEGMENT_WIDTH_MAX = 11
+export const SEGMENT_WIDTH_MIN = 7
+// Derived. Two parallel corridors must not merge, so their centres must be at
+// least the widest road plus a wall apart.
+export const LATTICE_CELL = SEGMENT_WIDTH_MAX + MIN_WALL
+export const LATTICE_N = 6
+export const LATTICE_ORIGIN = 8
+
+export const MIN_CYCLE_EDGES = 16
+export const MIN_DIRECTION_CHANGES = 8
+export const MIN_SIGN_CHANGES = 3
+export const MIN_STRAIGHT_EDGES = 3
+export const CYCLE_ATTEMPTS = 200
+
+// A known good cycle, used when the search cannot find one. It satisfies every
+// acceptance rule the search applies, so a hard seed never yields a circuit
+// worse than one the search would have rejected.
+export const FALLBACK_CYCLE = [
+  { gx: 1, gy: 1 }, { gx: 2, gy: 1 }, { gx: 3, gy: 1 }, { gx: 4, gy: 1 },
+  { gx: 4, gy: 2 }, { gx: 3, gy: 2 }, { gx: 3, gy: 3 }, { gx: 4, gy: 3 },
+  { gx: 4, gy: 4 }, { gx: 3, gy: 4 }, { gx: 2, gy: 4 }, { gx: 1, gy: 4 },
+  { gx: 1, gy: 3 }, { gx: 2, gy: 3 }, { gx: 2, gy: 2 }, { gx: 1, gy: 2 },
+]
+
+const LATTICE_STEPS = [
+  { x: 1, y: 0 },
+  { x: -1, y: 0 },
+  { x: 0, y: 1 },
+  { x: 0, y: -1 },
+]
+
+/** Whether a closed lattice cycle is varied enough to be worth racing. */
+function cycleAccepted(cycle) {
+  if (cycle.length < MIN_CYCLE_EDGES) return false
+
+  const dirs = []
+  for (let i = 0; i < cycle.length; i++) {
+    const a = cycle[i]
+    const b = cycle[(i + 1) % cycle.length]
+    dirs.push({ x: b.gx - a.gx, y: b.gy - a.gy })
+  }
+
+  let turns = 0
+  let signChanges = 0
+  let lastSign = 0
+  let longestStraight = 1
+  let run = 1
+  for (let i = 0; i < dirs.length; i++) {
+    const a = dirs[i]
+    const b = dirs[(i + 1) % dirs.length]
+    const cross = a.x * b.y - a.y * b.x
+    if (cross === 0) {
+      run++
+      if (run > longestStraight) longestStraight = run
+    } else {
+      turns++
+      run = 1
+      const sign = Math.sign(cross)
+      if (lastSign !== 0 && sign !== lastSign) signChanges++
+      lastSign = sign
+    }
+  }
+
+  return (
+    turns >= MIN_DIRECTION_CHANGES &&
+    signChanges >= MIN_SIGN_CHANGES &&
+    longestStraight >= MIN_STRAIGHT_EDGES
+  )
+}
+
+/**
+ * A closed cycle on the lattice, as a list of vertices in order.
+ *
+ * Self-intersection is impossible by construction: a vertex is never visited
+ * twice, so two stretches of road can never occupy the same lattice cell. That
+ * is the guarantee the harmonic curve gave for free and the reason this search
+ * refuses rather than repairs.
+ */
+export function findCycle(rng = Math.random) {
+  for (let attempt = 0; attempt < CYCLE_ATTEMPTS; attempt++) {
+    const start = {
+      gx: Math.floor(rng() * LATTICE_N),
+      gy: Math.floor(rng() * LATTICE_N),
+    }
+    const path = [start]
+    const seen = new Set([`${start.gx},${start.gy}`])
+
+    for (let step = 0; step < LATTICE_N * LATTICE_N * 4; step++) {
+      const at = path[path.length - 1]
+      // Shuffle the four steps with the injected rng so the walk is seeded.
+      const order = [0, 1, 2, 3]
+      for (let i = order.length - 1; i > 0; i--) {
+        const j = Math.floor(rng() * (i + 1))
+        const t = order[i]
+        order[i] = order[j]
+        order[j] = t
+      }
+
+      let moved = false
+      for (const oi of order) {
+        const d = LATTICE_STEPS[oi]
+        const nx = at.gx + d.x
+        const ny = at.gy + d.y
+        if (nx < 0 || ny < 0 || nx >= LATTICE_N || ny >= LATTICE_N) continue
+
+        // Closing the loop: only from a path long enough to be worth racing.
+        if (nx === start.gx && ny === start.gy) {
+          if (path.length >= MIN_CYCLE_EDGES && cycleAccepted(path)) return path
+          continue
+        }
+
+        if (seen.has(`${nx},${ny}`)) continue
+        path.push({ gx: nx, gy: ny })
+        seen.add(`${nx},${ny}`)
+        moved = true
+        break
+      }
+      if (!moved) break // walked into a dead end, start again
+    }
+  }
+
+  return FALLBACK_CYCLE.map((v) => ({ ...v }))
+}
+
 // --- Seeded PRNG ----------------------------------------------------------
 // mulberry32. Duplicated from voiddrillers.js rather than imported: this module
 // has zero imports on purpose, and that purity is why every rule here is

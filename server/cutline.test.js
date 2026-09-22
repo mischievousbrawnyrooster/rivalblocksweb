@@ -1868,4 +1868,125 @@ test('gravel scrubs speed without counting as off track', () => {
   assert.ok(onGravel > 0, 'gravel must not stop the car dead')
 })
 
+import {
+  LATTICE_N,
+  LATTICE_CELL,
+  LATTICE_ORIGIN,
+  MIN_WALL,
+  SEGMENT_WIDTH_MAX,
+  SEGMENT_WIDTH_MIN,
+  MIN_CYCLE_EDGES,
+  MIN_DIRECTION_CHANGES,
+  MIN_SIGN_CHANGES,
+  MIN_STRAIGHT_EDGES,
+  CYCLE_ATTEMPTS,
+  FALLBACK_CYCLE,
+  findCycle,
+} from './cutline.js'
+
+test('a found cycle is closed, never revisits a vertex, and turns both ways', () => {
+  // These are the three guarantees the harmonic centreline gave for free. A
+  // cycle that fails any of them produces a circuit that softlocks a race, so
+  // they are asserted for many seeds rather than one.
+  for (let seed = 1; seed <= 40; seed++) {
+    const cycle = findCycle(createRng(seed))
+
+    assert.ok(cycle.length >= MIN_CYCLE_EDGES, `seed ${seed}: cycle too short, ${cycle.length}`)
+
+    // Closed: consecutive vertices are lattice neighbours, including the wrap.
+    for (let i = 0; i < cycle.length; i++) {
+      const a = cycle[i]
+      const b = cycle[(i + 1) % cycle.length]
+      const step = Math.abs(a.gx - b.gx) + Math.abs(a.gy - b.gy)
+      assert.equal(step, 1, `seed ${seed}: vertices ${i} and ${i + 1} are not neighbours`)
+    }
+
+    // No vertex twice: this is what makes self-intersection impossible.
+    const keys = new Set(cycle.map((v) => `${v.gx},${v.gy}`))
+    assert.equal(keys.size, cycle.length, `seed ${seed}: a vertex is used twice`)
+
+    // Inside the lattice.
+    for (const v of cycle) {
+      assert.ok(v.gx >= 0 && v.gx < LATTICE_N && v.gy >= 0 && v.gy < LATTICE_N, `seed ${seed}: off lattice`)
+    }
+  }
+})
+
+test('a found cycle is never an oval: it turns both ways and has a straight', () => {
+  // The whole point. The harmonic curve bent around the grid centre, so every
+  // corner turned the same way and every lap read identically. A cycle that
+  // only ever turns one way has reproduced that defect in a new shape.
+  for (let seed = 1; seed <= 40; seed++) {
+    const cycle = findCycle(createRng(seed))
+    const dirs = []
+    for (let i = 0; i < cycle.length; i++) {
+      const a = cycle[i]
+      const b = cycle[(i + 1) % cycle.length]
+      dirs.push({ x: b.gx - a.gx, y: b.gy - a.gy })
+    }
+
+    let turns = 0
+    let signChanges = 0
+    let lastSign = 0
+    let longestStraight = 1
+    let run = 1
+    for (let i = 0; i < dirs.length; i++) {
+      const a = dirs[i]
+      const b = dirs[(i + 1) % dirs.length]
+      const cross = a.x * b.y - a.y * b.x
+      if (cross === 0) {
+        run++
+        longestStraight = Math.max(longestStraight, run)
+      } else {
+        turns++
+        run = 1
+        const sign = Math.sign(cross)
+        if (lastSign !== 0 && sign !== lastSign) signChanges++
+        lastSign = sign
+      }
+    }
+
+    assert.ok(turns >= MIN_DIRECTION_CHANGES, `seed ${seed}: only ${turns} turns`)
+    assert.ok(signChanges >= MIN_SIGN_CHANGES, `seed ${seed}: only ${signChanges} counter turns, this is an oval`)
+    assert.ok(
+      longestStraight >= MIN_STRAIGHT_EDGES,
+      `seed ${seed}: longest straight is ${longestStraight} edges`,
+    )
+  }
+})
+
+test('the same seed finds the same cycle', () => {
+  assert.deepEqual(findCycle(createRng(7)), findCycle(createRng(7)))
+  assert.notDeepEqual(findCycle(createRng(7)), findCycle(createRng(8)))
+})
+
+test('the fallback cycle satisfies every rule the search does', () => {
+  // The fallback exists so generation can never fail to return a circuit. If it
+  // does not itself pass the acceptance rules, a hard seed produces a circuit
+  // worse than the ones the search rejected.
+  assert.ok(FALLBACK_CYCLE.length >= MIN_CYCLE_EDGES)
+  const keys = new Set(FALLBACK_CYCLE.map((v) => `${v.gx},${v.gy}`))
+  assert.equal(keys.size, FALLBACK_CYCLE.length, 'the fallback must not revisit a vertex')
+  for (let i = 0; i < FALLBACK_CYCLE.length; i++) {
+    const a = FALLBACK_CYCLE[i]
+    const b = FALLBACK_CYCLE[(i + 1) % FALLBACK_CYCLE.length]
+    assert.equal(Math.abs(a.gx - b.gx) + Math.abs(a.gy - b.gy), 1, 'the fallback must be closed')
+  }
+})
+
+test('the lattice cell is wide enough to keep parallel corridors apart', () => {
+  // Two stretches of road running side by side must not merge into one, or the
+  // carve produces a shortcut nobody designed and the checkpoint ring rejects
+  // the lap. Derived, so it cannot drift when the road widens.
+  assert.ok(
+    LATTICE_CELL >= SEGMENT_WIDTH_MAX + MIN_WALL,
+    `cell ${LATTICE_CELL} leaves no wall between corridors ${SEGMENT_WIDTH_MAX} wide`,
+  )
+  // And the widest circuit must fit the grid.
+  const far = LATTICE_ORIGIN + (LATTICE_N - 1) * LATTICE_CELL + SEGMENT_WIDTH_MAX / 2
+  assert.ok(far < GRID, `a circuit reaches ${far}, past the grid at ${GRID}`)
+  assert.ok(LATTICE_ORIGIN - SEGMENT_WIDTH_MAX / 2 > 0, 'a circuit runs off the near edge')
+})
+
+
 
