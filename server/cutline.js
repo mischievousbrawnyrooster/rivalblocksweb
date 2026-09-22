@@ -50,6 +50,9 @@ export const CIRCUITS = [
 export const MIN_WALL = 3
 export const SEGMENT_WIDTH_MAX = 11
 export const SEGMENT_WIDTH_MIN = 7
+// Width may not step. A one tile ledge mid corner catches a wheel and reads as
+// a collision bug rather than as geometry.
+export const WIDTH_RAMP_PER_POINT = 0.25
 // Derived. Two parallel corridors must not merge, so their centres must be at
 // least the widest road plus a wall apart.
 export const LATTICE_CELL = SEGMENT_WIDTH_MAX + MIN_WALL
@@ -311,6 +314,42 @@ export function buildCenterline(seed) {
     const m = denseMeta[best]
     return { width: SEGMENT_WIDTH_MAX, corner: m.corner, sign: m.sign }
   })
+
+  // Chicanes: a tight corner immediately followed by a tight corner the other
+  // way is one feature, not two. Marked so width and the carve can treat it as
+  // a unit, and so a test can assert circuits contain them.
+  for (let i = 0; i < meta.length; i++) {
+    const a = meta[i]
+    const b = meta[(i + 1) % meta.length]
+    if (a.corner === 'tight' && b.corner === 'tight' && a.sign !== 0 && b.sign !== 0 && a.sign !== b.sign) {
+      a.corner = 'chicane'
+      b.corner = 'chicane'
+    }
+  }
+
+  // Target width per point: wide on a straight so there is room to out brake
+  // somebody, narrow through anything technical.
+  const target = meta.map((m) => {
+    if (m.corner === null) return SEGMENT_WIDTH_MAX
+    if (m.corner === 'chicane' || m.corner === 'hairpin') return SEGMENT_WIDTH_MIN
+    if (m.corner === 'tight') return SEGMENT_WIDTH_MIN + 2
+    return SEGMENT_WIDTH_MIN + 3
+  })
+
+  // Ramp toward the target rather than stepping to it. Two passes, forward then
+  // backward, so a narrow stretch is approached from both sides.
+  const width = target.slice()
+  for (let pass = 0; pass < 2; pass++) {
+    for (let n = 0; n < width.length; n++) {
+      const i = pass === 0 ? n : width.length - 1 - n
+      const j = pass === 0 ? (i - 1 + width.length) % width.length : (i + 1) % width.length
+      const limit = width[j] + (width[i] > width[j] ? WIDTH_RAMP_PER_POINT : -WIDTH_RAMP_PER_POINT)
+      if (Math.abs(width[i] - width[j]) > WIDTH_RAMP_PER_POINT) width[i] = limit
+    }
+  }
+  for (let i = 0; i < meta.length; i++) {
+    meta[i].width = Math.max(SEGMENT_WIDTH_MIN, Math.min(SEGMENT_WIDTH_MAX, width[i]))
+  }
 
   const result = { centerline, meta }
   result[Symbol.iterator] = CENTERLINE_ITERATOR

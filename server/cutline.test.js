@@ -2077,3 +2077,59 @@ test('no corner is sharper than the tightest the vocabulary allows', () => {
     }
   }
 })
+
+import {
+  WIDTH_RAMP_PER_POINT,
+} from './cutline.js'
+
+test('width varies along a lap and never steps', () => {
+  // A one tile ledge mid corner catches a wheel and reads as a collision bug
+  // rather than as geometry, so width ramps rather than jumps.
+  for (let seed = 1; seed <= 12; seed++) {
+    const { meta } = buildCenterline(seed)
+    const widths = meta.map((m) => m.width)
+
+    assert.ok(Math.max(...widths) > Math.min(...widths), `seed ${seed}: width never varies`)
+    assert.ok(Math.min(...widths) >= SEGMENT_WIDTH_MIN, `seed ${seed}: too narrow`)
+    assert.ok(Math.max(...widths) <= SEGMENT_WIDTH_MAX, `seed ${seed}: too wide`)
+
+    for (let i = 0; i < widths.length; i++) {
+      const a = widths[i]
+      const b = widths[(i + 1) % widths.length]
+      assert.ok(
+        Math.abs(a - b) <= WIDTH_RAMP_PER_POINT + 1e-9,
+        `seed ${seed}: width steps from ${a} to ${b} at point ${i}`,
+      )
+    }
+  }
+})
+
+test('straights are wider than the corners they lead into', () => {
+  // The point of varying width: room to out brake somebody into a corner.
+  for (let seed = 1; seed <= 12; seed++) {
+    const { meta } = buildCenterline(seed)
+    const straightW = meta.filter((m) => m.corner === null).map((m) => m.width)
+    const cornerW = meta.filter((m) => m.corner !== null).map((m) => m.width)
+    if (straightW.length === 0 || cornerW.length === 0) continue
+    const avg = (xs) => xs.reduce((a, b) => a + b, 0) / xs.length
+    assert.ok(
+      avg(straightW) > avg(cornerW),
+      `seed ${seed}: straights average ${avg(straightW)}, corners ${avg(cornerW)}`,
+    )
+  }
+})
+
+test('at least some circuits contain a chicane, and a chicane counter turns', () => {
+  // A chicane is one feature, not three unrelated corners: tight one way then
+  // tight the other, so it cannot be taken on a single line.
+  let found = 0
+  for (let seed = 1; seed <= 24; seed++) {
+    const { meta } = buildCenterline(seed)
+    const idx = meta.map((m, i) => (m.corner === 'chicane' ? i : -1)).filter((i) => i >= 0)
+    if (idx.length === 0) continue
+    found++
+    const signs = new Set(idx.map((i) => meta[i].sign).filter((s) => s !== 0))
+    assert.ok(signs.size >= 2, `seed ${seed}: a chicane must turn both ways, saw ${[...signs]}`)
+  }
+  assert.ok(found > 0, 'no circuit in 24 seeds contained a chicane')
+})
