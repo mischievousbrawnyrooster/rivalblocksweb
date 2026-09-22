@@ -944,12 +944,13 @@ export function stepCar(match, car, dt) {
   const speed = Math.hypot(car.vx, car.vy)
   const falloff = 1 - TURN_FALLOFF * Math.min(1, speed / TOP_SPEED)
   const spinning = match.now < (car.spinUntil ?? 0)
+  const airborne = match.now < (car.airUntil ?? 0)
   if (spinning) {
     // The wheel is not yours. Input is ignored outright rather than scaled, so a
     // spin cannot be steered out of by holding the opposite lock.
     car.heading += SPIN_RATE * dt
   } else {
-    const steerAuthority = car.onSlick ? SLICK_TURN : 1
+    const steerAuthority = airborne ? AIR_STEER : car.onSlick ? SLICK_TURN : 1
     car.heading += (car.steer ?? 0) * TURN_RATE * falloff * steerAuthority * dt
   }
 
@@ -982,14 +983,14 @@ export function stepCar(match, car, dt) {
   // 6. Integrate, then resolve contact one axis at a time so a car sliding
   //    along a wall keeps the component that is not blocked.
   const nx = car.x + car.vx * dt
-  if (bodyHitsWall(match, car, nx, car.y) && !offTrack) {
+  if (bodyHitsWall(match, car, nx, car.y) && !offTrack && !airborne) {
     car.vx *= -WALL_HIT_KEEP
   } else {
     car.x = nx
   }
 
   const ny = car.y + car.vy * dt
-  if (bodyHitsWall(match, car, car.x, ny) && !offTrack) {
+  if (bodyHitsWall(match, car, car.x, ny) && !offTrack && !airborne) {
     car.vy *= -WALL_HIT_KEEP
   } else {
     car.y = ny
@@ -1292,6 +1293,15 @@ export function expireHazards(match) {
   match.hazards = match.hazards.filter((h) => h.until > match.now && !h.spent)
 }
 
+// A ramp launches a car that arrives with speed. While airborne the car ignores
+// hazards and walls, so a ramp can clear a gap or a barrier, and carries the
+// speed it arrived with. Height is RENDER ONLY: the rules track only that the
+// car is in the air and when it lands, so nothing here gains a z axis. That is
+// the same division Blockout 3D uses for its jump.
+export const RAMP_MIN_SPEED = 8.0
+export const AIR_MS = 700
+export const AIR_STEER = 0.25
+
 /**
  * What the surface and the hazards do to a car this tick.
  *
@@ -1304,7 +1314,17 @@ export function applyHazards(match, car) {
 
   car.onSlick = false
 
-  if (surfaceAt(match.grid, Math.round(car.x), Math.round(car.y)) === S_BOOST) {
+  const here = surfaceAt(match.grid, Math.round(car.x), Math.round(car.y))
+
+  if (here === S_RAMP && Math.hypot(car.vx, car.vy) >= RAMP_MIN_SPEED) {
+    car.airUntil = Math.max(car.airUntil ?? 0, match.now + AIR_MS)
+  }
+
+  // Airborne: nothing on the ground reaches the car, and a banana under it is
+  // not consumed, so it is still there for whoever lands on it.
+  if (match.now < (car.airUntil ?? 0)) return
+
+  if (here === S_BOOST) {
     car.boostUntil = Math.max(car.boostUntil, match.now + STRIP_BOOST_MS)
   }
 
@@ -1405,6 +1425,7 @@ export function startRace(match) {
     car.item = null
     car.boostUntil = 0
     car.spinUntil = 0
+    car.airUntil = 0
     car.lineSide = undefined
     car.bestLapMs = null
     car.lapStartedAt = 0
@@ -1523,6 +1544,12 @@ export function snapshot(match) {
       boosting: match.now < car.boostUntil,
       sliding: Boolean(car.onSlick),
       spinning: match.now < (car.spinUntil ?? 0),
+      airborne: match.now < (car.airUntil ?? 0),
+      // Normalised height along the arc, for the page to draw a hop and a
+      // shadow with. Render only: no rule reads it back.
+      airT: match.now < (car.airUntil ?? 0)
+        ? Math.round((1 - (car.airUntil - match.now) / AIR_MS) * 100) / 100
+        : 0,
       // The page turns the front wheels by `steer` and lights the brake lamps by
       // `brake`. Both are held input the server already owns, and without them on
       // the wire the page silently drew straight wheels and dark lamps forever,

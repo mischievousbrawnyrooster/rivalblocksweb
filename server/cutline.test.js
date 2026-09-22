@@ -2133,3 +2133,74 @@ test('at least some circuits contain a chicane, and a chicane counter turns', ()
   }
   assert.ok(found > 0, 'no circuit in 24 seeds contained a chicane')
 })
+
+import {
+  RAMP_MIN_SPEED,
+  AIR_MS,
+} from './cutline.js'
+
+test('a ramp launches a car that is fast enough, and ignores one that is not', () => {
+  const match = racing(1)
+  const [car] = [...match.cars.values()]
+  const cp = match.checkpoints[3]
+  const tx = Math.round(cp.x)
+  const ty = Math.round(cp.y)
+  match.grid[ty * GRID + tx] = S_RAMP
+
+  car.x = tx
+  car.y = ty
+  car.heading = 0
+  car.vx = RAMP_MIN_SPEED - 2
+  car.vy = 0
+  applyHazards(match, car)
+  assert.ok(!(match.now < (car.airUntil ?? 0)), 'a slow car must not be launched')
+
+  car.vx = RAMP_MIN_SPEED + 2
+  applyHazards(match, car)
+  assert.ok(match.now < car.airUntil, 'a fast car must be launched')
+})
+
+test('an airborne car ignores hazards and walls, then lands', () => {
+  const match = racing(1)
+  const [car] = [...match.cars.values()]
+  const cp = match.checkpoints[3]
+
+  car.x = cp.x
+  car.y = cp.y
+  car.heading = 0
+  car.vx = 10
+  car.vy = 0
+  car.airUntil = match.now + AIR_MS
+
+  // A slick directly under an airborne car must do nothing.
+  match.hazards.push({ kind: 'slick', x: car.x, y: car.y, until: match.now + SLICK_TTL_MS, by: 'x' })
+  applyHazards(match, car)
+  assert.equal(car.onSlick, false, 'an airborne car must not be affected by a slick')
+
+  // A banana under an airborne car must neither spin it nor be consumed.
+  match.hazards.push({ kind: 'banana', x: car.x, y: car.y, until: match.now + BANANA_TTL_MS, by: 'x' })
+  applyHazards(match, car)
+  assert.ok(!(match.now < (car.spinUntil ?? 0)), 'an airborne car must not be spun')
+  assert.ok(!match.hazards.some((h) => h.spent), 'a banana must not be consumed from the air')
+
+  // And it lands.
+  match.now += AIR_MS + 1
+  applyHazards(match, car)
+  assert.ok(!(match.now < car.airUntil), 'the car must come down')
+})
+
+test('the snapshot tells the page a car is airborne', () => {
+  const match = racing(1)
+  const [car] = [...match.cars.values()]
+  car.airUntil = match.now + AIR_MS
+
+  const snap = snapshot(match)
+  const me = snap.cars.find((c) => c.id === car.id)
+  assert.equal(me.airborne, true)
+  assert.ok(me.airT >= 0 && me.airT <= 1, `airT ${me.airT} must be normalised for the arc`)
+
+  match.now += AIR_MS + 1
+  const after = snapshot(match).cars.find((c) => c.id === car.id)
+  assert.equal(after.airborne, false)
+})
+
