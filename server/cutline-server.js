@@ -64,6 +64,8 @@ const welcome = (car, mapEncoded = encodeMap(match.grid)) =>
       size: Math.sqrt(match.grid.length),
       map: mapEncoded,
       checkpoints: match.checkpoints,
+      // Render only: the grid says where a ramp is, this says which way it faces.
+      ramps: match.ramps,
     },
   })
 

@@ -198,3 +198,15 @@ test('views cycle, and an unknown view falls back to the default', () => {
   assert.ok(!isView('__proto__'))
   assert.equal(VIEWS.length, 3)
 })
+
+test('the bumper eye rises with the car over a ramp or a jump; the others hold steady', () => {
+  const flat = { x: 40, y: 40, heading: 0.4 }
+  const lifted = { ...flat, lift: 0.8 }
+  const b0 = targetPose('bumper', flat, flat.heading, NOSE)
+  const b1 = targetPose('bumper', lifted, flat.heading, NOSE)
+  near(b1.position[1] - b0.position[1], 0.8, 'eye')
+  near(b1.target[1] - b0.target[1], 0.8, 'sightline stays level')
+  for (const view of ['chase', 'top']) {
+    assert.deepEqual(targetPose(view, lifted, 0.4, NOSE), targetPose(view, flat, 0.4, NOSE), `${view} must not bob with the car`)
+  }
+})

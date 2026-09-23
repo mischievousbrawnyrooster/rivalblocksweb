@@ -2579,3 +2579,65 @@ test('a car with a corner already in a wall can still drive free', () => {
   assert.ok(trials > 20, `the test must find wall contacts to try, found ${trials}`)
   assert.equal(freed, trials, `${trials - freed} of ${trials} cars touching a wall were still stuck after 3 seconds`)
 })
+
+// --- Ramps are listed for the page ------------------------------------------
+// The grid says where a ramp is but not which way it faces, and a 3D wedge needs
+// both. carve lists them; the page draws from that list and nothing else.
+import { CIRCUITS as RAMP_CIRCUITS, carve as carveRamps, make as makeRamps, tick as tickRamps, S_RAMP as RAMP, GRID as RAMP_GRID, TICK_MS as RAMP_TICK } from './cutline.js'
+
+/** Where (x, y) sits in a ramp's own frame: along its facing, and across it. */
+function inRampFrame(r, x, y) {
+  const dx = x - r.x
+  const dy = y - r.y
+  return {
+    along: dx * Math.cos(r.heading) + dy * Math.sin(r.heading),
+    across: -dx * Math.sin(r.heading) + dy * Math.cos(r.heading),
+  }
+}
+const underRamp = (r, x, y) => {
+  const { along, across } = inRampFrame(r, x, y)
+  // A ramp is drawn RAMP_LENGTH (one tile) deep on its centre; the tile the
+  // physics launches from must sit inside that, not beside it.
+  return Math.abs(along) <= 0.5 && Math.abs(across) <= r.width / 2 + 0.5
+}
+
+test('carve lists every ramp, and every ramp tile lies under one', () => {
+  let listed = 0
+  for (const circuit of RAMP_CIRCUITS) {
+    const { grid, ramps } = carveRamps(circuit.seed)
+    assert.ok(Array.isArray(ramps), `${circuit.name}: carve must list its ramps`)
+    listed += ramps.length
+    for (const r of ramps) {
+      assert.ok(Number.isFinite(r.x) && Number.isFinite(r.y) && Number.isFinite(r.heading), `${circuit.name}: a ramp is not finite`)
+      assert.ok(r.width >= 1, `${circuit.name}: a ramp has no width`)
+    }
+    for (let y = 0; y < RAMP_GRID; y++) {
+      for (let x = 0; x < RAMP_GRID; x++) {
+        if (grid[y * RAMP_GRID + x] !== RAMP) continue
+        assert.ok(ramps.some((r) => underRamp(r, x, y)), `${circuit.name}: the ramp tile at ${x},${y} has no listed ramp over it`)
+      }
+    }
+  }
+  assert.ok(listed > 0, 'no circuit has a ramp, so nothing here was tested')
+})
+
+test('cars cross every ramp the way it faces', () => {
+  let crossings = 0
+  for (let i = 0; i < RAMP_CIRCUITS.length; i++) {
+    const match = makeRamps({ circuitIndex: i, botsOnly: true })
+    for (let t = 0; t < 60000; t += RAMP_TICK) {
+      tickRamps(match, RAMP_TICK, () => 0.5)
+      for (const car of match.cars.values()) {
+        const speed = Math.hypot(car.vx, car.vy)
+        if (!car.alive || speed < 1) continue
+        if (match.grid[Math.round(car.y) * RAMP_GRID + Math.round(car.x)] !== RAMP) continue
+        const r = match.ramps.find((q) => underRamp(q, car.x, car.y))
+        assert.ok(r, `${match.circuit.name}: a car on a ramp tile is under no listed ramp`)
+        const facing = (car.vx * Math.cos(r.heading) + car.vy * Math.sin(r.heading)) / speed
+        assert.ok(facing > 0, `${match.circuit.name}: a car crossed the ramp at ${r.x.toFixed(1)},${r.y.toFixed(1)} against its facing`)
+        crossings++
+      }
+    }
+  }
+  assert.ok(crossings > 50, `bots must actually cross ramps for this to test anything, saw ${crossings}`)
+})

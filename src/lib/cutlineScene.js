@@ -6,11 +6,29 @@
 // canvas drawn in code, so the first frame never waits on the network.
 import * as THREE from 'three'
 import { GRID, CAR_LENGTH, CAR_WIDTH, MAX_PLAYERS } from '../../server/cutline.js'
-import { toWorld, yawFor, wheelYawFor, WALL_HEIGHT, CAR_ROOF, AIR_LIFT } from './raceCamera.js'
+import { toWorld, yawFor, wheelYawFor, WALL_HEIGHT, CAR_ROOF } from './raceCamera.js'
+import { carLift, RAMP_HEIGHT, RAMP_LENGTH } from './carLift.js'
 
 const MAX_PICKUPS = 64
 const MAX_HAZARDS = 32 // the server caps at 16; this is headroom, not a rule
 const MAX_SKIDS = 500 // the cap the 2D renderer used
+
+/**
+ * A ramp, built facing +x like a car: a box one tile wide whose top edge at -x
+ * is pulled down to the ground, so it rises from nothing to RAMP_HEIGHT at +x.
+ * Each ramp scales it across to its own width.
+ */
+function wedgeGeometry() {
+  const g = new THREE.BoxGeometry(RAMP_LENGTH, RAMP_HEIGHT, 1)
+  g.translate(0, RAMP_HEIGHT / 2, 0)
+  const pos = g.attributes.position
+  for (let i = 0; i < pos.count; i++) {
+    if (pos.getX(i) < 0 && pos.getY(i) > 0) pos.setY(i, 0)
+  }
+  // Every box face has its own vertices, so the slope keeps a flat normal.
+  g.computeVertexNormals()
+  return g
+}
 
 function token(name, fallback) {
   const v = getComputedStyle(document.documentElement).getPropertyValue(name).trim()
@@ -145,15 +163,27 @@ export function makeCutlineScene(canvas) {
   let groundMat = null
   let ground = null
   let walls = null
+  let wedges = null
+  let lips = null
+  let trackRamps = []
+
+  // A ramp's structure is its slope; the lip in the warning colour marks where
+  // it launches, so the ramp never relies on colour to be seen.
+  const wedgeGeo = wedgeGeometry()
+  const wedgeMat = new THREE.MeshLambertMaterial({ color: 0x2b2118 })
+  const lipGeo = new THREE.BoxGeometry(0.08, 0.05, 1).translate(RAMP_LENGTH / 2 - 0.04, RAMP_HEIGHT + 0.025, 0)
+  const lipMat = new THREE.MeshLambertMaterial({ color: token('--warn', '#eab308') })
 
   function disposeTrack() {
-    if (ground) scene.remove(ground)
-    if (walls) scene.remove(walls)
+    for (const mesh of [ground, walls, wedges, lips]) if (mesh) scene.remove(mesh)
     groundTex?.dispose()
     groundGeo?.dispose()
     groundMat?.dispose()
     walls?.dispose()
-    groundTex = groundGeo = groundMat = ground = walls = null
+    wedges?.dispose()
+    lips?.dispose()
+    groundTex = groundGeo = groundMat = ground = walls = wedges = lips = null
+    trackRamps = []
   }
 
   return {
@@ -165,8 +195,12 @@ export function makeCutlineScene(canvas) {
      * disposed first: a texture and a mesh per race that are never freed is GPU
      * memory that grows until the tab dies.
      */
-    setTrack(groundCanvas, wallBoxes) {
+    setTrack(groundCanvas, wallBoxes, ramps = []) {
       disposeTrack()
+      // update() leaves `scratch` holding a pickup's spin; clear it, or every
+      // wall on a restarted circuit is built turned by that angle.
+      scratch.rotation.set(0, 0, 0)
+      scratch.scale.set(1, 1, 1)
 
       groundTex = new THREE.CanvasTexture(groundCanvas)
       groundTex.colorSpace = THREE.SRGBColorSpace
@@ -188,6 +222,24 @@ export function makeCutlineScene(canvas) {
       walls.count = wallBoxes.length
       walls.instanceMatrix.needsUpdate = true
       scene.add(walls)
+
+      trackRamps = ramps
+      wedges = new THREE.InstancedMesh(wedgeGeo, wedgeMat, Math.max(1, ramps.length))
+      lips = new THREE.InstancedMesh(lipGeo, lipMat, Math.max(1, ramps.length))
+      ramps.forEach((r, i) => {
+        scratch.position.set(...toWorld(r.x, r.y, 0))
+        scratch.rotation.set(0, yawFor(r.heading), 0)
+        scratch.scale.set(1, 1, r.width)
+        scratch.updateMatrix()
+        wedges.setMatrixAt(i, scratch.matrix)
+        lips.setMatrixAt(i, scratch.matrix)
+      })
+      scratch.rotation.set(0, 0, 0)
+      scratch.scale.set(1, 1, 1)
+      wedges.count = lips.count = ramps.length
+      wedges.instanceMatrix.needsUpdate = true
+      lips.instanceMatrix.needsUpdate = true
+      scene.add(wedges, lips)
     },
 
     /** Move every object to where the snapshot says, apply the camera, draw. */
@@ -212,7 +264,7 @@ export function makeCutlineScene(canvas) {
         }
         c.paint.opacity = car.alive ? 1 : 0.35
 
-        const lift = car.airborne ? Math.sin((car.airT ?? 0) * Math.PI) * AIR_LIFT : 0
+        const lift = carLift(car, trackRamps)
         c.group.position.set(...toWorld(car.x, car.y, lift))
         c.group.rotation.y = yawFor(car.heading)
         for (const w of c.front) w.rotation.y = wheelYawFor(car.steer ?? 0)
@@ -301,6 +353,10 @@ export function makeCutlineScene(canvas) {
       disposeTrack()
       wallGeo.dispose()
       wallMat.dispose()
+      wedgeGeo.dispose()
+      wedgeMat.dispose()
+      lipGeo.dispose()
+      lipMat.dispose()
       for (const c of pool) {
         c.paint.dispose()
         c.brake.dispose()

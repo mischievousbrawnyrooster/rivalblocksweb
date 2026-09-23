@@ -581,6 +581,10 @@ export function carve(seed) {
   }
 
   // 3. Decorate. Boost on straights, oil on corner exits, ramps on long straights.
+  //    Ramps are also listed, because the grid says where a ramp is but not
+  //    which way it faces, and the page draws each one as a wedge rising the way
+  //    the lap runs. Listing them costs no rule: the launch still reads the grid.
+  const ramps = []
   for (let i = 0; i < centerline.length; i++) {
     const m = meta[i]
     const p = centerline[i]
@@ -593,6 +597,11 @@ export function carve(seed) {
     const half = Math.round(m.width / 2) - 1
     for (let off = -half; off <= half; off++) {
       put(p.x - t.y * off, p.y + t.x * off, surface)
+    }
+    // Listed at the strip's middle tile, not the raw point, so the wedge drawn
+    // there covers the tiles a car is launched from rather than straddling them.
+    if (surface === S_RAMP) {
+      ramps.push({ x: Math.round(p.x), y: Math.round(p.y), heading: Math.atan2(t.y, t.x), width: 2 * half + 1 })
     }
   }
 
@@ -716,7 +725,7 @@ export function carve(seed) {
     }
   }
 
-  return { grid, centerline, meta, checkpoints, startSlots, pickups, shortcuts }
+  return { grid, centerline, meta, checkpoints, startSlots, pickups, shortcuts, ramps }
 }
 
 /** Everything about a circuit that distinguishes it from another one. */
@@ -864,7 +873,7 @@ export function make(options = {}) {
     ? ((options.circuitIndex % CIRCUITS.length) + CIRCUITS.length) % CIRCUITS.length
     : 0
   const circuit = CIRCUITS[circuitIndex]
-  const { grid, centerline, meta, checkpoints, startSlots, pickups, shortcuts } = carve(circuit.seed)
+  const { grid, centerline, meta, checkpoints, startSlots, pickups, shortcuts, ramps } = carve(circuit.seed)
 
   return {
     circuit,
@@ -876,6 +885,7 @@ export function make(options = {}) {
     startSlots,
     pickups: pickups ?? [],
     shortcuts: shortcuts ?? [],
+    ramps: ramps ?? [],
     cars: new Map(),
     nextId: 1,
     phase: 'waiting', // waiting | countdown | racing | over

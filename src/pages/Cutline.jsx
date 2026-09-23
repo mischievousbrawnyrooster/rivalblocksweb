@@ -17,6 +17,7 @@ import {
   VIEW_CELLS,
 } from '../lib/raceCamera.js'
 import { wallBlocks } from '../lib/wallBlocks.js'
+import { carLift } from '../lib/carLift.js'
 import {
   GRID,
   DELAY_MS,
@@ -354,6 +355,7 @@ export default function Cutline() {
   // A circuit arrives in `welcome`, possibly before the scene exists, so it is
   // held here and built by the render loop when the versions disagree.
   const gridRef = useRef(null)
+  const rampsRef = useRef([])
   const trackVersionRef = useRef(0)
   const builtVersionRef = useRef(-1)
   const trackCanvasRef = useRef(null)
@@ -403,6 +405,7 @@ export default function Cutline() {
         setMyId(msg.id)
         setCircuitName(msg.circuit?.name ?? '')
         gridRef.current = decode(msg.circuit?.map ?? '')
+        rampsRef.current = Array.isArray(msg.circuit?.ramps) ? msg.circuit.ramps : []
         trackVersionRef.current += 1
         // A restart puts every car back on a new grid: place the camera there
         // outright rather than swooping across the old circuit to find it, and
@@ -584,7 +587,7 @@ export default function Cutline() {
         const tileRes = scene.maxTextureSize >= GRID * TILE_RES ? TILE_RES : TILE_RES / 2
         const ground = prerender(gridRef.current, tileRes)
         trackCanvasRef.current = ground // the minimap draws from the same canvas
-        scene.setTrack(ground, wallBlocks(gridRef.current, GRID, S_WALL))
+        scene.setTrack(ground, wallBlocks(gridRef.current, GRID, S_WALL), rampsRef.current)
         builtVersionRef.current = trackVersionRef.current
       }
       const track = trackCanvasRef.current
@@ -644,7 +647,9 @@ export default function Cutline() {
       const dt = (now - (lastFrameRef.current || now)) / 1000
       lastFrameRef.current = now
       const view = viewRef.current
-      const pose = stepCamera(camRef.current, view, focusCar, dt, CAR_LENGTH / 2)
+      // The bumper eye rides the car up ramps and over jumps.
+      const followed = focusCar && { ...focusCar, lift: carLift(focusCar, rampsRef.current) }
+      const pose = stepCamera(camRef.current, view, followed, dt, CAR_LENGTH / 2)
       scene?.update({
         cars,
         hazards: sampled.hazards ?? [],

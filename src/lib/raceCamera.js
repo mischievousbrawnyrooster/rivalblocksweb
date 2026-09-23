@@ -40,8 +40,6 @@ export const FOV_RATE = 10
 export const MAX_DT = 0.1
 
 export const MAX_WHEEL_ANGLE = 0.32
-// How high a car rises at the top of a jump, in tiles. Render only.
-export const AIR_LIFT = 1.2
 
 export const isView = (v) => VIEWS.includes(v)
 
@@ -100,8 +98,11 @@ export function targetPose(view, car, heading, nose) {
     return { position: along(at, f, 0, TOP_HEIGHT), target: at, fov: TOP_FOV }
   }
   if (view === 'bumper') {
-    const eye = along(at, f, nose, BUMPER_EYE)
-    return { position: eye, target: along(eye, f, BUMPER_SIGHT, BUMPER_EYE), fov: BUMPER_FOV }
+    // The eye rides the car up a ramp and over a jump; the other views hold
+    // steady and let the car rise in frame. `lift` is carLift's, passed in.
+    const eyeY = BUMPER_EYE + (car.lift ?? 0)
+    const eye = along(at, f, nose, eyeY)
+    return { position: eye, target: along(eye, f, BUMPER_SIGHT, eyeY), fov: BUMPER_FOV }
   }
   return {
     position: along(at, f, -CHASE_DIST, CHASE_HEIGHT),
