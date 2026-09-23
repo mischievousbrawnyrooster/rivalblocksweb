@@ -14,6 +14,22 @@ const MAX_HAZARDS = 32 // the server caps at 16; this is headroom, not a rule
 const MAX_SKIDS = 500 // the cap the 2D renderer used
 
 /**
+ * An instanced layer whose instances move or come and go: pickups, hazards,
+ * skids. It is never frustum culled. An InstancedMesh works out its bounding
+ * sphere once, the first time it is culled, and never again, so a layer that
+ * moves is judged by where its instances used to be; every pickup vanished
+ * whenever that stale sphere was off screen, and flickered as the car turned.
+ * Walls and ramps are placed once per circuit before their first draw, so they
+ * keep culling.
+ */
+export function dynamicLayer(geometry, material, max) {
+  const mesh = new THREE.InstancedMesh(geometry, material, max)
+  mesh.count = 0
+  mesh.frustumCulled = false
+  return mesh
+}
+
+/**
  * A ramp, built facing +x like a car: a box one tile wide whose top edge at -x
  * is pulled down to the ground, so it rises from nothing to RAMP_HEIGHT at +x.
  * Each ramp scales it across to its own width.
@@ -123,32 +139,27 @@ export function makeCutlineScene(canvas) {
 
   const pickupGeo = new THREE.BoxGeometry(0.55, 0.55, 0.55)
   const pickupMat = new THREE.MeshLambertMaterial({ color: 0x3ad1c4 })
-  const pickups = new THREE.InstancedMesh(pickupGeo, pickupMat, MAX_PICKUPS)
-  pickups.count = 0
+  const pickups = dynamicLayer(pickupGeo, pickupMat, MAX_PICKUPS)
   scene.add(pickups)
 
   const slickGeo = new THREE.CircleGeometry(1.1, 24).rotateX(-Math.PI / 2)
   const slickMat = new THREE.MeshBasicMaterial({ color: 0x09090c, transparent: true, opacity: 0.8 })
-  const slicks = new THREE.InstancedMesh(slickGeo, slickMat, MAX_HAZARDS)
-  slicks.count = 0
+  const slicks = dynamicLayer(slickGeo, slickMat, MAX_HAZARDS)
   const peelGeo = new THREE.TorusGeometry(0.22, 0.07, 6, 12, Math.PI).rotateX(-Math.PI / 2)
   const peelMat = new THREE.MeshLambertMaterial({ color: 0xfacc15 })
-  const peels = new THREE.InstancedMesh(peelGeo, peelMat, MAX_HAZARDS)
-  peels.count = 0
+  const peels = dynamicLayer(peelGeo, peelMat, MAX_HAZARDS)
   // An unknown hazard kind draws as this rather than as nothing, so a kind added
   // to the server shows up wrong instead of invisible.
   const unknownGeo = new THREE.OctahedronGeometry(0.35)
   const unknownMat = new THREE.MeshBasicMaterial({ color: 0xff00ff })
-  const unknowns = new THREE.InstancedMesh(unknownGeo, unknownMat, MAX_HAZARDS)
-  unknowns.count = 0
+  const unknowns = dynamicLayer(unknownGeo, unknownMat, MAX_HAZARDS)
   scene.add(slicks, peels, unknowns)
 
   // InstancedMesh has no per-instance opacity, so skids are one fixed shade and
   // simply expire. The page drops them after 3.5s, as the 2D renderer did.
   const skidGeo = new THREE.PlaneGeometry(0.16, 0.16).rotateX(-Math.PI / 2)
   const skidMat = new THREE.MeshBasicMaterial({ color: 0x0c0c10, transparent: true, opacity: 0.45 })
-  const skids = new THREE.InstancedMesh(skidGeo, skidMat, MAX_SKIDS)
-  skids.count = 0
+  const skids = dynamicLayer(skidGeo, skidMat, MAX_SKIDS)
   scene.add(skids)
 
   function place(mesh, i, x, y, h, yaw = 0) {

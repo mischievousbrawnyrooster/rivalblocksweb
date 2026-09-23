@@ -1023,10 +1023,12 @@ test('a pickup fills an empty slot, not a full one, and starts a cooldown', () =
   const [car] = [...match.cars.values()]
 
   // Write a pickup tile under the car so the test does not depend on where
-  // decoration landed.
+  // decoration landed, and make it the only box in reach: circuit 0 has a real
+  // box beside this slot, and a second ready box is rightly taken.
   const tx = Math.round(car.x)
   const ty = Math.round(car.y)
   match.grid[ty * GRID + tx] = S_PICKUP
+  match.pickups = match.pickups.filter((p) => Math.hypot(p.x - car.x, p.y - car.y) > PICKUP_REACH)
 
   // A counter rng whose first and second draws land on genuinely different
   // ITEM_BAG entries (index 0 is 'boost', the last index is 'slick'; ITEM_BAG
@@ -2693,4 +2695,39 @@ test('no drivable way round the circuit skips a checkpoint', () => {
       assert.ok(!reached, `${circuit.name}: a car can get from checkpoint ${(k - 1 + n) % n} to ${(k + 1) % n} without passing checkpoint ${k}`)
     }
   }
+})
+
+// --- A ready box is taken even with a spent one nearer ------------------------
+import { make as pkMake, join as pkJoin, collectPickup as pkCollect, PICKUP_REACH } from './cutline.js'
+
+test('a car within reach of a ready box takes it, even with a spent box nearer', () => {
+  // Boxes stand in rows across the road. A car passing between two used to be
+  // judged only against the nearer one, and if another car had just taken that,
+  // it drove straight through the ready box beside it and got nothing.
+  const match = pkMake({ circuitIndex: 0 })
+  const a = pkJoin(match, { name: 'A' }, () => 0)
+  const b = pkJoin(match, { name: 'B' }, () => 0)
+  match.phase = 'racing'
+  let pair = null
+  for (const p of match.pickups) {
+    for (const q of match.pickups) {
+      const gap = Math.hypot(p.x - q.x, p.y - q.y)
+      if (p !== q && gap > 0 && gap < 2 * PICKUP_REACH - 0.1) pair = pair ?? { p, q, gap }
+    }
+  }
+  assert.ok(pair, 'need two boxes a car can reach at once')
+  const { p, q, gap } = pair
+
+  a.item = null
+  a.x = p.x
+  a.y = p.y
+  assert.equal(pkCollect(match, a, () => 0), true, 'the first car takes the near box')
+
+  // Nearer the spent box, but still within reach of the ready one.
+  const f = (gap - PICKUP_REACH + 0.02) / gap
+  b.item = null
+  b.x = p.x + (q.x - p.x) * f
+  b.y = p.y + (q.y - p.y) * f
+  assert.ok(Math.hypot(b.x - p.x, b.y - p.y) < Math.hypot(b.x - q.x, b.y - q.y), 'the spent box is the nearer one')
+  assert.equal(pkCollect(match, b, () => 0), true, 'the ready box within reach must be taken')
 })

@@ -1528,6 +1528,9 @@ export const SLICK_TURN = 0.35       // fraction of steering authority left
 export const SLICK_TTL_MS = 9000
 export const SLICK_RADIUS = 1.1
 export const PICKUP_RESPAWN_MS = 6000
+// How near a car's centre must come to a box to take it: about its nose corner
+// plus the box's half diagonal, so touching a box with the nose is enough.
+export const PICKUP_REACH = 1.2
 export const MAX_HAZARDS = 16
 export const DROP_BACK = 1.4         // tiles behind the nose a hazard lands
 
@@ -1542,12 +1545,16 @@ export const ITEM_BAG = ['boost', 'boost', 'boost', 'slick', 'slick', 'banana', 
 export function collectPickup(match, car, rng = Math.random) {
   if (!car.alive || car.item) return false
 
+  // The nearest box that is READY. Judged against the nearest box of any kind,
+  // a car passing between two took nothing when another car had just emptied
+  // the nearer one, though it drove straight through the one beside it.
   let hitKey = null
   let bestDist = Infinity
   if (match.pickups && match.pickups.length > 0) {
     for (const p of match.pickups) {
+      if (match.now < (match.pickupCooldown.get(p.key) ?? 0)) continue
       const d = Math.hypot(car.x - p.x, car.y - p.y)
-      if (d <= 1.2 && d < bestDist) {
+      if (d <= PICKUP_REACH && d < bestDist) {
         bestDist = d
         hitKey = p.key
       }
