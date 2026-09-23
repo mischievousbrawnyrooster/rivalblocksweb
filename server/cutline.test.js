@@ -2652,3 +2652,45 @@ test('cars cross every ramp the way it faces', () => {
   }
   assert.ok(crossings > 50, `bots must actually cross ramps for this to test anything, saw ${crossings}`)
 })
+
+// --- No way round a checkpoint ---------------------------------------------
+// A lap only counts if every checkpoint is taken in order. So from checkpoint
+// k-1 there must be no drivable way to checkpoint k+1 that stays outside
+// checkpoint k's circle. Walling off circles k and k-2 cuts the loop in two, and
+// a flood fill from k-1 must then stay on its own side. Corner run-off once dug
+// through the wall between two parallel stretches on every circuit, and a car
+// that took one of those gravel bridges skipped up to half a lap and then found
+// its lap did not count at the line.
+import { CIRCUITS as CP_CIRCUITS, carve as cpCarve, GRID as CP_GRID, S_WALL as CP_WALL, CHECKPOINT_RADIUS as CP_RADIUS } from './cutline.js'
+
+test('no drivable way round the circuit skips a checkpoint', () => {
+  for (const circuit of CP_CIRCUITS) {
+    const { grid, checkpoints } = cpCarve(circuit.seed)
+    const n = checkpoints.length
+    for (let k = 0; k < n; k++) {
+      const walls = [checkpoints[k], checkpoints[(k - 2 + n) % n]]
+      const open = (x, y) =>
+        x >= 0 && y >= 0 && x < CP_GRID && y < CP_GRID &&
+        grid[y * CP_GRID + x] !== CP_WALL &&
+        walls.every((c) => Math.hypot(x - c.x, y - c.y) > CP_RADIUS)
+      const from = checkpoints[(k - 1 + n) % n]
+      const to = checkpoints[(k + 1) % n]
+      const seen = new Uint8Array(CP_GRID * CP_GRID)
+      const queue = [[Math.round(from.x), Math.round(from.y)]]
+      seen[queue[0][1] * CP_GRID + queue[0][0]] = 1
+      let reached = false
+      while (queue.length && !reached) {
+        const [x, y] = queue.pop()
+        if (Math.hypot(x - to.x, y - to.y) < 1.5) reached = true
+        for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+          const nx = x + dx
+          const ny = y + dy
+          if (!open(nx, ny) || seen[ny * CP_GRID + nx]) continue
+          seen[ny * CP_GRID + nx] = 1
+          queue.push([nx, ny])
+        }
+      }
+      assert.ok(!reached, `${circuit.name}: a car can get from checkpoint ${(k - 1 + n) % n} to ${(k + 1) % n} without passing checkpoint ${k}`)
+    }
+  }
+})

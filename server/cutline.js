@@ -30,7 +30,7 @@ export const CIRCUITS = [
   { name: 'Coolant Bend', seed: 1069 },  // lap 206, straight 23, tightest 0.45, turns 3, chicanes 0, shortcuts 0
   { name: 'The Spindle', seed: 1219 },  // lap 286, straight 25, tightest 0.6, turns 10, chicanes 2, shortcuts 0
   { name: 'Slag Pit', seed: 1150 },  // lap 316, straight 53, tightest 0.6, turns 4, chicanes 0, shortcuts 0
-  { name: 'Draw Bench', seed: 1112 },  // lap 339, straight 45, tightest 0.45, turns 4, chicanes 0, shortcuts 1
+  { name: 'Draw Bench', seed: 1112 },  // lap 339, straight 45, tightest 0.45, turns 4, chicanes 0, shortcuts 0
   { name: 'Cinder Yard', seed: 1385 },  // lap 359, straight 18, tightest 0.6, turns 10, chicanes 0, shortcuts 1
   { name: 'Ladle Row', seed: 1015 },  // lap 239, straight 39, tightest 0.6, turns 6, chicanes 6, shortcuts 0
   { name: 'Tap Hole', seed: 1297 },  // lap 338, straight 38, tightest 0.45, turns 10, chicanes 4, shortcuts 1
@@ -404,6 +404,9 @@ export const SURFACE_CHARS = ['W', 'T', 'K', 'B', 'O', 'P', 'L', 'G', 'R']
 
 export const GRAVEL_DRAG = 3.0       // scrubs speed without stopping the car
 export const GRAVEL_DEPTH = 3        // tiles of run off outside a corner
+// How far along the lap, in centre-line points, ground still counts as the same
+// corner. Run off may touch that ground and nothing further round the lap.
+export const RUNOFF_OWN_SPAN = Math.ceil(SEGMENT_WIDTH_MAX / POINT_SPACING)
 
 // Derived from the starting slots the carve lays down, the way Blockout derives
 // its capacity from SPAWNS.length. To raise capacity, lay more slots; never
@@ -429,6 +432,8 @@ export const PICKUP_ROW = 4
 // same two points, and narrower, so it costs control to save distance.
 export const SHORTCUT_CHANCE = 0.5   // per circuit, from the decoration stream
 export const SHORTCUT_WIDTH = 5
+// Candidate chords tried, shortest first, before a circuit goes without one.
+export const SHORTCUT_TRIES = 40
 
 /** The surface at a tile. Anything off the grid is wall, so no caller needs a bounds check. */
 export function surfaceAt(grid, x, y) {
@@ -564,6 +569,42 @@ export function carve(seed) {
 
   // 2. Run off outside fast corners. Gravel replaces wall, never tarmac, so a
   //    car that runs wide loses time instead of its race.
+  //
+  //    Gravel never touches ground that belongs to another part of the lap.
+  //    Parallel stretches sit MIN_WALL apart and run off digs GRAVEL_DEPTH in,
+  //    so without this it ate the whole wall on every circuit and left gravel
+  //    bridges that skipped up to half a lap. A car that took one missed its
+  //    checkpoints, and its lap did not count at the line.
+  const n = centerline.length
+  const owner = new Int32Array(GRID * GRID).fill(-1)
+  for (let y = 0; y < GRID; y++) {
+    for (let x = 0; x < GRID; x++) {
+      if (grid[y * GRID + x] === S_WALL) continue
+      let best = 0
+      let bd = Infinity
+      for (let i = 0; i < n; i++) {
+        const d = (centerline[i].x - x) ** 2 + (centerline[i].y - y) ** 2
+        if (d < bd) {
+          bd = d
+          best = i
+        }
+      }
+      owner[y * GRID + x] = best
+    }
+  }
+  const lapGap = (a, b) => Math.min((a - b + n) % n, (b - a + n) % n)
+  const touchesAnotherPart = (x, y, i) => {
+    for (let dy = -1; dy <= 1; dy++) {
+      for (let dx = -1; dx <= 1; dx++) {
+        const ox = x + dx
+        const oy = y + dy
+        if (ox < 0 || oy < 0 || ox >= GRID || oy >= GRID) continue
+        const o = owner[oy * GRID + ox]
+        if (o >= 0 && lapGap(o, i) > RUNOFF_OWN_SPAN) return true
+      }
+    }
+    return false
+  }
   for (let i = 0; i < centerline.length; i++) {
     const m = meta[i]
     if (m.corner === null || m.corner === 'sweeper') continue
@@ -576,7 +617,9 @@ export function carve(seed) {
     const x1 = Math.round(p.x - t.y * (half + GRAVEL_DEPTH) * side)
     const y1 = Math.round(p.y + t.x * (half + GRAVEL_DEPTH) * side)
     walkLine(x0, y0, x1, y1, (x, y) => {
-      if (surfaceAt(grid, x, y) === S_WALL) put(x, y, S_GRAVEL)
+      if (surfaceAt(grid, x, y) !== S_WALL || touchesAnotherPart(x, y, i)) return
+      put(x, y, S_GRAVEL)
+      owner[y * GRID + x] = i
     })
   }
 
@@ -663,14 +706,19 @@ export function carve(seed) {
   //    in space. Checkpoints are placed in stage 6 from startIndex, so the chord
   //    is chosen to skip a stretch that contains none: both routes then pass
   //    every checkpoint and the ring never learns a branch exists.
+  //
+  //    Skipping none is not enough on its own. Draw Bench's best chord started
+  //    exactly on checkpoint 1, and a car could slip into it beside the circle
+  //    rather than through it, so its lap never counted. So each candidate is
+  //    carved into a copy and kept only if no checkpoint can be driven round,
+  //    best first; one that fails is refused, not repaired.
   const shortcuts = []
   if (rng() < SHORTCUT_CHANCE) {
-    const n = centerline.length
     const cpIndices = checkpoints.map((c) => c.index)
     const skipsACheckpoint = (from, to) =>
       cpIndices.some((ci) => (from < to ? ci > from && ci < to : ci > from || ci < to))
 
-    let best = null
+    const candidates = []
     for (let a = 0; a < n; a += 2) {
       for (let b = a + Math.max(8, Math.floor(n * 0.05)); b < a + Math.floor(n * 0.4); b += 2) {
         const to = b % n
@@ -679,49 +727,96 @@ export function carve(seed) {
         const along = (to - a + n) % n
         // Worth cutting only if the straight line is much shorter than the road.
         if (d > along * 0.55) continue
-        if (!best || d < best.d) best = { from: a, to, d }
+        candidates.push({ from: a, to, d })
       }
     }
+    // Stable, so equal lengths keep the order the scan found them in.
+    candidates.sort((p, q) => p.d - q.d)
 
-    if (best) {
-      const from = centerline[best.from]
-      const to = centerline[best.to]
-      const steps = Math.max(2, Math.round(best.d))
-      const points = []
-      for (let s = 0; s <= steps; s++) {
-        const t = s / steps
-        points.push({ x: from.x + (to.x - from.x) * t, y: from.y + (to.y - from.y) * t })
-      }
-
-      const half = Math.floor(SHORTCUT_WIDTH / 2)
-      for (let s = 0; s < points.length - 1; s++) {
-        const p = points[s]
-        const q = points[s + 1]
-        const dx = q.x - p.x
-        const dy = q.y - p.y
-        const len = Math.hypot(dx, dy) || 1
-        const nx = -dy / len
-        const ny = dx / len
-        for (let off = -half; off <= half; off++) {
-          walkLine(
-            Math.round(p.x + nx * off),
-            Math.round(p.y + ny * off),
-            Math.round(q.x + nx * off),
-            Math.round(q.y + ny * off),
-            (x, y) => {
-              // Never overwrite the racing surface, only wall and run off.
-              const at = surfaceAt(grid, x, y)
-              if (at === S_WALL || at === S_GRAVEL) put(x, y, Math.abs(off) === half ? S_KERB : S_TARMAC)
-            },
-          )
-        }
-      }
-
-      shortcuts.push({ fromIndex: best.from, toIndex: best.to, points })
+    for (const c of candidates.slice(0, SHORTCUT_TRIES)) {
+      const trial = grid.slice()
+      const points = stampChord(trial, centerline[c.from], centerline[c.to], c.d)
+      if (checkpointCanBeDrivenRound(trial, checkpoints)) continue
+      grid.set(trial)
+      shortcuts.push({ fromIndex: c.from, toIndex: c.to, points })
+      break
     }
   }
 
   return { grid, centerline, meta, checkpoints, startSlots, pickups, shortcuts, ramps: rampRuns(grid, rampStrips) }
+}
+
+/** Carve a shortcut chord from `from` to `to` into `target`, over wall and run off only. */
+function stampChord(target, from, to, length) {
+  const steps = Math.max(2, Math.round(length))
+  const points = []
+  for (let s = 0; s <= steps; s++) {
+    const t = s / steps
+    points.push({ x: from.x + (to.x - from.x) * t, y: from.y + (to.y - from.y) * t })
+  }
+
+  const half = Math.floor(SHORTCUT_WIDTH / 2)
+  for (let s = 0; s < points.length - 1; s++) {
+    const p = points[s]
+    const q = points[s + 1]
+    const dx = q.x - p.x
+    const dy = q.y - p.y
+    const len = Math.hypot(dx, dy) || 1
+    const nx = -dy / len
+    const ny = dx / len
+    for (let off = -half; off <= half; off++) {
+      walkLine(
+        Math.round(p.x + nx * off),
+        Math.round(p.y + ny * off),
+        Math.round(q.x + nx * off),
+        Math.round(q.y + ny * off),
+        (x, y) => {
+          // Never overwrite the racing surface, only wall and run off.
+          const at = surfaceAt(target, x, y)
+          if (at === S_WALL || at === S_GRAVEL) putTile(target, x, y, Math.abs(off) === half ? S_KERB : S_TARMAC)
+        },
+      )
+    }
+  }
+  return points
+}
+
+/**
+ * True if some checkpoint k can be skipped: a car could get from k-1 to k+1
+ * without entering k's circle. Circles k and k-2 are walled off, which cuts the
+ * loop in two, and a flood fill from k-1 over drivable ground must not reach
+ * k+1. Flood fill is 4-way because a car cannot squeeze between two walls that
+ * touch only at a corner.
+ */
+function checkpointCanBeDrivenRound(grid, checkpoints) {
+  const n = checkpoints.length
+  const seen = new Uint8Array(GRID * GRID)
+  for (let k = 0; k < n; k++) {
+    const walls = [checkpoints[k], checkpoints[(k - 2 + n) % n]]
+    const from = checkpoints[(k - 1 + n) % n]
+    const to = checkpoints[(k + 1) % n]
+    seen.fill(0)
+    const start = Math.round(from.y) * GRID + Math.round(from.x)
+    const stack = [start]
+    seen[start] = 1
+    while (stack.length) {
+      const c = stack.pop()
+      const x = c % GRID
+      const y = (c - x) / GRID
+      if (Math.hypot(x - to.x, y - to.y) < 1.5) return true
+      for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+        const nx = x + dx
+        const ny = y + dy
+        if (nx < 0 || ny < 0 || nx >= GRID || ny >= GRID) continue
+        const id = ny * GRID + nx
+        if (seen[id] || grid[id] === S_WALL) continue
+        if (walls.some((w) => Math.hypot(nx - w.x, ny - w.y) <= CHECKPOINT_RADIUS)) continue
+        seen[id] = 1
+        stack.push(id)
+      }
+    }
+  }
+  return false
 }
 
 /**
