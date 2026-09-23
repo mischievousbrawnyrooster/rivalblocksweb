@@ -11,32 +11,31 @@ import PlayIndex from './pages/PlayIndex.jsx'
 import Blastworks from './pages/Blastworks.jsx'
 import VoidDrillers from './pages/VoidDrillers.jsx'
 import CipherRun from './pages/CipherRun.jsx'
-import Cutline from './pages/Cutline.jsx'
 import LeaderboardPage from './pages/LeaderboardPage.jsx'
 import Admin from './pages/Admin.jsx'
 import About from './pages/About.jsx'
 import NotFound from './pages/NotFound.jsx'
 
-// The one route that pulls in three.js. Split on its own so the marketing
-// pages — everything else in this app — never pay for a renderer they never
-// mount. Nothing else here is heavy enough to be worth the Suspense boundary.
+// The routes that pull in three.js. Split on their own so the marketing pages,
+// everything else in this app, never pay for a renderer they never mount.
+// `npm run check:bundle` fails if three.js ever reaches the main chunk.
 const Blockout3D = lazy(() => import('./pages/Blockout3D.jsx'))
+const Cutline = lazy(() => import('./pages/Cutline.jsx'))
 
-function LoadingStack() {
+function LoadingRoute({ title, line }) {
   return (
     <div className="mx-auto max-w-xl px-5 py-24 text-center">
-      <p className="rule-label">Blockout Royale 3D</p>
-      <p className="display mt-2 text-2xl">Loading the stack…</p>
+      <p className="rule-label">{title}</p>
+      <p className="display mt-2 text-2xl">{line}</p>
     </div>
   )
 }
 
 // React.lazy only covers the pending state; a chunk 404 after a redeploy
 // throws during render, and with no boundary above it React unmounts the
-// whole tree, not just this route. Scoped to this one Suspense rather than
-// the whole app, so the failure stays a blank card in the play area — the
-// nav and every other page around it keep working.
-class StackLoadError extends Component {
+// whole tree, not just this route. Scoped to one route, so the failure stays
+// a card in the play area and the nav and every other page keep working.
+class RouteLoadError extends Component {
   state = { failed: false }
   static getDerivedStateFromError() {
     return { failed: true }
@@ -45,8 +44,8 @@ class StackLoadError extends Component {
     if (!this.state.failed) return this.props.children
     return (
       <div className="mx-auto max-w-xl px-5 py-24 text-center">
-        <p className="rule-label">Blockout Royale 3D</p>
-        <h1 className="display mt-2 text-2xl">The stack did not load</h1>
+        <p className="rule-label">{this.props.title}</p>
+        <h1 className="display mt-2 text-2xl">{this.props.headline}</h1>
         <p className="mt-4 leading-relaxed text-muted">
           A newer version of the site shipped while this tab was open. Reload
           to pick it up.
@@ -77,15 +76,24 @@ export default function App() {
         <Route path="play/blastworks" element={<Blastworks />} />
         <Route path="play/void-drillers" element={<VoidDrillers />} />
         <Route path="play/cipher-run" element={<CipherRun />} />
-        <Route path="play/cutline" element={<Cutline />} />
+        <Route
+          path="play/cutline"
+          element={
+            <RouteLoadError title="Cutline" headline="The circuit did not load">
+              <Suspense fallback={<LoadingRoute title="Cutline" line="Loading the circuit…" />}>
+                <Cutline />
+              </Suspense>
+            </RouteLoadError>
+          }
+        />
         <Route
           path="play/blockout-royale-3d"
           element={
-            <StackLoadError>
-              <Suspense fallback={<LoadingStack />}>
+            <RouteLoadError title="Blockout Royale 3D" headline="The stack did not load">
+              <Suspense fallback={<LoadingRoute title="Blockout Royale 3D" line="Loading the stack…" />}>
                 <Blockout3D />
               </Suspense>
-            </StackLoadError>
+            </RouteLoadError>
           }
         />
         <Route path="leaderboard" element={<LeaderboardPage />} />
