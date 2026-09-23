@@ -5,12 +5,63 @@
 // Nothing here loads a file. Models are three.js primitives and the ground is a
 // canvas drawn in code, so the first frame never waits on the network.
 import * as THREE from 'three'
-import { GRID } from '../../server/cutline.js'
-import { toWorld, WALL_HEIGHT } from './raceCamera.js'
+import { GRID, CAR_LENGTH, CAR_WIDTH, MAX_PLAYERS } from '../../server/cutline.js'
+import { toWorld, yawFor, wheelYawFor, WALL_HEIGHT, CAR_ROOF, AIR_LIFT } from './raceCamera.js'
+
+const MAX_PICKUPS = 64
+const MAX_HAZARDS = 32 // the server caps at 16; this is headroom, not a rule
+const MAX_SKIDS = 500 // the cap the 2D renderer used
 
 function token(name, fallback) {
   const v = getComputedStyle(document.documentElement).getPropertyValue(name).trim()
   return v || fallback
+}
+
+/**
+ * One car, built facing +x so yawFor(heading) turns it onto its heading. Its
+ * size is CAR_LENGTH by CAR_WIDTH, the same numbers the hitbox derives from, so
+ * the car you see and the car you hit stay the same car.
+ */
+function buildCar(shared) {
+  const paint = new THREE.MeshLambertMaterial({ color: 0xffffff, transparent: true })
+  const brake = new THREE.MeshBasicMaterial({ color: 0x3a0b0b })
+  const group = new THREE.Group()
+
+  const body = new THREE.Mesh(shared.body, paint)
+  body.position.y = 0.2
+  const cabin = new THREE.Mesh(shared.cabin, shared.glass)
+  cabin.position.set(-CAR_LENGTH * 0.05, CAR_ROOF - 0.1, 0)
+  group.add(body, cabin)
+
+  const front = []
+  for (const [fx, fz] of [
+    [0.31, -0.46],
+    [0.31, 0.46],
+    [-0.31, -0.46],
+    [-0.31, 0.46],
+  ]) {
+    const wheel = new THREE.Mesh(shared.wheel, shared.tyre)
+    const pivot = new THREE.Group()
+    pivot.position.set(CAR_LENGTH * fx, 0.14, CAR_WIDTH * fz)
+    pivot.add(wheel)
+    group.add(pivot)
+    if (fx > 0) front.push(pivot)
+  }
+
+  for (const fz of [-0.3, 0.3]) {
+    const head = new THREE.Mesh(shared.lamp, shared.headlight)
+    head.position.set(CAR_LENGTH / 2, 0.22, CAR_WIDTH * fz)
+    const tail = new THREE.Mesh(shared.lamp, brake)
+    tail.position.set(-CAR_LENGTH / 2, 0.22, CAR_WIDTH * fz)
+    group.add(head, tail)
+  }
+
+  // The shadow stays on the ground while the car rises, so it is a sibling of
+  // the car rather than a child that would be lifted with it.
+  const shadow = new THREE.Mesh(shared.shadow, shared.shadowMat)
+  shadow.rotation.x = -Math.PI / 2
+
+  return { group, shadow, paint, brake, front, color: null }
 }
 
 export function makeCutlineScene(canvas) {
@@ -32,6 +83,62 @@ export function makeCutlineScene(canvas) {
   const wallMat = new THREE.MeshLambertMaterial({ color: 0x2a2a31 })
   const scratch = new THREE.Object3D()
   const probe = new THREE.Vector3()
+
+  const shared = {
+    body: new THREE.BoxGeometry(CAR_LENGTH, 0.22, CAR_WIDTH),
+    cabin: new THREE.BoxGeometry(CAR_LENGTH * 0.45, 0.2, CAR_WIDTH * 0.8),
+    wheel: new THREE.CylinderGeometry(0.14, 0.14, 0.12, 12).rotateX(Math.PI / 2),
+    lamp: new THREE.BoxGeometry(0.05, 0.08, 0.12),
+    shadow: new THREE.CircleGeometry(CAR_LENGTH * 0.55, 20),
+    glass: new THREE.MeshLambertMaterial({ color: 0x14141a }),
+    tyre: new THREE.MeshLambertMaterial({ color: 0x111114 }),
+    headlight: new THREE.MeshBasicMaterial({ color: 0xfff5d6 }),
+    shadowMat: new THREE.MeshBasicMaterial({ color: 0x000000, transparent: true, opacity: 0.35 }),
+  }
+  const pool = Array.from({ length: MAX_PLAYERS }, () => {
+    const c = buildCar(shared)
+    c.group.visible = false
+    c.shadow.visible = false
+    scene.add(c.group, c.shadow)
+    return c
+  })
+
+  const pickupGeo = new THREE.BoxGeometry(0.55, 0.55, 0.55)
+  const pickupMat = new THREE.MeshLambertMaterial({ color: 0x3ad1c4 })
+  const pickups = new THREE.InstancedMesh(pickupGeo, pickupMat, MAX_PICKUPS)
+  pickups.count = 0
+  scene.add(pickups)
+
+  const slickGeo = new THREE.CircleGeometry(1.1, 24).rotateX(-Math.PI / 2)
+  const slickMat = new THREE.MeshBasicMaterial({ color: 0x09090c, transparent: true, opacity: 0.8 })
+  const slicks = new THREE.InstancedMesh(slickGeo, slickMat, MAX_HAZARDS)
+  slicks.count = 0
+  const peelGeo = new THREE.TorusGeometry(0.22, 0.07, 6, 12, Math.PI).rotateX(-Math.PI / 2)
+  const peelMat = new THREE.MeshLambertMaterial({ color: 0xfacc15 })
+  const peels = new THREE.InstancedMesh(peelGeo, peelMat, MAX_HAZARDS)
+  peels.count = 0
+  // An unknown hazard kind draws as this rather than as nothing, so a kind added
+  // to the server shows up wrong instead of invisible.
+  const unknownGeo = new THREE.OctahedronGeometry(0.35)
+  const unknownMat = new THREE.MeshBasicMaterial({ color: 0xff00ff })
+  const unknowns = new THREE.InstancedMesh(unknownGeo, unknownMat, MAX_HAZARDS)
+  unknowns.count = 0
+  scene.add(slicks, peels, unknowns)
+
+  // InstancedMesh has no per-instance opacity, so skids are one fixed shade and
+  // simply expire. The page drops them after 3.5s, as the 2D renderer did.
+  const skidGeo = new THREE.PlaneGeometry(0.16, 0.16).rotateX(-Math.PI / 2)
+  const skidMat = new THREE.MeshBasicMaterial({ color: 0x0c0c10, transparent: true, opacity: 0.45 })
+  const skids = new THREE.InstancedMesh(skidGeo, skidMat, MAX_SKIDS)
+  skids.count = 0
+  scene.add(skids)
+
+  function place(mesh, i, x, y, h, yaw = 0) {
+    scratch.position.set(...toWorld(x, y, h))
+    scratch.rotation.set(0, yaw, 0)
+    scratch.updateMatrix()
+    mesh.setMatrixAt(i, scratch.matrix)
+  }
 
   let groundTex = null
   let groundGeo = null
@@ -83,8 +190,68 @@ export function makeCutlineScene(canvas) {
       scene.add(walls)
     },
 
-    /** Apply a camera pose and draw one frame. */
+    /** Move every object to where the snapshot says, apply the camera, draw. */
     update(frame) {
+      const now = frame?.now ?? 0
+      const cars = frame?.cars ?? []
+      const palette = frame?.palette ?? []
+
+      for (let i = 0; i < pool.length; i++) {
+        const c = pool[i]
+        const car = cars[i]
+        const show = Boolean(car) && car.id !== frame?.hideId
+        c.group.visible = show
+        c.shadow.visible = show
+        if (!show) continue
+
+        // Cached by colour, not by slot, so a theme switch repaints the car.
+        const color = palette[car.slot % palette.length] ?? '#ffffff'
+        if (c.color !== color) {
+          c.paint.color.set(color)
+          c.color = color
+        }
+        c.paint.opacity = car.alive ? 1 : 0.35
+
+        const lift = car.airborne ? Math.sin((car.airT ?? 0) * Math.PI) * AIR_LIFT : 0
+        c.group.position.set(...toWorld(car.x, car.y, lift))
+        c.group.rotation.y = yawFor(car.heading)
+        for (const w of c.front) w.rotation.y = wheelYawFor(car.steer ?? 0)
+        c.brake.color.set(car.brake ? 0xff3030 : 0x3a0b0b)
+        c.shadow.position.set(...toWorld(car.x, car.y, 0.01))
+      }
+
+      const ps = frame?.pickups ?? []
+      pickups.count = Math.min(ps.length, MAX_PICKUPS)
+      for (let i = 0; i < pickups.count; i++) {
+        const p = ps[i]
+        place(pickups, i, p.x, p.y, 0.55 + Math.sin(now / 300 + p.x) * 0.12, now / 700 + p.y)
+      }
+      pickups.instanceMatrix.needsUpdate = true
+
+      let s = 0
+      let b = 0
+      let u = 0
+      for (const h of frame?.hazards ?? []) {
+        if (h.kind === 'slick') {
+          if (s < MAX_HAZARDS) place(slicks, s++, h.x, h.y, 0.02)
+        } else if (h.kind === 'banana') {
+          if (b < MAX_HAZARDS) place(peels, b++, h.x, h.y, 0.08)
+        } else if (u < MAX_HAZARDS) {
+          place(unknowns, u++, h.x, h.y, 0.4, now / 400)
+        }
+      }
+      slicks.count = s
+      peels.count = b
+      unknowns.count = u
+      slicks.instanceMatrix.needsUpdate = true
+      peels.instanceMatrix.needsUpdate = true
+      unknowns.instanceMatrix.needsUpdate = true
+
+      const sk = frame?.skids ?? []
+      skids.count = Math.min(sk.length, MAX_SKIDS)
+      for (let i = 0; i < skids.count; i++) place(skids, i, sk[i].x, sk[i].y, 0.005)
+      skids.instanceMatrix.needsUpdate = true
+
       const pose = frame?.pose
       if (pose) {
         camera.position.set(...pose.position)
@@ -134,6 +301,15 @@ export function makeCutlineScene(canvas) {
       disposeTrack()
       wallGeo.dispose()
       wallMat.dispose()
+      for (const c of pool) {
+        c.paint.dispose()
+        c.brake.dispose()
+      }
+      for (const g of [shared.body, shared.cabin, shared.wheel, shared.lamp, shared.shadow]) g.dispose()
+      for (const m of [shared.glass, shared.tyre, shared.headlight, shared.shadowMat]) m.dispose()
+      for (const mesh of [pickups, slicks, peels, unknowns, skids]) mesh.dispose()
+      for (const g of [pickupGeo, slickGeo, peelGeo, unknownGeo, skidGeo]) g.dispose()
+      for (const m of [pickupMat, slickMat, peelMat, unknownMat, skidMat]) m.dispose()
       renderer.dispose()
       renderer.forceContextLoss()
     },
