@@ -26,14 +26,14 @@ export const MAX_CORNER_RAD = Math.max(...CORNERS.map((c) => c.rad))
 export const POINT_SPACING = 1       // tiles between centerline points
 
 export const CIRCUITS = [
-  { name: 'Foundry Loop', seed: 1201 },
-  { name: 'Coolant Bend', seed: 1340 },
-  { name: 'The Spindle', seed: 1477 },
-  { name: 'Slag Pit', seed: 1602 },
-  { name: 'Draw Bench', seed: 1755 },
-  { name: 'Cinder Yard', seed: 1888 },
-  { name: 'Ladle Row', seed: 1931 },
-  { name: 'Tap Hole', seed: 2064 },
+  { name: 'Foundry Loop', seed: 1134 },  // lap 389, straight 51, tightest 0.6, turns 8, chicanes 4, shortcuts 1
+  { name: 'Coolant Bend', seed: 1069 },  // lap 206, straight 23, tightest 0.45, turns 3, chicanes 0, shortcuts 0
+  { name: 'The Spindle', seed: 1219 },  // lap 286, straight 25, tightest 0.6, turns 10, chicanes 2, shortcuts 0
+  { name: 'Slag Pit', seed: 1150 },  // lap 316, straight 53, tightest 0.6, turns 4, chicanes 0, shortcuts 0
+  { name: 'Draw Bench', seed: 1112 },  // lap 339, straight 45, tightest 0.45, turns 4, chicanes 0, shortcuts 1
+  { name: 'Cinder Yard', seed: 1385 },  // lap 359, straight 18, tightest 0.6, turns 10, chicanes 0, shortcuts 1
+  { name: 'Ladle Row', seed: 1015 },  // lap 239, straight 39, tightest 0.6, turns 6, chicanes 6, shortcuts 0
+  { name: 'Tap Hole', seed: 1297 },  // lap 338, straight 38, tightest 0.45, turns 10, chicanes 4, shortcuts 1
 ]
 
 // --- Lattice --------------------------------------------------------------
@@ -717,6 +717,46 @@ export function carve(seed) {
   }
 
   return { grid, centerline, meta, checkpoints, startSlots, pickups, shortcuts }
+}
+
+/** Everything about a circuit that distinguishes it from another one. */
+export function measureCircuit(seed) {
+  const { centerline, meta, shortcuts } = carve(seed)
+  let longestStraight = 0
+  let run = 0
+  let directionChanges = 0
+  let lastSign = 0
+  let chicanes = 0
+  let tightest = 0
+  let widthSum = 0
+
+  for (let i = 0; i < meta.length; i++) {
+    const m = meta[i]
+    widthSum += m.width
+    if (m.corner === null) {
+      run++
+      if (run > longestStraight) longestStraight = run
+    } else {
+      run = 0
+      const spec = CORNERS.find((c) => c.name === m.corner)
+      if (spec && spec.rad > tightest) tightest = spec.rad
+      if (m.corner === 'chicane') chicanes++
+      if (m.sign !== 0) {
+        if (lastSign !== 0 && m.sign !== lastSign) directionChanges++
+        lastSign = m.sign
+      }
+    }
+  }
+
+  return {
+    lapLength: centerline.length,
+    longestStraight,
+    tightestCorner: tightest,
+    directionChanges,
+    chicanes,
+    shortcuts: (shortcuts ?? []).length,
+    meanWidth: Math.round((widthSum / meta.length) * 100) / 100,
+  }
 }
 
 /**
@@ -1658,6 +1698,13 @@ export function snapshot(match) {
     }
   }
 
+  const activeHazards = []
+  if (match.hazards) {
+    for (const h of match.hazards) {
+      activeHazards.push({ kind: h.kind, x: h.x, y: h.y })
+    }
+  }
+
   return {
     t: 'state',
     phase: match.phase,
@@ -1668,7 +1715,7 @@ export function snapshot(match) {
     laps: match.laps,
     circuit: match.circuit.name,
     cars,
-    hazards: match.hazards,
+    hazards: activeHazards,
     pickups: activePickups,
     order: order.map((c) => c.id),
     cut: match.cut,

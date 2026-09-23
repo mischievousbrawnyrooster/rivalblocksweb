@@ -23,6 +23,7 @@ import {
   walkLine,
   SHORTCUT_CHANCE,
   SHORTCUT_WIDTH,
+  measureCircuit,
 } from './cutline.js'
 
 test('createRng is deterministic for a seed and differs across seeds', () => {
@@ -2482,5 +2483,29 @@ test('a shortcut is narrower than the trunk it bypasses', () => {
   }
 })
 
+test('a circuit can be measured, and the shipped eight are genuinely different', () => {
+  const measured = CIRCUITS.map((c) => measureCircuit(c.seed))
 
+  for (const m of measured) {
+    assert.ok(m.lapLength > 0, 'a lap must have length')
+    assert.ok(m.longestStraight > 0, 'every circuit needs a straight')
+    assert.ok(m.directionChanges >= MIN_SIGN_CHANGES, 'every circuit must counter turn')
+  }
 
+  // No two shipped circuits may be near-identical on every axis, or the
+  // selection pass has silently degraded to eight rolls of the same dice.
+  for (let i = 0; i < measured.length; i++) {
+    for (let j = i + 1; j < measured.length; j++) {
+      const a = measured[i]
+      const b = measured[j]
+      const same =
+        Math.abs(a.lapLength - b.lapLength) < 5 &&
+        Math.abs(a.longestStraight - b.longestStraight) < 3 &&
+        Math.abs(a.directionChanges - b.directionChanges) < 2
+      assert.ok(
+        !same,
+        `${CIRCUITS[i].name} and ${CIRCUITS[j].name} are the same circuit in two costumes`,
+      )
+    }
+  }
+})
