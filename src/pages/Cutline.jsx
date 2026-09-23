@@ -721,6 +721,21 @@ export default function Cutline() {
           ctx.globalAlpha = 0.35
         }
 
+        // Render only: the server sends airborne and a normalised airT and the
+        // page invents the arc. No rule reads any of this back.
+        const lift = car.airborne ? Math.sin((car.airT ?? 0) * Math.PI) : 0
+        if (lift > 0) {
+          ctx.save()
+          ctx.globalAlpha = 0.35
+          ctx.fillStyle = '#000'
+          ctx.beginPath()
+          ctx.ellipse(0, lift * u * 0.5, L * 0.45, W * 0.4, 0, 0, Math.PI * 2)
+          ctx.fill()
+          ctx.restore()
+          ctx.translate(0, -lift * u * 0.5)
+          ctx.scale(1 + lift * 0.18, 1 + lift * 0.18)
+        }
+
         // Dynamic Headlights (cast forward onto the track)
         if (alive) {
           const beamGrad = ctx.createRadialGradient(
@@ -877,14 +892,29 @@ export default function Cutline() {
         renderWheel(halfL * 0.52, halfW * 0.78, steerAngle)
 
         // Car Body Drop Shadow
-        ctx.fillStyle = 'rgba(0, 0, 0, 0.45)'
-        ctx.beginPath()
-        if (typeof ctx.roundRect === 'function') {
-          ctx.roundRect(-halfL * 0.85 + 2, -halfW * 0.55 + 2, L * 0.85, W * 0.55, 4)
-        } else {
-          ctx.rect(-halfL * 0.85 + 2, -halfW * 0.55 + 2, L * 0.85, W * 0.55)
+        if (!car.airborne) {
+          ctx.fillStyle = 'rgba(0, 0, 0, 0.45)'
+          ctx.beginPath()
+          if (typeof ctx.roundRect === 'function') {
+            ctx.roundRect(-halfL * 0.85 + 2, -halfW * 0.55 + 2, L * 0.85, W * 0.55, 4)
+          } else {
+            ctx.rect(-halfL * 0.85 + 2, -halfW * 0.55 + 2, L * 0.85, W * 0.55)
+          }
+          ctx.fill()
         }
-        ctx.fill()
+
+        // Distinct airborne outline ring / glow aura (WCAG 1.4.1 compliance)
+        if (car.airborne && alive) {
+          ctx.save()
+          ctx.strokeStyle = '#fbbf24'
+          ctx.lineWidth = 2
+          ctx.shadowColor = '#fbbf24'
+          ctx.shadowBlur = 8
+          ctx.beginPath()
+          ctx.ellipse(0, 0, halfL * 1.15, halfW * 1.15, 0, 0, Math.PI * 2)
+          ctx.stroke()
+          ctx.restore()
+        }
 
         // Aerodynamic GT Chassis Body with sculpted wheel arches
         ctx.fillStyle = color
@@ -909,8 +939,8 @@ export default function Cutline() {
         ctx.closePath()
         ctx.fill()
 
-        ctx.strokeStyle = isMe ? '#ffffff' : '#0b0b0d'
-        ctx.lineWidth = isMe ? 1.8 : 1.2
+        ctx.strokeStyle = isMe ? '#ffffff' : (car.airborne && alive ? '#fbbf24' : '#0b0b0d')
+        ctx.lineWidth = isMe ? 1.8 : (car.airborne && alive ? 1.6 : 1.2)
         ctx.stroke()
 
         // Front Splitter Lip
@@ -1402,6 +1432,11 @@ export default function Cutline() {
                         Slide
                       </span>
                     )}
+                    {car.airborne && isAlive && (
+                      <span className="text-[0.625rem] text-warn font-mono uppercase tracking-wider">
+                        Air ◬
+                      </span>
+                    )}
                     <span className="ml-auto font-mono text-xs tabular-nums text-muted">
                       {formatLapTime(car.bestLapMs)}
                     </span>
@@ -1474,6 +1509,14 @@ export default function Cutline() {
               <li className="flex items-center gap-2">
                 <span className="font-mono font-bold text-fg">▦ Line:</span>
                 <span>Chequered start, finish and timing line.</span>
+              </li>
+              <li className="flex items-center gap-2">
+                <span className="font-mono font-bold text-[#4a4438]">∴ Gravel:</span>
+                <span>Loose run-off stones, heavily scrubs speed.</span>
+              </li>
+              <li className="flex items-center gap-2">
+                <span className="font-mono font-bold text-warn">◬ Ramp:</span>
+                <span>Elevation kicker, launches car into the air.</span>
               </li>
             </ul>
           </div>
