@@ -725,14 +725,25 @@ export default function Cutline() {
         // page invents the arc. No rule reads any of this back.
         const lift = car.airborne ? Math.sin((car.airT ?? 0) * Math.PI) : 0
         if (lift > 0) {
+          // Height has to point SCREEN-up, and this frame is not screen space: it
+          // sits inside both the camera's rotation and the car's own. The body is
+          // drawn along local x, so local y is the car's lateral axis, and lifting
+          // along it threw every jumping car sideways off its shadow. The player's
+          // own car always went straight left, and other cars went wherever their
+          // heading pointed, some of them down the screen. Undoing both rotations
+          // expresses screen-up in this frame, the same way the name labels are
+          // drawn upright below.
+          const up = -(camRot + car.heading)
+          const h = lift * u * 0.5
           ctx.save()
           ctx.globalAlpha = 0.35
           ctx.fillStyle = '#000'
           ctx.beginPath()
-          ctx.ellipse(0, lift * u * 0.5, L * 0.45, W * 0.4, 0, 0, Math.PI * 2)
+          // The shadow stays where the car actually is on the ground.
+          ctx.ellipse(0, 0, L * 0.45, W * 0.4, 0, 0, Math.PI * 2)
           ctx.fill()
           ctx.restore()
-          ctx.translate(0, -lift * u * 0.5)
+          ctx.translate(Math.sin(up) * h, -Math.cos(up) * h)
           ctx.scale(1 + lift * 0.18, 1 + lift * 0.18)
         }
 
