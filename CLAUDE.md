@@ -20,6 +20,7 @@ npm run blockout3d # Blockout Royale 3D            :8085  ← /blockout3d-ws
 npm run drillers # Void Drillers                   :8086  ← /voiddrillers-ws
 npm run cipher   # Cipher Run                      :8087  ← /cipherrun-ws
 npm run cutline  # Cutline                        :8088  ← /cutline-ws
+node server/cutline-select.mjs   # regenerate CIRCUITS by measured difference
 npm test         # node --test over src/lib and server/*.test.js
 npm run build    # static output to dist/
 ```
@@ -307,18 +308,39 @@ is nothing to lock. `BOARD_DIR` says where they live (`./data` in dev,
   they live in `state.hazards`, capped at `MAX_HAZARDS`. Writing a hazard into
   the grid would force the whole track into every snapshot and turn a
   sub-kilobyte frame into a per-tick map.
-- **Cutline: `MAX_CORNER_RAD` is derived, not chosen.** At speed `v` a car
-  turns `TURN_RATE * (1 - TURN_FALLOFF * v / TOP_SPEED) / v` radians per tile,
-  so 0.30 is a corner taken at about 57% of `TOP_SPEED`. A test asserts no
-  generated circuit exceeds it. Raise it and circuits gain corners no hauler
-  can hold; the cheap fix for one bad circuit is a different seed, not a
-  different bound.
-- **Cutline: the centerline is a sum of sine harmonics, not a jittered
-  polygon.** Periodic by construction, so the loop closes with no seam to
-  blend; single-valued in angle, so it can never cross itself; bounded in
-  curvature, which is what makes the corner test possible. A jittered polygon
-  needs a seam fix and a smoothing-pass count, and gives no curvature
-  guarantee.
+- **Cutline: a circuit is a closed cycle on a lattice, not a polar curve.** The
+  old centreline was `r(angle)` as a sum of harmonics, which is single valued in
+  angle, so it always bent around the grid centre: every corner turned the same
+  way and curvature was global, which is why every circuit read as the same
+  deformed circle. A lattice cycle never revisits a vertex, which is what makes
+  self-intersection impossible, and `cycleAccepted` refuses an oval rather than
+  repairing one. `MIN_SIGN_CHANGES` is the rule that does that; loosening it
+  brings the old defect back in a new shape.
+- **Cutline: `LATTICE_CELL` is derived from `SEGMENT_WIDTH_MAX + MIN_WALL`.**
+  Two parallel corridors that merge read as a shortcut nobody designed, and the
+  checkpoint ring rejects the lap that results.
+- **Cutline: every geometric constant derives from `SEGMENT_WIDTH_MAX` or from
+  `meta[i].width`, never from a number written twice.** A hardcoded
+  `CHECKPOINT_RADIUS` of 4.0 survived one widening of the road and silently put
+  the outer racing line out of reach: a car 4 tiles off centre missed 10 of 11
+  checkpoints and its lap never counted, which reads as a lap counter that
+  randomly stops.
+- **Cutline: checkpoints sit only on the trunk, never on a shortcut branch and
+  never inside the stretch a branch skips.** Both routes then pass every
+  checkpoint in order and the ring needs no knowledge that a branch exists.
+- **Cutline: ramp height is render only.** The rules track `airUntil` and
+  nothing else; `airT` exists for the page to draw an arc with. Giving the rules
+  a z axis would make this a different game.
+- **Cutline: the car's collision shape derives from the car that is drawn.**
+  `CAR_LENGTH` and `CAR_WIDTH` are the page's dimensions and the hitbox's, and
+  `CAR_RADIUS` derives from `CAR_WIDTH`. They drifted once: the page drew a body
+  1.45 by 0.82 while walls were tested at a single point at the car's centre, so
+  a nose could sit most of a tile inside a wall with nothing registering.
+- **Cutline: `MAX_CORNER_RAD` is the tightest entry in `CORNERS`, not a ceiling
+  every circuit hugs.** Corner speeds are derived from the handling model:
+  `v = TURN_RATE / (k + TURN_RATE * TURN_FALLOFF / TOP_SPEED)`. The vocabulary
+  spans flat out to 33% of top speed on purpose, because a racer whose corners
+  never need a brake has removed the main thing a driver does.
 - **Cutline: the item bag is flat, and that is the design.** A car running last
   draws from the same odds as the leader. Slipstream is the only catch-up
   mechanic, because it rewards closing a gap rather than failing to. Weighting
