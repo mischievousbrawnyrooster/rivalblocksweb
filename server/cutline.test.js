@@ -2409,7 +2409,7 @@ test('an encoded circuit still fits a welcome frame', () => {
 test('a shortcut branches from the trunk and rejoins it', () => {
   let found = 0
   for (const circuit of CIRCUITS) {
-    const { shortcuts, centerline } = carve(circuit.seed)
+    const { grid, shortcuts, centerline } = carve(circuit.seed)
     if (!shortcuts || shortcuts.length === 0) continue
     found++
     for (const s of shortcuts) {
@@ -2417,6 +2417,13 @@ test('a shortcut branches from the trunk and rejoins it', () => {
       assert.ok(s.toIndex >= 0 && s.toIndex < centerline.length, 'rejoin point on the line')
       assert.notEqual(s.fromIndex, s.toIndex, 'a shortcut must go somewhere')
       assert.ok(s.points.length > 1, 'a shortcut must have a path')
+      for (const pt of s.points) {
+        assert.notEqual(
+          surfaceAt(grid, Math.round(pt.x), Math.round(pt.y)),
+          S_WALL,
+          'shortcut corridor must be carved surface, not wall',
+        )
+      }
     }
   }
   assert.ok(found > 0, 'no circuit had a shortcut')
@@ -2445,7 +2452,7 @@ test('no checkpoint ever sits on a shortcut or inside the stretch it skips', () 
 
 test('a lap completed via a shortcut still counts', () => {
   const idx = CIRCUITS.findIndex((c) => (carve(c.seed).shortcuts ?? []).length > 0)
-  if (idx < 0) return // no shortcut on any circuit is covered by the test above
+  assert.ok(idx >= 0, 'at least one circuit must have a shortcut')
   const match = make({ circuitIndex: idx })
   join(match, { name: 'S' }, () => 0)
   startRace(match)
