@@ -2509,3 +2509,73 @@ test('a circuit can be measured, and the shipped eight are genuinely different',
     }
   }
 })
+
+test('a car with a corner already in a wall can still drive free', () => {
+  // The collision test used to judge a move only by whether the DESTINATION
+  // overlapped a wall. A car whose body already touched one therefore had every
+  // move rejected, including the moves that would have freed it, and each
+  // rejection reversed its velocity, so speed never built. Measured across all
+  // circuits, 55% of cars brushing a wall were frozen for good. Steering into a
+  // wall, a shove from another car and a landing from a ramp all put a corner
+  // there without the translation test ever seeing it.
+  let trials = 0
+  let freed = 0
+  for (let ci = 0; ci < CIRCUITS.length; ci++) {
+    const match = make({ circuitIndex: ci })
+    join(match, { name: 'X' }, () => 0)
+    startRace(match)
+    const [car] = [...match.cars.values()]
+    const line = match.centerline
+    const n = line.length
+    const cornersIn = () =>
+      carCorners(car).filter((q) => surfaceAt(match.grid, Math.round(q.x), Math.round(q.y)) === S_WALL).length
+
+    for (let i = 0; i < n; i += 23) {
+      const p = line[i]
+      const a = line[(i - 1 + n) % n]
+      const b = line[(i + 1) % n]
+      const tx = b.x - a.x
+      const ty = b.y - a.y
+      const len = Math.hypot(tx, ty) || 1
+      const heading = Math.atan2(ty, tx)
+      for (const side of [-1, 1]) {
+        // Slide sideways until the body first touches a wall, centre still on road.
+        let placed = false
+        for (let off = 0; off < SEGMENT_WIDTH_MAX; off += 0.05) {
+          car.x = p.x + (-ty / len) * off * side
+          car.y = p.y + (tx / len) * off * side
+          car.heading = heading
+          if (surfaceAt(match.grid, Math.round(car.x), Math.round(car.y)) === S_WALL) break
+          if (cornersIn() > 0) {
+            placed = true
+            break
+          }
+        }
+        if (!placed) continue
+        trials++
+
+        Object.assign(car, { vx: 0, vy: 0, throttle: true, brake: false, steer: -side })
+        car.airUntil = 0
+        car.spinUntil = 0
+        // Measure the path driven, not the net displacement. Steering is held at
+        // full lock for the whole run, so a car that is perfectly free drives a
+        // circle and can finish close to where it started. A stuck car does not
+        // travel at all: the defect left cars at speed 0.057 covering 0.000 tiles.
+        let path = 0
+        let px = car.x
+        let py = car.y
+        for (let t = 0; t < 3000; t += TICK_MS) {
+          match.now += TICK_MS
+          applyHazards(match, car)
+          stepCar(match, car, TICK_MS / 1000)
+          path += Math.hypot(car.x - px, car.y - py)
+          px = car.x
+          py = car.y
+        }
+        if (path > 5) freed++
+      }
+    }
+  }
+  assert.ok(trials > 20, `the test must find wall contacts to try, found ${trials}`)
+  assert.equal(freed, trials, `${trials - freed} of ${trials} cars touching a wall were still stuck after 3 seconds`)
+})

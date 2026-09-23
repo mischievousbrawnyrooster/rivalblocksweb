@@ -998,12 +998,50 @@ export function carCorners(car) {
 }
 
 /** Whether any corner of a car's body sits in a wall at a hypothetical position. */
-function bodyHitsWall(match, car, atX, atY) {
-  const probe = { x: atX, y: atY, heading: car.heading }
-  for (const p of carCorners(probe)) {
-    if (surfaceAt(match.grid, Math.round(p.x), Math.round(p.y)) === S_WALL) return true
+/**
+ * Lift a car whose body overlaps a wall back out onto the road.
+ *
+ * The wall test in stepCar judges a move by its destination, which is correct
+ * only if the car STARTS clear. Three paths break that and none of them check:
+ * the heading turns before any move is tested, resolveContact shoves cars with
+ * no regard for walls, and an airborne car skips wall contact until it lands.
+ * A car left overlapping had every move rejected, each rejection reversed its
+ * velocity, and 55% of cars that brushed a wall were frozen there for good.
+ *
+ * Restoring the precondition fixes all three in one place, rather than weakening
+ * the wall test until it lets cars drive into walls. Searches outward in fixed
+ * directions and takes the smallest move that clears the body, so the nudge is
+ * as small as it can be and the same every time. Bounded: a car it cannot clear
+ * within a tile is left for the off-track branch, which already walks a car back.
+ */
+function depenetrate(match, car) {
+  if (cornersInWall(match, car, car.x, car.y) === 0) return
+  for (let d = DEPEN_STEP; d <= DEPEN_REACH; d += DEPEN_STEP) {
+    for (let k = 0; k < 8; k++) {
+      const a = (k / 8) * Math.PI * 2
+      const x = car.x + Math.cos(a) * d
+      const y = car.y + Math.sin(a) * d
+      // Never lift a car onto a spot whose centre is itself in a wall.
+      if (surfaceAt(match.grid, Math.round(x), Math.round(y)) === S_WALL) continue
+      if (cornersInWall(match, car, x, y) === 0) {
+        car.x = x
+        car.y = y
+        return
+      }
+    }
   }
-  return false
+}
+
+const DEPEN_STEP = 0.05
+const DEPEN_REACH = 1.0
+
+function cornersInWall(match, car, atX, atY) {
+  const probe = { x: atX, y: atY, heading: car.heading }
+  let count = 0
+  for (const p of carCorners(probe)) {
+    if (surfaceAt(match.grid, Math.round(p.x), Math.round(p.y)) === S_WALL) count++
+  }
+  return count
 }
 
 export const BOOST_MS = 3000         // the carried boost item
@@ -1086,6 +1124,12 @@ export function stepCar(match, car, dt) {
     car.heading += (car.steer ?? 0) * TURN_RATE * falloff * steerAuthority * dt
   }
 
+  // The turn above is never tested against walls, and last tick's contact shove
+  // or landing may have left the body overlapping one. Clear it before any move
+  // is judged, so the destination test below starts from a clean car. Not in the
+  // air: a car flying over a wall is meant to be over it.
+  if (!airborne && !offTrack) depenetrate(match, car)
+
   const cos = Math.cos(car.heading)
   const sin = Math.sin(car.heading)
 
@@ -1115,14 +1159,14 @@ export function stepCar(match, car, dt) {
   // 6. Integrate, then resolve contact one axis at a time so a car sliding
   //    along a wall keeps the component that is not blocked.
   const nx = car.x + car.vx * dt
-  if (bodyHitsWall(match, car, nx, car.y) && !offTrack && !airborne) {
+  if (cornersInWall(match, car, nx, car.y) > 0 && !offTrack && !airborne) {
     car.vx *= -WALL_HIT_KEEP
   } else {
     car.x = nx
   }
 
   const ny = car.y + car.vy * dt
-  if (bodyHitsWall(match, car, car.x, ny) && !offTrack && !airborne) {
+  if (cornersInWall(match, car, car.x, ny) > 0 && !offTrack && !airborne) {
     car.vy *= -WALL_HIT_KEEP
   } else {
     car.y = ny
