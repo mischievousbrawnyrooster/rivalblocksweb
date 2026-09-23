@@ -6,6 +6,9 @@ import { boardFor } from '../../server/board.js'
 import { makeBuffer } from '../lib/snapshotBuffer.js'
 import { useTitle } from '../lib/useTitle.js'
 import { useFavicon } from '../lib/useFavicon.js'
+import { makeCutlineScene } from '../lib/cutlineScene.js'
+import { makeRaceCamera, stepCamera, DEFAULT_VIEW, CAR_ROOF, VIEW_CELLS } from '../lib/raceCamera.js'
+import { wallBlocks } from '../lib/wallBlocks.js'
 import {
   GRID,
   DELAY_MS,
@@ -22,12 +25,10 @@ import {
   SURFACE_CHARS,
   decodeMap,
   CAR_LENGTH,
-  CAR_WIDTH,
 } from '../../server/cutline.js'
 
 const CANVAS = 768
 const TILE_RES = 32
-const VIEW_CELLS = 22
 const MINIMAP_FRACTION = 0.22
 
 const PLAYER_FALLBACKS = [
@@ -82,15 +83,15 @@ function decode(str) {
 }
 
 /**
- * Paint the circuit once to an offscreen canvas at high resolution (TILE_RES = 32).
+ * Paint the circuit once to an offscreen canvas, `tileRes` pixels a tile.
  *
- * The track never changes during a race, so every frame after this is one
- * hardware-accelerated drawImage plus cars, dynamic hazards, and minimap blit.
+ * The track never changes during a race, so this is painted once per circuit and
+ * used twice: as the 3D scene's ground texture and as the minimap.
  */
-function prerender(map) {
+function prerender(map, tileRes = TILE_RES) {
   const off = document.createElement('canvas')
-  off.width = GRID * TILE_RES
-  off.height = GRID * TILE_RES
+  off.width = GRID * tileRes
+  off.height = GRID * tileRes
   const g = off.getContext('2d')
   if (!g) return off
 
@@ -110,7 +111,7 @@ function prerender(map) {
   g.fillStyle = cBg
   g.fillRect(0, 0, off.width, off.height)
 
-  const T = TILE_RES
+  const T = tileRes
 
   for (let y = 0; y < GRID; y++) {
     for (let x = 0; x < GRID; x++) {
@@ -304,7 +305,21 @@ export default function Cutline() {
   const lastLapRef = useRef(0)
 
   const wsRef = useRef(null)
-  const canvasRef = useRef(null)
+  // The WebGL canvas draws the world; the overlay canvas above it draws the HUD,
+  // labels and minimap. Both fill `stageRef`, so they cannot drift apart.
+  const stageRef = useRef(null)
+  const glRef = useRef(null)
+  const overlayRef = useRef(null)
+  const sceneRef = useRef(null)
+  const [webglFailed, setWebglFailed] = useState(false)
+  const camRef = useRef(makeRaceCamera())
+  const viewRef = useRef(DEFAULT_VIEW)
+  const lastFrameRef = useRef(0)
+  // A circuit arrives in `welcome`, possibly before the scene exists, so it is
+  // held here and built by the render loop when the versions disagree.
+  const gridRef = useRef(null)
+  const trackVersionRef = useRef(0)
+  const builtVersionRef = useRef(-1)
   const trackCanvasRef = useRef(null)
   const bufRef = useRef(makeBuffer(DELAY_MS, 'cars'))
   const myIdRef = useRef(null)
@@ -351,7 +366,13 @@ export default function Cutline() {
         myIdRef.current = msg.id
         setMyId(msg.id)
         setCircuitName(msg.circuit?.name ?? '')
-        trackCanvasRef.current = prerender(decode(msg.circuit?.map ?? ''))
+        gridRef.current = decode(msg.circuit?.map ?? '')
+        trackVersionRef.current += 1
+        // A restart puts every car back on a new grid: place the camera there
+        // outright rather than swooping across the old circuit to find it, and
+        // drop skid marks that belong to the old track.
+        camRef.current = makeRaceCamera()
+        skidsRef.current = []
         bufRef.current = makeBuffer(DELAY_MS, 'cars')
         setStatus('live')
 
@@ -462,39 +483,76 @@ export default function Cutline() {
     return () => clearTimeout(id)
   }, [lapFlash])
 
+  // --- Scene lifecycle ------------------------------------------------------
+  // One scene per live connection, sized to its container. Disposing it on the
+  // way out releases the WebGL context as well as GPU memory; browsers cap live
+  // contexts, so a context kept per visit would eventually be killed for us.
+  useEffect(() => {
+    if (status !== 'live' || !glRef.current || !stageRef.current) return
+    let scene
+    try {
+      scene = makeCutlineScene(glRef.current)
+    } catch {
+      setWebglFailed(true)
+      return
+    }
+    sceneRef.current = scene
+    builtVersionRef.current = -1 // a new scene has no circuit yet
+
+    const stage = stageRef.current
+    const fit = () => scene.resize(stage.clientWidth, stage.clientHeight)
+    fit()
+    const watch = new ResizeObserver(fit)
+    watch.observe(stage)
+
+    return () => {
+      watch.disconnect()
+      scene.dispose()
+      sceneRef.current = null
+    }
+  }, [status])
+
   // --- Render loop ----------------------------------------------------------
   useEffect(() => {
     if (status !== 'live') return
 
     let rafId
-    const canvas = canvasRef.current
+    const canvas = overlayRef.current
     if (!canvas) return
     const ctx = canvas.getContext('2d')
     if (!ctx) return
 
     const frame = () => {
       const now = performance.now()
-      const sampled = bufRef.current.sample(now, myIdRef.current)
+      // Your own car is interpolated like everyone else's, never drawn at the
+      // newest snapshot. Snapshots land unevenly (measured on Windows: 46 Hz,
+      // gaps of 16 or 30 ms), so the newest one froze the car on 67 of 165
+      // frames and then jumped it double. In 2D the world stepped with it and
+      // hid that; behind a chase camera it reads as the car stuttering.
+      // Interpolated: no frozen frames, for 60 ms of delay. Blockout 3D exempts
+      // its player because its camera is steered by the mouse; this one is not.
+      const sampled = bufRef.current.sample(now)
+      const scene = sceneRef.current
+
+      if (scene && gridRef.current && builtVersionRef.current !== trackVersionRef.current) {
+        // 32 pixels a tile is 3072 square, 36 MB. WebGL2 only guarantees 2048,
+        // so a GPU that cannot take it gets 16 pixels a tile and looks softer
+        // rather than failing to draw.
+        const tileRes = scene.maxTextureSize >= GRID * TILE_RES ? TILE_RES : TILE_RES / 2
+        const ground = prerender(gridRef.current, tileRes)
+        trackCanvasRef.current = ground // the minimap draws from the same canvas
+        scene.setTrack(ground, wallBlocks(gridRef.current, GRID, S_WALL))
+        builtVersionRef.current = trackVersionRef.current
+      }
       const track = trackCanvasRef.current
 
-      ctx.fillStyle = '#0b0b0d'
-      ctx.fillRect(0, 0, CANVAS, CANVAS)
+      // Cleared, not filled: the 3D view shows through wherever the overlay
+      // draws nothing.
+      ctx.clearRect(0, 0, CANVAS, CANVAS)
 
       if (!sampled) {
-        if (track) {
-          const initialCam = (GRID - VIEW_CELLS) / 2
-          ctx.drawImage(
-            track,
-            initialCam * TILE_RES,
-            initialCam * TILE_RES,
-            VIEW_CELLS * TILE_RES,
-            VIEW_CELLS * TILE_RES,
-            0,
-            0,
-            CANVAS,
-            CANVAS,
-          )
-        }
+        // Background only, for the moment before the first snapshot lands.
+        scene?.update({ now, pose: null })
         rafId = requestAnimationFrame(frame)
         return
       }
@@ -504,7 +562,7 @@ export default function Cutline() {
       const cars = sampled.cars ?? []
       const palette = resolvePalette()
 
-      // --- 1. Follow Camera & Heading-Up Orientation -------------------------
+      // --- 1. The car the camera follows -----------------------------------
       const me = cars.find((c) => c.id === myIdRef.current)
       const aliveCars = cars.filter((c) => c.alive)
       // `cars` arrives in join order, not running order, so the first entry is
@@ -516,28 +574,10 @@ export default function Cutline() {
       const focusY = focusCar ? focusCar.y : GRID / 2
       const focusHeading = focusCar ? focusCar.heading : -Math.PI / 2
 
-      const viewW = VIEW_CELLS
-      const u = CANVAS / viewW // Screen pixels per world tile (e.g. 768 / 22 = 34.9px)
+      // Overlay pixels per tile at the top-down zoom, the scale of its margins.
+      const u = CANVAS / VIEW_CELLS
 
-      // Screen anchor position for the followed car (centered horizontally, 56% down vertically)
-      const screenX = CANVAS / 2
-      const screenY = CANVAS * 0.56
-
-      // Rotate camera so car heading always points North (-Y in screen coordinates)
-      const camRot = -Math.PI / 2 - focusHeading
-
-      // --- 2. Render World Inside Rotated & Translated Camera Transform ---
-      ctx.save()
-      ctx.translate(screenX, screenY)
-      ctx.rotate(camRot)
-      ctx.translate(-focusX * u, -focusY * u)
-
-      // Background Track Blit (draws the full circuit into world coordinates)
-      if (track) {
-        ctx.drawImage(track, 0, 0, track.width, track.height, 0, 0, GRID * u, GRID * u)
-      }
-
-      // 3a. Update & Draw Dynamic Skid Marks
+      // --- 2. Skid marks. Kept here, drawn by the scene ----------------------
       for (const car of cars) {
         if (car.alive && car.sliding) {
           const cos = Math.cos(car.heading)
@@ -554,505 +594,98 @@ export default function Cutline() {
         skidsRef.current = skidsRef.current.slice(-400)
       }
       skidsRef.current = skidsRef.current.filter((s) => now - s.at < 3500)
-      for (const s of skidsRef.current) {
-        const age = (now - s.at) / 3500
-        ctx.fillStyle = `rgba(12, 12, 16, ${(1 - age) * 0.45})`
-        ctx.beginPath()
-        ctx.arc(s.x * u, s.y * u, u * 0.08, 0, Math.PI * 2)
-        ctx.fill()
-      }
 
-      // 3b. Draw Active Hazards
-      const hazards = sampled.hazards ?? []
-      for (const h of hazards) {
-        const hx = h.x * u
-        const hy = h.y * u
+      // --- 3. The 3D view ----------------------------------------------------
+      // Frame time for smoothing. stepCamera clamps a long one, so a tab coming
+      // back from the background does not overshoot.
+      const dt = (now - (lastFrameRef.current || now)) / 1000
+      lastFrameRef.current = now
+      const view = viewRef.current
+      const pose = stepCamera(camRef.current, view, focusCar, dt, CAR_LENGTH / 2)
+      scene?.update({
+        cars,
+        hazards: sampled.hazards ?? [],
+        pickups: sampled.pickups ?? [],
+        skids: skidsRef.current,
+        palette,
+        now,
+        pose,
+        // The car the camera rides on is hidden in the bumper view, where it
+        // would fill the screen. That is the leader's car while spectating.
+        hideId: view === 'bumper' ? focusCar?.id : null,
+      })
 
-        if (h.kind === 'slick') {
-          // Viscous organic oil puddle with petroleum iridescent sheen
-          ctx.save()
-          ctx.translate(hx, hy)
-
-          ctx.fillStyle = 'rgba(0, 0, 0, 0.4)'
-          ctx.beginPath()
-          ctx.ellipse(2, 3, u * 0.7, u * 0.55, 0.3, 0, Math.PI * 2)
-          ctx.fill()
-
-          ctx.fillStyle = '#0d0d12'
-          ctx.beginPath()
-          ctx.ellipse(0, 0, u * 0.68, u * 0.52, 0.35, 0, Math.PI * 2)
-          ctx.fill()
-
-          const grad = ctx.createLinearGradient(-u * 0.5, -u * 0.4, u * 0.5, u * 0.4)
-          grad.addColorStop(0, 'rgba(45, 212, 191, 0.45)')
-          grad.addColorStop(0.5, 'rgba(192, 132, 252, 0.45)')
-          grad.addColorStop(1, 'rgba(251, 191, 36, 0.35)')
-          ctx.strokeStyle = grad
-          ctx.lineWidth = 1.8
-          ctx.stroke()
-
-          ctx.fillStyle = 'rgba(255, 255, 255, 0.18)'
-          ctx.beginPath()
-          ctx.ellipse(-u * 0.2, -u * 0.15, u * 0.2, u * 0.1, 0.35, 0, Math.PI * 2)
-          ctx.fill()
-
-          ctx.fillStyle = '#0d0d12'
-          ctx.beginPath()
-          ctx.arc(u * 0.6, -u * 0.25, u * 0.1, 0, Math.PI * 2)
-          ctx.arc(-u * 0.55, u * 0.3, u * 0.08, 0, Math.PI * 2)
-          ctx.arc(u * 0.2, u * 0.45, u * 0.09, 0, Math.PI * 2)
-          ctx.fill()
-
-          ctx.restore()
-        } else if (h.kind === 'banana') {
-          // A banana peel. Small, bright and unmistakably not part of the road,
-          // because it is one use and you only get to see it once. Structure as
-          // well as colour: a crescent with a stalk, so it reads without relying
-          // on yellow alone.
-          ctx.save()
-          ctx.translate(hx, hy)
-          ctx.rotate(Math.sin(now / 600 + hx) * 0.3)
-
-          const r = u * 0.3
-
-          ctx.fillStyle = 'rgba(0, 0, 0, 0.45)'
-          ctx.beginPath()
-          ctx.ellipse(2, 3, r, r * 0.62, 0, 0, Math.PI * 2)
-          ctx.fill()
-
-          ctx.fillStyle = '#facc15'
-          ctx.beginPath()
-          ctx.arc(0, 0, r, Math.PI * 0.15, Math.PI * 0.85)
-          ctx.arc(0, r * 0.42, r * 0.92, Math.PI * 0.85, Math.PI * 0.15, true)
-          ctx.closePath()
-          ctx.fill()
-
-          ctx.strokeStyle = '#a16207'
-          ctx.lineWidth = 1.2
-          ctx.stroke()
-
-          ctx.strokeStyle = '#713f12'
-          ctx.lineWidth = 2
-          ctx.beginPath()
-          ctx.moveTo(-r * 0.85, r * 0.1)
-          ctx.lineTo(-r * 1.15, -r * 0.35)
-          ctx.stroke()
-
-          ctx.restore()
-        }
-      }
-
-      // 3c. Draw Active Dynamic Powerups (Hovering / Spinning Crates)
-      const pickups = sampled.pickups ?? []
-      for (const p of pickups) {
-        const px = p.x * u
-        const py = p.y * u
-        const bob = Math.sin(now / 180 + p.x * 2.5) * (u * 0.1)
-        const rot = now / 400 + p.y
-
-        // Ground drop shadow beneath hovering crate
+      // --- 4. A label over every car -----------------------------------------
+      // Status is never carried by colour alone. The 2D view drew the place on
+      // each roof and showed boosting, drafting and the rest as effects; here
+      // they are words, upright over each car whatever the camera is doing.
+      // Placed by projection, never by WebGL pixel sizes, so they stay on their
+      // cars at any page width.
+      if (scene) {
         ctx.save()
-        ctx.translate(px, py)
-        const shadowScale = 1 - (bob / (u * 0.1)) * 0.15
-        ctx.fillStyle = 'rgba(0, 0, 0, 0.45)'
-        ctx.beginPath()
-        ctx.ellipse(0, 0, u * 0.38 * shadowScale, u * 0.22 * shadowScale, 0, 0, Math.PI * 2)
-        ctx.fill()
-        ctx.restore()
-
-        // Hovering powerup crate
-        ctx.save()
-        ctx.translate(px, py - u * 0.25 + bob)
-        ctx.rotate(rot)
-        const crateSize = u * 0.58
-
-        // Cyan glow aura
-        ctx.shadowColor = '#3ad1c4'
-        ctx.shadowBlur = 8
-
-        // Crate container
-        ctx.fillStyle = '#092523'
-        ctx.fillRect(-crateSize / 2, -crateSize / 2, crateSize, crateSize)
-
-        ctx.strokeStyle = '#3ad1c4'
-        ctx.lineWidth = 1.8
-        ctx.strokeRect(-crateSize / 2, -crateSize / 2, crateSize, crateSize)
-
-        // Luminous diamond core
-        ctx.fillStyle = '#3ad1c4'
-        ctx.beginPath()
-        ctx.moveTo(0, -crateSize * 0.32)
-        ctx.lineTo(crateSize * 0.32, 0)
-        ctx.lineTo(0, crateSize * 0.32)
-        ctx.lineTo(-crateSize * 0.32, 0)
-        ctx.closePath()
-        ctx.fill()
-
-        // WCAG 1.4.1 structural glyph: ✶
-        ctx.fillStyle = '#0b0b0d'
-        ctx.font = `bold ${Math.round(crateSize * 0.46)}px monospace`
         ctx.textAlign = 'center'
         ctx.textBaseline = 'middle'
-        ctx.fillText('✶', 0, 0.5)
+        for (const c of cars) {
+          if (view === 'bumper' && c.id === focusCar?.id) continue
+          const at = scene.project(c.x, c.y, CAR_ROOF + 0.25)
+          if (!at.visible) continue
+          const x = at.fx * CANVAS
+          const y = at.fy * CANVAS
 
-        ctx.restore()
-      }
-
-      // 3d. Draw Cars (Procedural GT Racer Chassis)
-      for (const car of cars) {
-        const cx = car.x * u
-        const cy = car.y * u
-        const isMe = car.id === myIdRef.current
-        const alive = car.alive
-        const color = palette[car.slot % 8]
-
-        ctx.save()
-        ctx.translate(cx, cy)
-        ctx.rotate(car.heading)
-
-        // Drawn from the same constants the collision shape derives from, so
-        // the car you see and the car you hit are the same size.
-        const L = u * CAR_LENGTH
-        const W = u * CAR_WIDTH
-        const halfL = L / 2
-        const halfW = W / 2
-
-        if (!alive) {
-          ctx.globalAlpha = 0.35
-        }
-
-        // Render only: the server sends airborne and a normalised airT and the
-        // page invents the arc. No rule reads any of this back.
-        const lift = car.airborne ? Math.sin((car.airT ?? 0) * Math.PI) : 0
-        if (lift > 0) {
-          // Height has to point SCREEN-up, and this frame is not screen space: it
-          // sits inside both the camera's rotation and the car's own. The body is
-          // drawn along local x, so local y is the car's lateral axis, and lifting
-          // along it threw every jumping car sideways off its shadow. The player's
-          // own car always went straight left, and other cars went wherever their
-          // heading pointed, some of them down the screen. Undoing both rotations
-          // expresses screen-up in this frame, the same way the name labels are
-          // drawn upright below.
-          const up = -(camRot + car.heading)
-          const h = lift * u * 0.5
-          ctx.save()
-          ctx.globalAlpha = 0.35
-          ctx.fillStyle = '#000'
-          ctx.beginPath()
-          // The shadow stays where the car actually is on the ground.
-          ctx.ellipse(0, 0, L * 0.45, W * 0.4, 0, 0, Math.PI * 2)
-          ctx.fill()
-          ctx.restore()
-          ctx.translate(Math.sin(up) * h, -Math.cos(up) * h)
-          ctx.scale(1 + lift * 0.18, 1 + lift * 0.18)
-        }
-
-        // Dynamic Headlights (cast forward onto the track)
-        if (alive) {
-          const beamGrad = ctx.createRadialGradient(
-            halfL * 0.8,
-            0,
-            halfW * 0.3,
-            halfL + u * 2.2,
-            0,
-            u * 1.5,
-          )
-          beamGrad.addColorStop(0, 'rgba(255, 255, 230, 0.3)')
-          beamGrad.addColorStop(0.5, 'rgba(255, 255, 230, 0.1)')
-          beamGrad.addColorStop(1, 'rgba(255, 255, 230, 0)')
-          ctx.fillStyle = beamGrad
-          ctx.beginPath()
-          ctx.moveTo(halfL * 0.8, -halfW * 0.55)
-          ctx.lineTo(halfL + u * 2.2, -halfW * 1.7)
-          ctx.lineTo(halfL + u * 2.2, halfW * 1.7)
-          ctx.lineTo(halfL * 0.8, halfW * 0.55)
-          ctx.closePath()
-          ctx.fill()
-        }
-
-        // Boosting Flame Wake (twin exhaust plumes)
-        if (car.boosting && alive) {
-          const plumeLen = u * (0.8 + 0.25 * Math.sin(now / 30))
-          ctx.fillStyle = '#f97316'
-          ctx.beginPath()
-          ctx.moveTo(-halfL, -halfW * 0.4)
-          ctx.lineTo(-halfL - plumeLen, -halfW * 0.4)
-          ctx.lineTo(-halfL, -halfW * 0.15)
-          ctx.moveTo(-halfL, halfW * 0.15)
-          ctx.lineTo(-halfL - plumeLen, halfW * 0.4)
-          ctx.lineTo(-halfL, halfW * 0.4)
-          ctx.fill()
-
-          ctx.fillStyle = '#38bdf8'
-          ctx.beginPath()
-          ctx.moveTo(-halfL, -halfW * 0.35)
-          ctx.lineTo(-halfL - plumeLen * 0.65, -halfW * 0.4)
-          ctx.lineTo(-halfL, -halfW * 0.2)
-          ctx.moveTo(-halfL, halfW * 0.2)
-          ctx.lineTo(-halfL - plumeLen * 0.65, halfW * 0.4)
-          ctx.lineTo(-halfL, halfW * 0.35)
-          ctx.fill()
-        }
-
-        // Drafting Slipstream Wake
-        if (car.drafting && alive) {
-          ctx.strokeStyle = '#38bdf8'
-          ctx.lineWidth = 1.8
-          ctx.beginPath()
-          ctx.moveTo(-halfL - 8, -halfW * 0.7)
-          ctx.lineTo(-halfL - 3, 0)
-          ctx.lineTo(-halfL - 8, halfW * 0.7)
-          ctx.stroke()
-
-          ctx.strokeStyle = 'rgba(56, 189, 248, 0.5)'
-          ctx.lineWidth = 1.2
-          ctx.beginPath()
-          ctx.moveTo(-halfL - 14, -halfW * 0.9)
-          ctx.lineTo(-halfL - 8, 0)
-          ctx.lineTo(-halfL - 14, halfW * 0.9)
-          ctx.stroke()
-        }
-
-        // Drift Sparks
-        if (car.sliding && alive) {
-          const sparkColor = Math.sin(now / 20) > 0 ? '#fbbf24' : '#f97316'
-          ctx.fillStyle = sparkColor
-          for (let s = 0; s < 4; s++) {
-            const sx = -halfL * 0.7 - Math.random() * u * 0.4
-            const sy = (Math.random() > 0.5 ? -halfW : halfW) + (Math.random() - 0.5) * 4
-            ctx.fillRect(sx, sy, 2, 2)
-          }
-        }
-
-        // 4 Wheels / Tires (Precision Rounded Rubber & Alloy Rims)
-        const tw = L * 0.28
-        const th = W * 0.24
-        const steerAngle = (car.steer ?? 0) * 0.32
-
-        // Mechanical dark axle bars
-        ctx.strokeStyle = '#27272a'
-        ctx.lineWidth = 2.5
-        // Front axle
-        ctx.beginPath()
-        ctx.moveTo(halfL * 0.52, -halfW * 0.78)
-        ctx.lineTo(halfL * 0.52, halfW * 0.78)
-        ctx.stroke()
-        // Rear axle
-        ctx.beginPath()
-        ctx.moveTo(-halfL * 0.52, -halfW * 0.78)
-        ctx.lineTo(-halfL * 0.52, halfW * 0.78)
-        ctx.stroke()
-
-        // Helper to render one high-fidelity wheel
-        const renderWheel = (wx, wy, ang = 0) => {
-          ctx.save()
-          ctx.translate(wx, wy)
-          if (ang !== 0) ctx.rotate(ang)
-
-          // Tire drop shadow
-          ctx.fillStyle = 'rgba(0, 0, 0, 0.4)'
-          if (typeof ctx.roundRect === 'function') {
-            ctx.beginPath()
-            ctx.roundRect(-tw / 2 + 1, -th / 2 + 1.5, tw, th, 2.5)
-            ctx.fill()
-          }
-
-          // Outer rubber tire (rounded)
-          ctx.fillStyle = '#141417'
-          if (typeof ctx.roundRect === 'function') {
-            ctx.beginPath()
-            ctx.roundRect(-tw / 2, -th / 2, tw, th, 2.5)
-            ctx.fill()
-          } else {
-            ctx.fillRect(-tw / 2, -th / 2, tw, th)
-          }
-
-          // Center tire tread line
-          ctx.strokeStyle = '#27272a'
-          ctx.lineWidth = 1
-          ctx.beginPath()
-          ctx.moveTo(-tw / 2 + 2, 0)
-          ctx.lineTo(tw / 2 - 2, 0)
-          ctx.stroke()
-
-          // Metallic alloy rim
-          ctx.fillStyle = '#71717a'
-          if (typeof ctx.roundRect === 'function') {
-            ctx.beginPath()
-            ctx.roundRect(-tw * 0.28, -th * 0.32, tw * 0.56, th * 0.64, 1.5)
-            ctx.fill()
-          } else {
-            ctx.fillRect(-tw * 0.28, -th * 0.32, tw * 0.56, th * 0.64)
-          }
-
-          // Chrome center hubcap
-          ctx.fillStyle = '#f4f4f5'
-          ctx.beginPath()
-          ctx.arc(0, 0, 1.2, 0, Math.PI * 2)
-          ctx.fill()
-
-          ctx.restore()
-        }
-
-        // Rear tires (fixed)
-        renderWheel(-halfL * 0.52, -halfW * 0.78, 0)
-        renderWheel(-halfL * 0.52, halfW * 0.78, 0)
-
-        // Front tires (steered)
-        renderWheel(halfL * 0.52, -halfW * 0.78, steerAngle)
-        renderWheel(halfL * 0.52, halfW * 0.78, steerAngle)
-
-        // Car Body Drop Shadow
-        if (!car.airborne) {
-          ctx.fillStyle = 'rgba(0, 0, 0, 0.45)'
-          ctx.beginPath()
-          if (typeof ctx.roundRect === 'function') {
-            ctx.roundRect(-halfL * 0.85 + 2, -halfW * 0.55 + 2, L * 0.85, W * 0.55, 4)
-          } else {
-            ctx.rect(-halfL * 0.85 + 2, -halfW * 0.55 + 2, L * 0.85, W * 0.55)
-          }
-          ctx.fill()
-        }
-
-        // Distinct airborne outline ring / glow aura (WCAG 1.4.1 compliance)
-        if (car.airborne && alive) {
-          ctx.save()
-          ctx.strokeStyle = '#fbbf24'
-          ctx.lineWidth = 2
-          ctx.shadowColor = '#fbbf24'
-          ctx.shadowBlur = 8
-          ctx.beginPath()
-          ctx.ellipse(0, 0, halfL * 1.15, halfW * 1.15, 0, 0, Math.PI * 2)
-          ctx.stroke()
-          ctx.restore()
-        }
-
-        // Aerodynamic GT Chassis Body with sculpted wheel arches
-        ctx.fillStyle = color
-        ctx.beginPath()
-        ctx.moveTo(halfL * 0.88, 0)
-        ctx.lineTo(halfL * 0.76, -halfW * 0.52)
-        ctx.lineTo(halfL * 0.58, -halfW * 0.52)
-        ctx.lineTo(halfL * 0.42, -halfW * 0.48)
-        ctx.lineTo(halfL * 0.2, -halfW * 0.52)
-        ctx.lineTo(-halfL * 0.35, -halfW * 0.52)
-        ctx.lineTo(-halfL * 0.45, -halfW * 0.48)
-        ctx.lineTo(-halfL * 0.65, -halfW * 0.52)
-        ctx.lineTo(-halfL * 0.88, -halfW * 0.46)
-        ctx.lineTo(-halfL * 0.88, halfW * 0.46)
-        ctx.lineTo(-halfL * 0.65, halfW * 0.52)
-        ctx.lineTo(-halfL * 0.45, halfW * 0.48)
-        ctx.lineTo(-halfL * 0.35, halfW * 0.52)
-        ctx.lineTo(halfL * 0.2, halfW * 0.52)
-        ctx.lineTo(halfL * 0.42, halfW * 0.48)
-        ctx.lineTo(halfL * 0.58, halfW * 0.52)
-        ctx.lineTo(halfL * 0.76, halfW * 0.52)
-        ctx.closePath()
-        ctx.fill()
-
-        ctx.strokeStyle = isMe ? '#ffffff' : (car.airborne && alive ? '#fbbf24' : '#0b0b0d')
-        ctx.lineWidth = isMe ? 1.8 : (car.airborne && alive ? 1.6 : 1.2)
-        ctx.stroke()
-
-        // Front Splitter Lip
-        ctx.fillStyle = '#111115'
-        ctx.fillRect(halfL * 0.75, -halfW * 0.52, L * 0.1, W * 1.04)
-
-        // Cockpit / Windshield Glass
-        ctx.fillStyle = '#0a0e17'
-        ctx.beginPath()
-        ctx.ellipse(0, 0, L * 0.28, W * 0.42, 0, 0, Math.PI * 2)
-        ctx.fill()
-        ctx.strokeStyle = 'rgba(255, 255, 255, 0.2)'
-        ctx.lineWidth = 1
-        ctx.stroke()
-
-        // Windshield reflection streak
-        ctx.strokeStyle = 'rgba(255, 255, 255, 0.45)'
-        ctx.lineWidth = 1.2
-        ctx.beginPath()
-        ctx.moveTo(-L * 0.12, -W * 0.25)
-        ctx.lineTo(L * 0.12, W * 0.25)
-        ctx.stroke()
-
-        // Rear GT Wing / Spoiler
-        ctx.fillStyle = '#18181b'
-        ctx.fillRect(-halfL * 0.88, -halfW * 0.75, L * 0.12, W * 1.5)
-        ctx.fillStyle = color
-        ctx.fillRect(-halfL * 0.9, -halfW * 0.8, L * 0.08, 3)
-        ctx.fillRect(-halfL * 0.9, halfW * 0.8 - 3, L * 0.08, 3)
-
-        // Headlight Lenses
-        ctx.fillStyle = '#fef08a'
-        ctx.fillRect(halfL * 0.72, -halfW * 0.55, 2, 4)
-        ctx.fillRect(halfL * 0.72, halfW * 0.55 - 4, 2, 4)
-
-        // Taillights (glow during braking)
-        const brakeActive = car.brake && alive
-        ctx.fillStyle = brakeActive ? '#ff2222' : '#dc2626'
-        ctx.fillRect(-halfL * 0.87, -halfW * 0.5, 2, 5)
-        ctx.fillRect(-halfL * 0.87, halfW * 0.5 - 5, 2, 5)
-        if (brakeActive) {
-          ctx.fillStyle = 'rgba(239, 68, 68, 0.4)'
-          ctx.beginPath()
-          ctx.arc(-halfL * 0.87, -halfW * 0.35, 6, 0, Math.PI * 2)
-          ctx.arc(-halfL * 0.87, halfW * 0.35, 6, 0, Math.PI * 2)
-          ctx.fill()
-        }
-
-        // Roof Number Roundel / Place Badge (kept upright relative to screen)
-        if (alive && car.place != null) {
+          ctx.fillStyle = 'rgba(11, 11, 13, 0.8)'
+          ctx.fillRect(x - 14, y - 16, 28, 14)
           ctx.fillStyle = '#ffffff'
-          ctx.beginPath()
-          ctx.ellipse(-L * 0.02, 0, 7.5, 7.5, 0, 0, Math.PI * 2)
-          ctx.fill()
+          ctx.font = 'bold 12px monospace'
+          ctx.fillText(String(c.place ?? c.slot + 1), x, y - 9)
 
-          ctx.save()
-          ctx.translate(-L * 0.02, 0)
-          ctx.rotate(-car.heading - camRot)
-          ctx.fillStyle = '#09090b'
-          ctx.font = 'bold 9px monospace'
-          ctx.textAlign = 'center'
-          ctx.textBaseline = 'middle'
-          ctx.fillText(String(car.place), 0, 0.5)
-          ctx.restore()
+          const tags = [
+            c.boosting && 'BOOST',
+            c.drafting && 'DRAFT',
+            c.sliding && 'SLIDE',
+            c.spinning && 'SPIN',
+            c.airborne && 'AIR',
+            !c.alive && 'OUT',
+          ].filter(Boolean)
+          if (tags.length) {
+            const text = tags.join(' ')
+            ctx.font = 'bold 9px monospace'
+            const w = ctx.measureText(text).width + 6
+            ctx.fillStyle = 'rgba(11, 11, 13, 0.8)'
+            ctx.fillRect(x - w / 2, y, w, 12)
+            ctx.fillStyle = '#ffffff'
+            ctx.fillText(text, x, y + 6)
+          }
+
+          // Your own car carries YOU above its label. In top-down, height barely
+          // moves a point on screen, so this is offset in pixels from the label
+          // rather than projected from a greater height, which would overlap it.
+          if (c.id === myIdRef.current && c.alive) {
+            const bob = Math.sin(now / 150) * 2.5
+            const indicatorY = y - 25 + bob
+
+            ctx.fillStyle = '#3ad1c4'
+            ctx.beginPath()
+            ctx.moveTo(x, indicatorY + 5)
+            ctx.lineTo(x - 5, indicatorY - 2)
+            ctx.lineTo(x + 5, indicatorY - 2)
+            ctx.closePath()
+            ctx.fill()
+
+            ctx.fillStyle = 'rgba(11, 11, 13, 0.85)'
+            ctx.fillRect(x - 14, indicatorY - 15, 28, 12)
+            ctx.strokeStyle = '#3ad1c4'
+            ctx.lineWidth = 1
+            ctx.strokeRect(x - 14, indicatorY - 15, 28, 12)
+
+            ctx.fillStyle = '#3ad1c4'
+            ctx.font = 'bold 8px monospace'
+            ctx.fillText('YOU', x, indicatorY - 9)
+          }
         }
-
         ctx.restore()
       }
 
-      ctx.restore() // Restore world transform to screen space
-
-      // --- 3. Screen Space UI Elements --------------------------------------
-      // Local Car "YOU" Floating Indicator (always upright on screen)
-      if (me && me.alive) {
-        ctx.save()
-        const bob = Math.sin(now / 150) * 2.5
-        const indicatorY = screenY - u * 1.25 + bob
-
-        ctx.fillStyle = '#3ad1c4'
-        ctx.beginPath()
-        ctx.moveTo(screenX, indicatorY + 5)
-        ctx.lineTo(screenX - 5, indicatorY - 2)
-        ctx.lineTo(screenX + 5, indicatorY - 2)
-        ctx.closePath()
-        ctx.fill()
-
-        ctx.fillStyle = 'rgba(11, 11, 13, 0.85)'
-        ctx.fillRect(screenX - 14, indicatorY - 15, 28, 12)
-        ctx.strokeStyle = '#3ad1c4'
-        ctx.lineWidth = 1
-        ctx.strokeRect(screenX - 14, indicatorY - 15, 28, 12)
-
-        ctx.fillStyle = '#3ad1c4'
-        ctx.font = 'bold 8px monospace'
-        ctx.textAlign = 'center'
-        ctx.textBaseline = 'middle'
-        ctx.fillText('YOU', screenX, indicatorY - 9)
-        ctx.restore()
-      }
-
-      // --- 4. Top-Right Minimap (Circuit Radar) ------------------------------
+      // --- 5. Top-Right Minimap (Circuit Radar) ------------------------------
       const pad = 14
       const mmW = Math.round(CANVAS * MINIMAP_FRACTION)
       const mmH = mmW
@@ -1061,14 +694,12 @@ export default function Cutline() {
 
       // Dynamic fade when any car is under the minimap in screen space
       const nearMap = u * 1.5
-      const cosCam = Math.cos(camRot)
-      const sinCam = Math.sin(camRot)
       const behindMap = cars.some((c) => {
-        if (!c.alive) return false
-        const dx = (c.x - focusX) * u
-        const dy = (c.y - focusY) * u
-        const sx = screenX + dx * cosCam - dy * sinCam
-        const sy = screenY + dx * sinCam + dy * cosCam
+        if (!c.alive || !scene) return false
+        const at = scene.project(c.x, c.y, CAR_ROOF)
+        if (!at.visible) return false
+        const sx = at.fx * CANVAS
+        const sy = at.fy * CANVAS
         return (
           sx > mmX - nearMap &&
           sx < mmX + mmW + nearMap &&
@@ -1160,7 +791,7 @@ export default function Cutline() {
 
       ctx.restore()
 
-      // --- 5. Non-Racing Overlay Banners ------------------------------------
+      // --- 6. Non-Racing Overlay Banners ------------------------------------
       if (sampled.phase !== 'racing') {
         ctx.save()
         let headline = ''
@@ -1341,14 +972,34 @@ export default function Cutline() {
       <div className="mt-8 grid gap-8 lg:grid-cols-[768px_1fr] items-start justify-center">
         {/* Canvas & HUD Area */}
         <div className="relative mx-auto w-full max-w-[768px]">
-          <canvas
-            ref={canvasRef}
-            width={CANVAS}
-            height={CANVAS}
-            role="img"
-            aria-label={`Cutline circuit canvas. ${statusLine(hud, myId)}`}
-            className="w-full max-w-[768px] aspect-square border border-line bg-bg select-none block"
-          />
+          <div
+            ref={stageRef}
+            className="relative w-full max-w-[768px] aspect-square border border-line bg-bg"
+          >
+            <canvas
+              ref={glRef}
+              role="img"
+              aria-label={`Cutline circuit. ${statusLine(hud, myId)}`}
+              className="absolute inset-0 block h-full w-full select-none"
+            />
+            {/* Keeps its 768 by 768 drawing buffer, so the minimap and banners
+                are drawn in the same coordinates they always were. */}
+            <canvas
+              ref={overlayRef}
+              width={CANVAS}
+              height={CANVAS}
+              aria-hidden="true"
+              className="pointer-events-none absolute inset-0 block h-full w-full"
+            />
+            {webglFailed && (
+              <div className="absolute inset-0 flex items-center justify-center bg-bg p-8 text-center">
+                <p className="leading-relaxed text-muted">
+                  This race needs WebGL, and this browser has it turned off or
+                  does not support it.
+                </p>
+              </div>
+            )}
+          </div>
 
           {/* Lap banner. aria-live so it is announced rather than only seen, and
               pointer-events-none so it can never swallow a click meant for the
