@@ -399,8 +399,31 @@ export const S_LINE = 6
 export const S_GRAVEL = 7
 // A ramp. Crossing it above RAMP_MIN_SPEED launches the car.
 export const S_RAMP = 8
+// A hole past a ramp's lip, across the whole road. A car that drives into it
+// rather than flying it falls, and is set down past it after FALL_MS.
+export const S_HOLE = 9
 
-export const SURFACE_CHARS = ['W', 'T', 'K', 'B', 'O', 'P', 'L', 'G', 'R']
+export const SURFACE_CHARS = ['W', 'T', 'K', 'B', 'O', 'P', 'L', 'G', 'R', 'H']
+
+// A hole spans these rows ahead of its ramp's middle tile, whose lip is half a
+// tile ahead: one row of road, then the hole, then road to land on.
+export const HOLE_FROM = 2
+export const HOLE_TO = 4
+// Where a car that fell is set down, in tiles ahead of the ramp.
+const HOLE_EXIT = HOLE_TO + 3
+export const FALL_MS = 1500
+
+// Wall-jump pads. A pad's flight is PAD_FLIGHT_MIN to PAD_FLIGHT_MAX tiles past
+// its lip, the same at any speed, and it must skip at least PAD_SKIP_MIN points
+// of the lap and no more than PAD_SKIP_MAX of it: a corner complex, not the lap.
+const PAD_SEARCH = 24          // tiles straight on from a corner to look for its wall
+const PAD_PULL_BACK = 10       // tiles a pad may sit back from that wall to fit the road
+export const PAD_FLIGHT_MIN = 6
+export const PAD_FLIGHT_MAX = 14
+const PAD_SKIP_MIN = 20
+const PAD_SKIP_MAX = 0.25
+// A pad launches only a car driving at it, within this of its facing (cos 30).
+const PAD_ALIGN = Math.cos(Math.PI / 6)
 
 export const GRAVEL_DRAG = 3.0       // scrubs speed without stopping the car
 export const GRAVEL_DEPTH = 3        // tiles of run off outside a corner
@@ -622,6 +645,25 @@ export function carve(seed) {
       owner[y * GRID + x] = i
     })
   }
+  // Refused tiles leave the edge jagged, with one-tile fingers into the wall. A
+  // car that drove into one faced the wall with nowhere to go, so run off with
+  // fewer than two ways out goes back to wall, until none is left.
+  for (let trimmed = true; trimmed; ) {
+    trimmed = false
+    for (let y = 0; y < GRID; y++) {
+      for (let x = 0; x < GRID; x++) {
+        if (grid[y * GRID + x] !== S_GRAVEL) continue
+        let ways = 0
+        for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+          if (surfaceAt(grid, x + dx, y + dy) !== S_WALL) ways++
+        }
+        if (ways >= 2) continue
+        put(x, y, S_WALL)
+        owner[y * GRID + x] = -1
+        trimmed = true
+      }
+    }
+  }
 
   // 3. Decorate. Boost on straights, oil on corner exits, ramps on long straights.
   //    Ramp strips are also remembered, because the grid says where a ramp is
@@ -641,7 +683,7 @@ export function carve(seed) {
     for (let off = -half; off <= half; off++) {
       put(p.x - t.y * off, p.y + t.x * off, surface)
     }
-    if (surface === S_RAMP) rampStrips.push({ p, t, half })
+    if (surface === S_RAMP) rampStrips.push({ p, t, half, index: i })
   }
 
   // 4. Pickup ranks, spread to the local width.
@@ -702,6 +744,98 @@ export function carve(seed) {
     }
   }
 
+  // 7b. Every ramp must set a car down on the road at any speed it can launch
+  //     at; one whose jump could end in a wall is taken out, or a boosted car
+  //     would land inside it. Then every other ramp left, clear of checkpoints
+  //     and the grid, gets a hole past its lip, so it has to be jumped.
+  const holes = []
+  for (const strip of rampStrips) {
+    if (rampLandsClear(grid, strip)) continue
+    forEachStripTile(strip, (x, y) => {
+      if (surfaceAt(grid, x, y) === S_RAMP) put(x, y, S_TARMAC)
+    })
+    strip.removed = true
+  }
+  // A fall skips HOLE_EXIT - HOLE_FROM tiles of road, far less than a
+  // checkpoint circle is across, so a checkpoint is always reached before the
+  // fall or after it, and a fall across the finish line still counts it as
+  // crossed. Only the starting grid must be clear, or a car starts in a hole.
+  const clearOfCourse = (x, y) => startSlots.every((s) => Math.hypot(s.x - x, s.y - y) > HOLE_TO + 2)
+  let holeTurn = 0
+  for (const strip of rampStrips) {
+    if (strip.removed) continue
+    let intact = true
+    forEachStripTile(strip, (x, y) => {
+      if (surfaceAt(grid, x, y) !== S_RAMP) intact = false
+    })
+    const far = { x: strip.p.x + strip.t.x * HOLE_EXIT, y: strip.p.y + strip.t.y * HOLE_EXIT }
+    if (!intact || !clearOfCourse(strip.p.x, strip.p.y) || !clearOfCourse(far.x, far.y)) continue
+    // Every other one: half the ramps are for show and speed, half must be used.
+    if (holeTurn++ % 2 === 1) continue
+    const trial = grid.slice()
+    digHole(trial, strip, (x, y, i) => lapGap(owner[y * GRID + x], i) <= RUNOFF_OWN_SPAN || owner[y * GRID + x] < 0)
+    // Every ramp, not just this one: a boosted jump off the ramp before can
+    // reach this hole.
+    if (!rampStrips.every((r) => r.removed || rampLandsClear(trial, r))) continue
+    grid.set(trial)
+    const mid = middleTile(strip)
+    holes.push({ x: mid.x, y: mid.y, heading: Math.atan2(strip.t.y, strip.t.x), width: 2 * strip.half + 1, index: strip.index })
+  }
+  // No box floats over a hole.
+  for (let i = pickups.length - 1; i >= 0; i--) {
+    if (grid[pickups[i].key] === S_HOLE) pickups.splice(i, 1)
+  }
+
+  // 7c. A wall-jump pad, at most one: at the outside of a corner, facing the
+  //     wall, so a car that drives straight at it instead of turning is thrown
+  //     over the wall onto a later stretch. A pad's flight is exact, the same
+  //     distance at any speed, so every lane is checked to land on that stretch.
+  //     The checkpoints it flies past are credited on touchdown, so the jump is
+  //     a route of its own; the finish line is never jumped.
+  const jumps = []
+  {
+    const ahead = (i, j) => (j - i + n) % n
+    const plain = (s) => s === S_TARMAC || s === S_KERB || s === S_GRAVEL
+    let best = null
+    for (let i = 3; i < n; i++) {
+      if (meta[i].corner === null || meta[i - 1].corner !== null) continue
+      const t = tangentAt(centerline, (i - 3 + n) % n)
+      let wallAt = null
+      for (let s = 0; s < PAD_SEARCH && wallAt === null; s++) {
+        if (surfaceAt(grid, Math.round(centerline[i].x + t.x * s), Math.round(centerline[i].y + t.y * s)) === S_WALL) wallAt = s
+      }
+      if (wallAt === null) continue
+      const half = Math.round(meta[i].width / 2) - 1
+      for (let s = wallAt - 1; s >= wallAt - PAD_PULL_BACK; s--) {
+        const q = { x: Math.round(centerline[i].x + t.x * s), y: Math.round(centerline[i].y + t.y * s) }
+        const strip = { p: q, t, half, index: i, pad: true }
+        let fits = true
+        forEachStripTile(strip, (x, y) => {
+          const a = ahead(i, owner[y * GRID + x])
+          if (!plain(surfaceAt(grid, x, y)) || owner[y * GRID + x] < 0 || (a > 40 && a < n - 5)) fits = false
+        })
+        if (!fits) continue
+        for (let D = PAD_FLIGHT_MIN; D <= PAD_FLIGHT_MAX; D++) {
+          const pad = padLanding(grid, owner, centerline, strip, D)
+          if (!pad) continue
+          const lo = Math.min(...pad.js.map((j) => ahead(i, j)))
+          const hi = Math.max(...pad.js.map((j) => ahead(i, j)))
+          if (lo < PAD_SKIP_MIN || hi > n * PAD_SKIP_MAX) continue
+          const skipped = checkpoints.map((cp, k) => ({ k, a: ahead(i, cp.index) })).filter(({ a }) => a > 0 && a < lo)
+          if (skipped.some(({ k }) => k === 0)) continue
+          if (best && hi >= best.hi) continue
+          best = { strip, D, hi, land: pad.land, credits: skipped.sort((u, v) => u.a - v.a).map(({ k }) => k) }
+        }
+      }
+    }
+    if (best) {
+      forEachStripTile(best.strip, (x, y) => put(x, y, S_RAMP))
+      rampStrips.push(best.strip)
+      const { p, t, half } = best.strip
+      jumps.push({ x: p.x, y: p.y, heading: Math.atan2(t.y, t.x), width: 2 * half + 1, distance: best.D, land: best.land, credits: best.credits })
+    }
+  }
+
   // 8. Shortcuts. A chord between two points far apart along the lap but close
   //    in space. Checkpoints are placed in stage 6 from startIndex, so the chord
   //    is chosen to skip a stretch that contains none: both routes then pass
@@ -743,7 +877,94 @@ export function carve(seed) {
     }
   }
 
-  return { grid, centerline, meta, checkpoints, startSlots, pickups, shortcuts, ramps: rampRuns(grid, rampStrips) }
+  return { grid, centerline, meta, checkpoints, startSlots, pickups, shortcuts, holes, jumps, ramps: rampRuns(grid, rampStrips) }
+}
+
+/** A ramp strip's middle tile: where the page centres its wedge. */
+function middleTile(strip) {
+  return { x: Math.round(strip.p.x), y: Math.round(strip.p.y) }
+}
+
+/** Every tile of a ramp strip, in order across the road. */
+function forEachStripTile(strip, fn) {
+  for (let off = -strip.half; off <= strip.half; off++) {
+    fn(Math.round(strip.p.x - strip.t.y * off), Math.round(strip.p.y + strip.t.x * off))
+  }
+}
+
+/**
+ * Whether a jump off this ramp lands on the road in every lane, at every speed a
+ * car can launch at, from the slowest that launches to boosted in a slipstream. A flight is measured from the lip, half a tile ahead of the
+ * middle tile, because the rules renew it on every tick a car is on the ramp.
+ */
+function rampLandsClear(target, strip) {
+  const mid = middleTile(strip)
+  const { t } = strip
+  // Every half tile of landing distance from the slowest launch to the fastest,
+  // so a wall between two sampled speeds cannot hide.
+  const fastest = TOP_SPEED * BOOST_MULT * SLIP_BOOST
+  for (let v = RAMP_MIN_SPEED; v < fastest + 0.5 / (AIR_MS / 1000); v += 0.5 / (AIR_MS / 1000)) {
+    const d = 0.5 + (Math.min(v, fastest) * AIR_MS) / 1000
+    for (let lane = -strip.half; lane <= strip.half; lane++) {
+      const at = surfaceAt(target, Math.round(mid.x + t.x * d - t.y * lane), Math.round(mid.y + t.y * d + t.x * lane))
+      if (at === S_WALL || at === S_HOLE) return false
+    }
+  }
+  return true
+}
+
+/**
+ * Where a pad strip set `D` tiles past its lip would land each lane, if every
+ * lane comes down on one later stretch: on the road a tile in from its edges,
+ * along a stretch running the same way in every lane and not back toward the
+ * pad, and with at least one wall crossed on the way, or it is only a ramp.
+ * Returns the landing in the middle lane and the stretch's centre-line indices.
+ */
+function padLanding(grid, owner, centerline, strip, D) {
+  const { p, t, half } = strip
+  const js = []
+  let first = null
+  let crossesWall = false
+  for (let lane = -half; lane <= half; lane++) {
+    const at = (d) => ({ x: Math.round(p.x + t.x * d - t.y * lane), y: Math.round(p.y + t.y * d + t.x * lane) })
+    const L = at(0.5 + D)
+    for (const k of [-1, 0, 1]) {
+      const s = surfaceAt(grid, Math.round(L.x + t.x * k), Math.round(L.y + t.y * k))
+      if (s === S_WALL || s === S_HOLE || s === S_RAMP) return null
+    }
+    const j = owner[L.y * GRID + L.x]
+    if (j < 0) return null
+    const tj = tangentAt(centerline, j)
+    first = first ?? tj
+    if (tj.x * first.x + tj.y * first.y < 0.85 || tj.x * t.x + tj.y * t.y < -0.3) return null
+    for (let k = 1; k < D; k++) {
+      const w = at(0.5 + k)
+      if (surfaceAt(grid, w.x, w.y) === S_WALL) crossesWall = true
+    }
+    js.push(j)
+  }
+  if (!crossesWall) return null
+  const mid = { x: p.x + t.x * (0.5 + D), y: p.y + t.y * (0.5 + D) }
+  return { js, land: { x: mid.x, y: mid.y, heading: Math.atan2(first.y, first.x) } }
+}
+
+/**
+ * A hole across the whole road past a ramp: rows HOLE_FROM to HOLE_TO ahead of
+ * its middle tile, every drivable tile across that `ownGround` says belongs to
+ * this stretch, so no edge is left to drive round it.
+ */
+function digHole(target, strip, ownGround) {
+  const mid = middleTile(strip)
+  const { t } = strip
+  const reach = strip.half + 2 + GRAVEL_DEPTH
+  for (let d = HOLE_FROM; d <= HOLE_TO; d++) {
+    for (let off = -reach; off <= reach; off++) {
+      const x = Math.round(mid.x + t.x * d - t.y * off)
+      const y = Math.round(mid.y + t.y * d + t.x * off)
+      if (surfaceAt(target, x, y) === S_WALL || !ownGround(x, y, strip.index)) continue
+      putTile(target, x, y, S_HOLE)
+    }
+  }
 }
 
 /** Carve a shortcut chord from `from` to `to` into `target`, over wall and run off only. */
@@ -828,14 +1049,15 @@ function checkpointCanBeDrivenRound(grid, checkpoints) {
  */
 function rampRuns(grid, strips) {
   const ramps = []
-  for (const { p, t, half } of strips) {
+  for (const strip of strips) {
+    const { p, t, half } = strip
     const heading = Math.atan2(t.y, t.x)
     let run = []
     const flush = () => {
       if (run.length) {
         const a = run[0]
         const b = run[run.length - 1]
-        ramps.push({ x: (a.x + b.x) / 2, y: (a.y + b.y) / 2, heading, width: run.length })
+        ramps.push({ x: (a.x + b.x) / 2, y: (a.y + b.y) / 2, heading, width: run.length, ...(strip.pad && { pad: true }) })
       }
       run = []
     }
@@ -957,7 +1179,10 @@ export function decodeMap(str) {
 // --- Timing & lobby -------------------------------------------------------
 export const TICK_MS = 16            // 60 Hz simulation
 export const SEND_MS = 16            // client input rate
-export const DELAY_MS = 60           // client interpolation window
+// Client interpolation window. Long enough to span the longest gap between
+// snapshots, 31 ms on a Windows timer, plus jitter; every ms more is delay on
+// your own car. Measured: from 30 ms up, no frame freezes at that rhythm.
+export const DELAY_MS = 40
 
 export const MIN_PLAYERS = 2
 export const BOT_FILL_TO = 4
@@ -996,7 +1221,7 @@ export function make(options = {}) {
     ? ((options.circuitIndex % CIRCUITS.length) + CIRCUITS.length) % CIRCUITS.length
     : 0
   const circuit = CIRCUITS[circuitIndex]
-  const { grid, centerline, meta, checkpoints, startSlots, pickups, shortcuts, ramps } = carve(circuit.seed)
+  const { grid, centerline, meta, checkpoints, startSlots, pickups, shortcuts, ramps, holes, jumps } = carve(circuit.seed)
 
   return {
     circuit,
@@ -1009,6 +1234,8 @@ export function make(options = {}) {
     pickups: pickups ?? [],
     shortcuts: shortcuts ?? [],
     ramps: ramps ?? [],
+    holes: holes ?? [],
+    jumps: jumps ?? [],
     cars: new Map(),
     nextId: 1,
     phase: 'waiting', // waiting | countdown | racing | over
@@ -1194,6 +1421,7 @@ export const GRIP = {
   [S_LINE]: 7.0,
   [S_GRAVEL]: 2.0,
   [S_RAMP]: 7.0,
+  [S_HOLE]: 7.0,
 }
 
 /**
@@ -1237,9 +1465,20 @@ function surfaceUnder(match, car) {
  */
 export function stepCar(match, car, dt) {
   if (!car.alive || !Number.isFinite(dt) || dt <= 0) return
+  // In a hole: going nowhere until it is set down past it.
+  if (isFalling(match, car)) return
+  // A pad's flight is exact: nothing the driver does changes where it lands.
+  if (car.guided && match.now < (car.airUntil ?? 0)) {
+    car.x = Math.max(0, Math.min(GRID - 1, car.x + car.vx * dt))
+    car.y = Math.max(0, Math.min(GRID - 1, car.y + car.vy * dt))
+    return
+  }
 
   const surface = surfaceUnder(match, car)
-  const offTrack = surface === S_WALL
+  const airborne = match.now < (car.airUntil ?? 0)
+  // A wall under a car in the air is not a wall it is in: no off-road cap or
+  // drag, or a jump over one would slow in mid-air.
+  const offTrack = surface === S_WALL && !airborne
   const cap = offTrack ? OFFTRACK_CAP : topSpeedOf(match, car)
 
   // 1. Steer. A rate, never a target: this is what makes the game playable
@@ -1247,7 +1486,6 @@ export function stepCar(match, car, dt) {
   const speed = Math.hypot(car.vx, car.vy)
   const falloff = 1 - TURN_FALLOFF * Math.min(1, speed / TOP_SPEED)
   const spinning = match.now < (car.spinUntil ?? 0)
-  const airborne = match.now < (car.airUntil ?? 0)
   if (spinning) {
     // The wheel is not yours. Input is ignored outright rather than scaled, so a
     // spin cannot be steered out of by holding the opposite lock.
@@ -1273,9 +1511,13 @@ export function stepCar(match, car, dt) {
   // 3. Thrust, braking and drag act on the forward component only.
   const drive = spinning ? SPIN_THRUST : car.onSlick ? SLICK_THRUST : 1
   if (car.throttle) fwd += ACCEL * (match.now < car.boostUntil ? BOOST_MULT : 1) * drive * dt
-  if (car.brake) fwd -= BRAKE * dt
-  const surfaceDrag = surface === S_GRAVEL ? GRAVEL_DRAG : DRAG
-  fwd -= fwd * (offTrack ? OFFTRACK_DRAG : surfaceDrag) * dt
+  // In the air a jump holds its speed: no brakes to bite, no road to drag. The
+  // landing checks assume every jump covers the distance its launch speed gives.
+  if (!airborne) {
+    if (car.brake) fwd -= BRAKE * dt
+    const surfaceDrag = surface === S_GRAVEL ? GRAVEL_DRAG : DRAG
+    fwd -= fwd * (offTrack ? OFFTRACK_DRAG : surfaceDrag) * dt
+  }
 
   // 4. Lateral bleeds off at the surface's grip.
   const base = offTrack ? GRIP[S_TARMAC] : (GRIP[surface] ?? GRIP[S_TARMAC])
@@ -1334,6 +1576,8 @@ export function resolveContact(match) {
     for (let j = i + 1; j < cars.length; j++) {
       const a = cars[i]
       const b = cars[j]
+      // A ghost is not there to be touched, nor is a car down a hole.
+      if (isGhost(match, a) || isGhost(match, b) || isFalling(match, a) || isFalling(match, b)) continue
       // Nearest pair of circles between the two capsules. A car is two circles,
       // so four pairs, and the closest one decides whether they touch.
       let best = null
@@ -1469,6 +1713,60 @@ export function applyCut(match) {
   return null
 }
 
+// --- Wrong way --------------------------------------------------------------
+// A car moving against the course for WRONG_WAY_MS is told so. Judged by where
+// it is going, not where it points, so a spin or a bump does not trip it, and
+// only above WRONG_WAY_MIN_SPEED, so a car turning round on the spot is left
+// alone. Moving the right way clears it at once.
+export const WRONG_WAY_MS = 1000
+export const WRONG_WAY_MIN_SPEED = 3
+// More than this far off the course's direction counts as against it (cos 120).
+const WRONG_WAY_COS = -0.5
+// Centre-line points searched either side of where a car was last tick.
+const WRONG_WAY_SEARCH = 24
+
+/**
+ * The way the course runs where the car is: the tangent of the nearest point on
+ * the centre line. Shortcuts need no case of their own: they only cut corners,
+ * so the trunk nearest a chord never runs against it (checked at 189 points
+ * across every shortcut), and a test holds that.
+ */
+function courseDirection(match, car) {
+  const line = match.centerline
+  const n = line.length
+  let best = -1
+  let bd = Infinity
+  const consider = (i) => {
+    const k = ((i % n) + n) % n
+    const d = (line[k].x - car.x) ** 2 + (line[k].y - car.y) ** 2
+    if (d < bd) {
+      bd = d
+      best = k
+    }
+  }
+  if (Number.isInteger(car.lineIndex)) {
+    for (let i = car.lineIndex - WRONG_WAY_SEARCH; i <= car.lineIndex + WRONG_WAY_SEARCH; i++) consider(i)
+  }
+  // Lost the car (first tick, a teleport, a jump): search the whole lap.
+  if (best < 0 || bd > SEGMENT_WIDTH_MAX ** 2) for (let i = 0; i < n; i++) consider(i)
+  car.lineIndex = best
+  return tangentAt(line, best)
+}
+
+export function updateWrongWay(match, car, dtMs) {
+  const speed = Math.hypot(car.vx, car.vy)
+  const airborne = match.now < (car.airUntil ?? 0)
+  if (!car.alive || airborne || speed < WRONG_WAY_MIN_SPEED) {
+    // No evidence either way: hold what the car was last told.
+    car.wrongWay = Boolean(car.wrongWay)
+    return
+  }
+  const t = courseDirection(match, car)
+  const against = (car.vx * t.x + car.vy * t.y) / speed < WRONG_WAY_COS
+  car.wrongFor = against ? (car.wrongFor ?? 0) + dtMs : 0
+  car.wrongWay = car.wrongFor >= WRONG_WAY_MS
+}
+
 // --- Slipstream -------------------------------------------------------------
 export const SLIP_RANGE = 3.5
 export const SLIP_CONE = 0.7         // dot product against the leader's nose
@@ -1534,16 +1832,45 @@ export const PICKUP_REACH = 1.2
 export const MAX_HAZARDS = 16
 export const DROP_BACK = 1.4         // tiles behind the nose a hazard lands
 
+// The kit beyond boost, oil and banana.
+export const SHIELD_MS = 6000         // a bubble: oil does nothing, and the next spin or shock breaks it
+export const GHOST_MS = 3000          // through cars and dropped hazards
+export const SHOCK_RANGE = 6          // tiles; every other car inside it is slowed
+export const SHOCK_KEEP = 0.45        // fraction of its speed a shocked car keeps
+export const SHOCK_MS = 600           // how long a shocked car is shown as shocked
+export const PUCK_SPEED = 22          // tiles per second, faster than any car
+export const PUCK_TTL_MS = 4000
+export const PUCK_RADIUS = 0.4
+export const PUCK_HOME_RANGE = 6      // within this of its target a puck stops following the road
+const PUCK_AHEAD = 1.2                // tiles ahead of the nose a puck is launched
+
 // Flat by construction. The weighting is in how many copies of each item the
 // bag holds, never in who is drawing from it.
 // The wall is gone: a near stop is the wrong verb for a game whose handling is
 // all momentum and sliding, and it punished whoever hit it more than it rewarded
-// whoever dropped it. The bag is deliberately thin until the new kit lands.
-export const ITEM_BAG = ['boost', 'boost', 'boost', 'slick', 'slick', 'banana', 'banana']
+// whoever dropped it.
+export const ITEM_BAG = ['boost', 'boost', 'slick', 'banana', 'shield', 'spring', 'shock', 'puck', 'ghost', 'decoy']
+
+const isGhost = (match, car) => match.now < (car.ghostUntil ?? 0)
+const isShielded = (match, car) => match.now < (car.shieldUntil ?? 0)
+
+/**
+ * Something that would spin a car. A ghost is not there to hit; a shield takes
+ * the hit and is gone. Returns true if the car was actually spun.
+ */
+function takeHit(match, car) {
+  if (isGhost(match, car)) return false
+  if (isShielded(match, car)) {
+    car.shieldUntil = match.now
+    return false
+  }
+  car.spinUntil = match.now + SPIN_MS
+  return true
+}
 
 /** Driving over a pickup tile fills an empty slot and puts that tile on cooldown. */
 export function collectPickup(match, car, rng = Math.random) {
-  if (!car.alive || car.item) return false
+  if (!car.alive || car.item || isFalling(match, car)) return false
 
   // The nearest box that is READY. Judged against the nearest box of any kind,
   // a car passing between two took nothing when another car had just emptied
@@ -1590,15 +1917,118 @@ export function useItem(match, car) {
     car.boostUntil = match.now + BOOST_MS
     return true
   }
+  if (item === 'shield') {
+    car.shieldUntil = match.now + SHIELD_MS
+    return true
+  }
+  if (item === 'ghost') {
+    car.ghostUntil = match.now + GHOST_MS
+    return true
+  }
+  if (item === 'spring') {
+    // A hop from where the car is: everything a ramp gives but the ramp.
+    if (!(match.now < (car.airUntil ?? 0))) {
+      car.airUntil = match.now + AIR_MS
+      car.airMs = AIR_MS
+      car.hop = true
+    }
+    return true
+  }
+  if (item === 'shock') {
+    for (const other of match.cars.values()) {
+      if (other === car || !other.alive || isGhost(match, other)) continue
+      if (Math.hypot(other.x - car.x, other.y - car.y) > SHOCK_RANGE) continue
+      if (isShielded(match, other)) {
+        other.shieldUntil = match.now
+        continue
+      }
+      other.vx *= SHOCK_KEEP
+      other.vy *= SHOCK_KEEP
+      other.shockedUntil = match.now + SHOCK_MS
+    }
+    return true
+  }
 
+  if (item === 'puck') {
+    const x = car.x + Math.cos(car.heading) * PUCK_AHEAD
+    const y = car.y + Math.sin(car.heading) * PUCK_AHEAD
+    // Aimed at whoever is directly ahead in the running order; a leader's puck
+    // just runs on down the track and hits whatever it meets.
+    const order = runningOrder(match)
+    const at = order.indexOf(car)
+    const target = at > 0 ? order[at - 1].id : null
+    match.hazards.push({ kind: 'puck', x, y, index: nearestLineIndex(match, x, y), target, until: match.now + PUCK_TTL_MS, by: car.id })
+    while (match.hazards.length > MAX_HAZARDS) match.hazards.shift()
+    return true
+  }
+
+  // Dropped behind: oil, a banana, or a decoy box.
   const bx = car.x - Math.cos(car.heading) * DROP_BACK
   const by = car.y - Math.sin(car.heading) * DROP_BACK
-  const ttl = item === 'banana' ? BANANA_TTL_MS : SLICK_TTL_MS
+  const ttl = item === 'slick' ? SLICK_TTL_MS : BANANA_TTL_MS
 
   match.hazards.push({ kind: item, x: bx, y: by, until: match.now + ttl, by: car.id })
   // Capped rather than unbounded: the snapshot carries this list every tick.
   while (match.hazards.length > MAX_HAZARDS) match.hazards.shift()
   return true
+}
+
+function nearestLineIndex(match, x, y) {
+  const line = match.centerline
+  let best = 0
+  let bd = Infinity
+  for (let i = 0; i < line.length; i++) {
+    const d = (line[i].x - x) ** 2 + (line[i].y - y) ** 2
+    if (d < bd) {
+      bd = d
+      best = i
+    }
+  }
+  return best
+}
+
+/**
+ * Pucks run along the centre line, which is what keeps them out of walls, until
+ * their target is close; then they go straight for it. A puck hits the first
+ * car it reaches other than the one that fired it.
+ */
+export function movePucks(match, seconds) {
+  const line = match.centerline
+  const n = line.length
+  for (const h of match.hazards) {
+    if (h.kind !== 'puck' || h.spent) continue
+    let left = PUCK_SPEED * seconds
+    const target = h.target ? match.cars.get(h.target) : null
+    if (target && target.alive && Math.hypot(target.x - h.x, target.y - h.y) <= PUCK_HOME_RANGE) {
+      const d = Math.hypot(target.x - h.x, target.y - h.y) || 1
+      const step = Math.min(left, d)
+      h.x += ((target.x - h.x) / d) * step
+      h.y += ((target.y - h.y) / d) * step
+    } else {
+      while (left > 0) {
+        const next = line[(h.index + 1) % n]
+        const d = Math.hypot(next.x - h.x, next.y - h.y)
+        if (d <= left) {
+          h.x = next.x
+          h.y = next.y
+          h.index = (h.index + 1) % n
+          left -= d
+        } else {
+          h.x += ((next.x - h.x) / d) * left
+          h.y += ((next.y - h.y) / d) * left
+          left = 0
+        }
+      }
+    }
+    for (const car of match.cars.values()) {
+      if (!car.alive || car.id === h.by || isFalling(match, car)) continue
+      if (match.now < (car.airUntil ?? 0) || isGhost(match, car)) continue
+      if (Math.hypot(car.x - h.x, car.y - h.y) > PUCK_RADIUS + CAR_RADIUS) continue
+      h.spent = true
+      takeHit(match, car)
+      break
+    }
+  }
 }
 
 export function expireHazards(match) {
@@ -1626,31 +2056,148 @@ export function applyHazards(match, car) {
 
   car.onSlick = false
 
+  // In a hole: nothing reaches the car until it is set down past it.
+  if (car.fellIn) {
+    if (match.now < car.fallUntil) return
+    setDownPast(match, car)
+  }
+
+  // Down from a pad's jump.
+  if (car.guided && !(match.now < (car.airUntil ?? 0))) touchDown(match, car)
+
   const here = surfaceAt(match.grid, Math.round(car.x), Math.round(car.y))
 
-  if (here === S_RAMP && Math.hypot(car.vx, car.vy) >= RAMP_MIN_SPEED) {
-    car.airUntil = Math.max(car.airUntil ?? 0, match.now + AIR_MS)
+  const speed = Math.hypot(car.vx, car.vy)
+  if (here === S_RAMP && speed >= RAMP_MIN_SPEED) {
+    const pad = padUnder(match, car)
+    if (!pad) {
+      car.airUntil = Math.max(car.airUntil ?? 0, match.now + AIR_MS)
+      car.airMs = AIR_MS
+      car.hop = false
+    } else if ((car.vx * Math.cos(pad.heading) + car.vy * Math.sin(pad.heading)) / speed >= PAD_ALIGN) {
+      // Only a car driving at the pad: one skimming along it through the corner
+      // is not thrown over the wall.
+      launchFromPad(match, car, pad, speed)
+    }
   }
 
   // Airborne: nothing on the ground reaches the car, and a banana under it is
   // not consumed, so it is still there for whoever lands on it.
   if (match.now < (car.airUntil ?? 0)) return
 
+  // Drove into a hole rather than flying it.
+  if (here === S_HOLE) {
+    car.fellIn = nearestHole(match, car)
+    car.fallUntil = match.now + FALL_MS
+    car.vx = 0
+    car.vy = 0
+    return
+  }
+
   if (here === S_BOOST) {
     car.boostUntil = Math.max(car.boostUntil, match.now + STRIP_BOOST_MS)
   }
 
+  // A ghost passes through everything dropped, and leaves it for someone else.
+  if (isGhost(match, car)) return
+
   for (const h of match.hazards) {
     const d = Math.hypot(car.x - h.x, car.y - h.y)
-    if (h.kind === 'banana' && !h.spent && d <= BANANA_RADIUS + CAR_RADIUS) {
+    if ((h.kind === 'banana' || h.kind === 'decoy') && !h.spent && d <= BANANA_RADIUS + CAR_RADIUS) {
       // One use. Marked rather than spliced, because this runs inside a loop over
       // the very list a splice would reindex; expireHazards sweeps it next tick.
       h.spent = true
-      car.spinUntil = match.now + SPIN_MS
-    } else if (h.kind === 'slick' && d <= SLICK_RADIUS) {
+      takeHit(match, car)
+    } else if (h.kind === 'slick' && d <= SLICK_RADIUS && !isShielded(match, car)) {
       car.onSlick = true
     }
   }
+}
+
+const isFalling = (match, car) => Boolean(car.fellIn) && match.now < (car.fallUntil ?? 0)
+
+function padUnder(match, car) {
+  for (const p of match.jumps ?? []) {
+    const f = { x: Math.cos(p.heading), y: Math.sin(p.heading) }
+    const along = (car.x - p.x) * f.x + (car.y - p.y) * f.y
+    const across = -(car.x - p.x) * f.y + (car.y - p.y) * f.x
+    if (Math.abs(along) <= 0.6 && Math.abs(across) <= p.width / 2) return p
+  }
+  return null
+}
+
+/**
+ * Lined up with the pad and sent exactly its distance past the lip, however
+ * fast: a flight of distance / speed. Renewed every tick the car is on the pad,
+ * like any ramp, so it is measured from the lip.
+ */
+function launchFromPad(match, car, pad, speed) {
+  const f = { x: Math.cos(pad.heading), y: Math.sin(pad.heading) }
+  const along = (car.x - pad.x) * f.x + (car.y - pad.y) * f.y
+  const toGo = Math.max(0, 0.5 - along) + pad.distance
+  car.heading = pad.heading
+  car.vx = f.x * speed
+  car.vy = f.y * speed
+  car.airUntil = match.now + (toGo / speed) * 1000
+  car.airMs = (pad.distance / speed) * 1000
+  car.hop = false
+  car.guided = pad
+}
+
+/**
+ * Down from a pad's jump: facing along the stretch it landed on, at the speed
+ * it flew, and credited the checkpoints it flew past, in order, as long as it
+ * was due them.
+ */
+function touchDown(match, car) {
+  const pad = car.guided
+  const speed = Math.hypot(car.vx, car.vy)
+  car.heading = pad.land.heading
+  car.vx = Math.cos(car.heading) * speed
+  car.vy = Math.sin(car.heading) * speed
+  const ring = match.checkpoints.length
+  // In order, and only those due: one the flight passed close enough to was
+  // taken in the air already, and is simply skipped.
+  for (const k of pad.credits) {
+    if (car.nextCp !== k) continue
+    car.cpTaken += 1
+    car.nextCp = (k + 1) % ring
+  }
+  if (car.nextCp === 0) car.lineSide = null
+  car.guided = null
+  car.lineIndex = undefined
+}
+
+function nearestHole(match, car) {
+  let best = null
+  let bd = Infinity
+  for (const h of match.holes ?? []) {
+    const d = Math.hypot(car.x - h.x, car.y - h.y)
+    if (d < bd) {
+      bd = d
+      best = h
+    }
+  }
+  return best ?? { x: car.x, y: car.y, heading: car.heading, width: 1 }
+}
+
+/**
+ * Past the hole, in the lane the car fell in, stopped and facing along the
+ * course. Kept within the ramp's width so it is never set down on the kerb.
+ */
+function setDownPast(match, car) {
+  const h = car.fellIn
+  const f = { x: Math.cos(h.heading), y: Math.sin(h.heading) }
+  const across = -(car.x - h.x) * f.y + (car.y - h.y) * f.x
+  const lane = Math.max(-(h.width - 1) / 2, Math.min((h.width - 1) / 2, across))
+  car.x = h.x + f.x * HOLE_EXIT - f.y * lane
+  car.y = h.y + f.y * HOLE_EXIT + f.x * lane
+  car.heading = h.heading
+  car.vx = 0
+  car.vy = 0
+  car.fellIn = null
+  car.fallUntil = 0
+  car.lineIndex = undefined
 }
 
 // --- Bots -----------------------------------------------------------------
@@ -1795,6 +2342,7 @@ export function tick(match, dtMs = TICK_MS, rng = Math.random) {
 
   driveBots(match)
   expireHazards(match)
+  movePucks(match, seconds)
 
   const leaderLapBefore = match.lap
 
@@ -1806,6 +2354,7 @@ export function tick(match, dtMs = TICK_MS, rng = Math.random) {
       car.wantsUse = false
     }
     stepCar(match, car, seconds)
+    updateWrongWay(match, car, dt)
     collectPickup(match, car, rng)
     updateProgress(match, car)
   }
@@ -1859,15 +2408,32 @@ export function snapshot(match) {
       airborne: match.now < (car.airUntil ?? 0),
       // Normalised height along the arc, for the page to draw a hop and a
       // shadow with. Render only: no rule reads it back.
+      // Measured over the flight from the lip: AIR_MS for a ramp, distance /
+      // speed for a pad. Clamped, as a car still on a pad is renewed each tick.
       airT: match.now < (car.airUntil ?? 0)
-        ? Math.round((1 - (car.airUntil - match.now) / AIR_MS) * 100) / 100
+        ? Math.max(0, Math.min(1, Math.round((1 - (car.airUntil - match.now) / (car.airMs ?? AIR_MS)) * 100) / 100))
         : 0,
+      // On a pad's jump: the way the car will face on touchdown, for the page to
+      // turn it toward through the air rather than all at once on landing.
+      ...(car.guided && match.now < (car.airUntil ?? 0) && { land: Math.round(car.guided.land.heading * 1000) / 1000 }),
       // The page turns the front wheels by `steer` and lights the brake lamps by
       // `brake`. Both are held input the server already owns, and without them on
       // the wire the page silently drew straight wheels and dark lamps forever,
       // because an absent field reads as a falsy one.
       steer: car.steer ?? 0,
       brake: Boolean(car.brake),
+      speed: Math.round(Math.hypot(car.vx, car.vy) * 10) / 10,
+      // Rare states are sent only while true, which keeps a full frame of eight
+      // cars inside its 4 KB budget; the page reads a missing flag as false.
+      ...(car.wrongWay && { wrongWay: true }),
+      ...(match.now < (car.shieldUntil ?? 0) && { shield: true }),
+      ...(match.now < (car.ghostUntil ?? 0) && { ghost: true }),
+      ...(match.now < (car.shockedUntil ?? 0) && { shocked: true }),
+      // A hop from a spring starts on the ground, a launch from a ramp at its
+      // lip; the page draws the arc from the right height.
+      ...(match.now < (car.airUntil ?? 0) && car.hop && { hop: true }),
+      // Down a hole: how far through the fall, for the page to sink the car.
+      ...(isFalling(match, car) && { falling: true, fallT: Math.round((1 - (car.fallUntil - match.now) / FALL_MS) * 100) / 100 }),
       bestLapMs: car.bestLapMs ?? undefined,
     })
   }

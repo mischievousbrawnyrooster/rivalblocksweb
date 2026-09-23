@@ -52,3 +52,24 @@ test('every wall touching the road is boxed, and nothing else', () => {
 test('a grid with no road produces no walls', () => {
   assert.deepEqual(wallBlocks(new Uint8Array(16), 4, 0), [])
 })
+
+import { holeFaces } from './wallBlocks.js'
+
+test('a pit has a floor under every hole tile and a wall only on its outer edges', () => {
+  // 4 by 3, two hole tiles side by side in the middle row. Walls between two hole
+  // tiles would show inside the pit as a grid, so there are none.
+  const H = 9
+  const R = 1
+  const g = new Uint8Array(12).fill(R)
+  g[1 * 4 + 1] = H
+  g[1 * 4 + 2] = H
+  const { floors, edges } = holeFaces(g, 4, H)
+  assert.deepEqual(floors.map((f) => `${f.x},${f.y}`).sort(), ['1,1', '2,1'])
+  assert.equal(edges.length, 6, 'two tiles in a row have six outer edges')
+  assert.ok(!edges.some((e) => e.x === 1 && e.dx === 1), 'no wall between the two hole tiles')
+})
+
+test('a grid with no hole has no pit', () => {
+  const { floors, edges } = holeFaces(new Uint8Array(9).fill(1), 3, 9)
+  assert.equal(floors.length + edges.length, 0)
+})

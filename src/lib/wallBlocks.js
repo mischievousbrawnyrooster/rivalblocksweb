@@ -23,3 +23,25 @@ export function wallBlocks(grid, size, wall) {
   }
   return out
 }
+
+/**
+ * The faces of the pits under holes: a floor under every hole tile, and a wall
+ * on each edge a hole tile shares with ground that is not a hole. Walls between
+ * two hole tiles are left out, or they would show inside the pit as a grid.
+ * `dx, dy` points from the hole tile to the ground beside it.
+ */
+export function holeFaces(grid, size, hole) {
+  const isHole = (x, y) => x >= 0 && y >= 0 && x < size && y < size && grid[y * size + x] === hole
+  const floors = []
+  const edges = []
+  for (let y = 0; y < size; y++) {
+    for (let x = 0; x < size; x++) {
+      if (!isHole(x, y)) continue
+      floors.push({ x, y })
+      for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+        if (!isHole(x + dx, y + dy)) edges.push({ x, y, dx, dy })
+      }
+    }
+  }
+  return { floors, edges }
+}

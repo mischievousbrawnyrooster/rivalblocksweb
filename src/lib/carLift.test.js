@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { rampLift, carLift, RAMP_HEIGHT, RAMP_LENGTH, AIR_LIFT } from './carLift.js'
+import { rampLift, carLift, RAMP_HEIGHT, RAMP_LENGTH, AIR_LIFT, PIT_DEPTH } from './carLift.js'
 import { TOP_SPEED, AIR_MS } from '../../server/cutline.js'
 
 const near = (a, b, why, eps = 1e-9) => assert.ok(Math.abs(a - b) < eps, `${why}: ${a} vs ${b}`)
@@ -69,4 +69,32 @@ test('crossing a ramp at speed never drops the car between two frames', () => {
     last = lift
   }
   near(last, 0, 'back on the ground after landing')
+})
+
+test('a spring hop starts from the ground, not from a ramp lip', () => {
+  near(carLift({ x: 40, y: 40, airborne: true, airT: 0, hop: true }, []), 0, 'no step up at take-off')
+  near(carLift({ x: 40, y: 40, airborne: true, airT: 0.5, hop: true }, []), AIR_LIFT, 'the plain arc at its top')
+})
+
+test('a car down a hole sinks out of sight as it falls', () => {
+  near(carLift({ x: 10, y: 10, falling: true, fallT: 0 }, []), 0, 'at the edge')
+  assert.ok(carLift({ x: 10, y: 10, falling: true, fallT: 0.5 }, []) < 0, 'below the road halfway through')
+  near(carLift({ x: 10, y: 10, falling: true, fallT: 1 }, []), -PIT_DEPTH, 'at the bottom of the pit')
+})
+
+import { drawnHeading } from './carLift.js'
+
+test('a car on a pad jump turns toward its landing heading through the air', () => {
+  const car = (airT) => ({ heading: 0, land: Math.PI / 2, airborne: true, airT })
+  near(drawnHeading(car(0)), 0, 'at take-off it faces the pad')
+  near(drawnHeading(car(1)), Math.PI / 2, 'on touchdown it faces the new stretch')
+  const mid = drawnHeading(car(0.5))
+  assert.ok(mid > 0 && mid < Math.PI / 2, 'and turns in between')
+  near(drawnHeading({ heading: 1.2, airborne: false }), 1.2, 'any other car is drawn as it is')
+})
+
+test('the turn through the air takes the short way round', () => {
+  const nearPi = (179 * Math.PI) / 180
+  const h = drawnHeading({ heading: nearPi, land: -nearPi, airborne: true, airT: 0.5 })
+  assert.ok(Math.abs(Math.cos(h) + 1) < 1e-6, `turned the long way, to ${h}`)
 })

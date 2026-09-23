@@ -210,3 +210,22 @@ test('the bumper eye rises with the car over a ramp or a jump; the others hold s
     assert.deepEqual(targetPose(view, lifted, 0.4, NOSE), targetPose(view, flat, 0.4, NOSE), `${view} must not bob with the car`)
   }
 })
+
+test('at a steady speed the car holds its place in the frame: the camera does not trail it', () => {
+  // The camera used to ease its absolute position toward the car, so at speed it
+  // trailed by speed / rate, about a tile at top speed. Accelerating, the car
+  // drifted away up the screen and slid back as it slowed: it looked laggy.
+  const speed = 14
+  for (const view of ['chase', 'top']) {
+    const cam = makeRaceCamera()
+    const c = car(10, 40, 0.3)
+    let pose = null
+    for (let i = 0; i < 180; i++) {
+      c.x += (Math.cos(c.heading) * speed) / 60
+      c.y += (Math.sin(c.heading) * speed) / 60
+      pose = stepCamera(cam, view, c, 1 / 60, NOSE)
+    }
+    const want = targetPose(view, c, c.heading, NOSE)
+    for (let i = 0; i < 3; i++) near(pose.position[i], want.position[i], `${view} axis ${i}`, 1e-6)
+  }
+})

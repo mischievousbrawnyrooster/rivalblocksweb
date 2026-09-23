@@ -16,8 +16,8 @@ import {
   CAR_ROOF,
   VIEW_CELLS,
 } from '../lib/raceCamera.js'
-import { wallBlocks } from '../lib/wallBlocks.js'
-import { carLift } from '../lib/carLift.js'
+import { wallBlocks, holeFaces } from '../lib/wallBlocks.js'
+import { carLift, drawnHeading } from '../lib/carLift.js'
 import {
   GRID,
   DELAY_MS,
@@ -31,9 +31,13 @@ import {
   S_LINE,
   S_GRAVEL,
   S_RAMP,
+  S_HOLE,
   SURFACE_CHARS,
   decodeMap,
   CAR_LENGTH,
+  TOP_SPEED,
+  BOOST_MULT,
+  SLIP_BOOST,
 } from '../../server/cutline.js'
 
 const CANVAS = 768
@@ -126,6 +130,13 @@ function prerender(map, tileRes = TILE_RES) {
     for (let x = 0; x < GRID; x++) {
       const surface = map[y * GRID + x]
       if (surface === S_WALL) continue
+
+      // A hole is left clear: the 3D ground is cut out there so its pit shows
+      // through, and on the minimap it reads as a gap in the road.
+      if (surface === S_HOLE) {
+        g.clearRect(x * T, y * T, T, T)
+        continue
+      }
 
       const tx = x * T
       const ty = y * T
@@ -268,11 +279,284 @@ function formatLapTime(ms) {
   return `${(ms / 1000).toFixed(2)}s`
 }
 
+const ITEM_NAMES = {
+  boost: 'BOOST',
+  slick: 'OIL',
+  banana: 'BANANA',
+  shield: 'SHIELD',
+  spring: 'SPRING',
+  shock: 'SHOCK',
+  puck: 'PUCK',
+  ghost: 'GHOST',
+  decoy: 'DECOY',
+}
+
 function itemLabel(item) {
-  if (item === 'boost') return 'BOOST »'
-  if (item === 'slick') return 'SLICK ◈'
-  if (item === 'banana') return 'BANANA ◑'
-  return 'EMPTY -'
+  return ITEM_NAMES[item] ?? 'EMPTY'
+}
+
+/**
+ * An item's icon, drawn in code like every other pixel the game shows, centred
+ * on (cx, cy) in a box `s` across. Each has its own shape, so none relies on
+ * colour to be told apart.
+ */
+function drawItemIcon(ctx, item, cx, cy, s) {
+  const h = s / 2
+  ctx.save()
+  ctx.translate(cx, cy)
+  ctx.lineJoin = 'round'
+  ctx.lineCap = 'round'
+  ctx.lineWidth = Math.max(2, s * 0.09)
+  if (item === 'boost') {
+    // Two chevrons, pointing forward.
+    ctx.strokeStyle = '#f97316'
+    for (const dx of [-h * 0.35, h * 0.2]) {
+      ctx.beginPath()
+      ctx.moveTo(dx - h * 0.25, -h * 0.55)
+      ctx.lineTo(dx + h * 0.25, 0)
+      ctx.lineTo(dx - h * 0.25, h * 0.55)
+      ctx.stroke()
+    }
+  } else if (item === 'slick') {
+    // A drop of oil.
+    ctx.fillStyle = '#1e1e26'
+    ctx.strokeStyle = '#38bdf8'
+    ctx.beginPath()
+    ctx.moveTo(0, -h * 0.75)
+    ctx.bezierCurveTo(h * 0.7, -h * 0.05, h * 0.55, h * 0.7, 0, h * 0.7)
+    ctx.bezierCurveTo(-h * 0.55, h * 0.7, -h * 0.7, -h * 0.05, 0, -h * 0.75)
+    ctx.fill()
+    ctx.stroke()
+  } else if (item === 'banana') {
+    // A crescent with a stalk.
+    ctx.fillStyle = '#facc15'
+    ctx.beginPath()
+    ctx.arc(0, -h * 0.25, h * 0.7, Math.PI * 0.15, Math.PI * 0.85)
+    ctx.arc(0, h * 0.05, h * 0.62, Math.PI * 0.85, Math.PI * 0.15, true)
+    ctx.closePath()
+    ctx.fill()
+    ctx.strokeStyle = '#713f12'
+    ctx.beginPath()
+    ctx.moveTo(-h * 0.6, h * 0.05)
+    ctx.lineTo(-h * 0.78, -h * 0.25)
+    ctx.stroke()
+  } else if (item === 'shield') {
+    // A shield outline with a bar across it.
+    ctx.strokeStyle = '#3ad1c4'
+    ctx.fillStyle = 'rgba(58, 209, 196, 0.2)'
+    ctx.beginPath()
+    ctx.moveTo(0, -h * 0.75)
+    ctx.lineTo(h * 0.6, -h * 0.5)
+    ctx.lineTo(h * 0.5, h * 0.2)
+    ctx.lineTo(0, h * 0.75)
+    ctx.lineTo(-h * 0.5, h * 0.2)
+    ctx.lineTo(-h * 0.6, -h * 0.5)
+    ctx.closePath()
+    ctx.fill()
+    ctx.stroke()
+  } else if (item === 'spring') {
+    // A coil with an arrow up.
+    ctx.strokeStyle = '#a3e635'
+    ctx.beginPath()
+    ctx.moveTo(-h * 0.45, h * 0.7)
+    for (let i = 0; i < 4; i++) ctx.lineTo(i % 2 ? -h * 0.45 : h * 0.45, h * 0.45 - i * h * 0.3)
+    ctx.stroke()
+    ctx.beginPath()
+    ctx.moveTo(0, -h * 0.25)
+    ctx.lineTo(0, -h * 0.8)
+    ctx.moveTo(-h * 0.25, -h * 0.55)
+    ctx.lineTo(0, -h * 0.8)
+    ctx.lineTo(h * 0.25, -h * 0.55)
+    ctx.stroke()
+  } else if (item === 'shock') {
+    // A lightning bolt.
+    ctx.fillStyle = '#facc15'
+    ctx.beginPath()
+    ctx.moveTo(h * 0.15, -h * 0.8)
+    ctx.lineTo(-h * 0.45, h * 0.1)
+    ctx.lineTo(-h * 0.02, h * 0.1)
+    ctx.lineTo(-h * 0.2, h * 0.8)
+    ctx.lineTo(h * 0.45, -h * 0.15)
+    ctx.lineTo(h * 0.02, -h * 0.15)
+    ctx.closePath()
+    ctx.fill()
+  } else if (item === 'puck') {
+    // A disc with speed lines behind it.
+    ctx.fillStyle = '#f97316'
+    ctx.beginPath()
+    ctx.arc(h * 0.25, 0, h * 0.42, 0, Math.PI * 2)
+    ctx.fill()
+    ctx.strokeStyle = '#f97316'
+    for (const dy of [-h * 0.3, 0, h * 0.3]) {
+      ctx.beginPath()
+      ctx.moveTo(-h * 0.8, dy)
+      ctx.lineTo(-h * 0.35, dy)
+      ctx.stroke()
+    }
+  } else if (item === 'ghost') {
+    // A sheet with a wavy hem and two eyes.
+    ctx.fillStyle = 'rgba(236, 235, 230, 0.85)'
+    ctx.beginPath()
+    ctx.arc(0, -h * 0.2, h * 0.5, Math.PI, 0)
+    ctx.lineTo(h * 0.5, h * 0.7)
+    for (let i = 0; i < 4; i++) ctx.lineTo(h * 0.5 - (i + 0.5) * h * 0.25, i % 2 ? h * 0.7 : h * 0.45)
+    ctx.lineTo(-h * 0.5, h * 0.7)
+    ctx.closePath()
+    ctx.fill()
+    ctx.fillStyle = '#16161a'
+    for (const dx of [-h * 0.2, h * 0.2]) {
+      ctx.beginPath()
+      ctx.arc(dx, -h * 0.2, h * 0.09, 0, Math.PI * 2)
+      ctx.fill()
+    }
+  } else if (item === 'decoy') {
+    // An item box stood on its corner, with a question mark.
+    ctx.strokeStyle = '#3ad1c4'
+    ctx.beginPath()
+    ctx.moveTo(0, -h * 0.8)
+    ctx.lineTo(h * 0.8, 0)
+    ctx.lineTo(0, h * 0.8)
+    ctx.lineTo(-h * 0.8, 0)
+    ctx.closePath()
+    ctx.stroke()
+    ctx.fillStyle = '#3ad1c4'
+    ctx.font = `bold ${Math.round(s * 0.45)}px monospace`
+    ctx.textAlign = 'center'
+    ctx.textBaseline = 'middle'
+    ctx.fillText('?', 0, h * 0.05)
+  } else {
+    // An empty slot.
+    ctx.strokeStyle = '#4b4b52'
+    ctx.setLineDash([4, 4])
+    ctx.strokeRect(-h * 0.6, -h * 0.6, h * 1.2, h * 1.2)
+  }
+  ctx.restore()
+}
+
+// The speedometer reads in km/h, ten to a tile a second, and its dial runs to
+// the fastest a car can go: boosted and in a slipstream.
+const KMH_PER_TILE = 10
+const SPEEDO_MAX = TOP_SPEED * BOOST_MULT * SLIP_BOOST
+const HUD_PAD = 14
+
+function panel(ctx, x, y, w, h) {
+  ctx.fillStyle = 'rgba(11, 11, 15, 0.8)'
+  if (typeof ctx.roundRect === 'function') {
+    ctx.beginPath()
+    ctx.roundRect(x, y, w, h, 6)
+    ctx.fill()
+  } else {
+    ctx.fillRect(x, y, w, h)
+  }
+}
+
+/**
+ * The driver's HUD, drawn into the game rather than under it, so place, lap,
+ * item and speed are read without looking away from the road. Every value is
+ * text; colour only decorates it.
+ */
+function drawHud(ctx, { me, total, lap, laps, leader, shownSpeed }) {
+  ctx.save()
+  ctx.textBaseline = 'alphabetic'
+
+  // Top left: place, lap, leader.
+  panel(ctx, HUD_PAD, HUD_PAD, 196, 92)
+  ctx.textAlign = 'left'
+  ctx.fillStyle = '#ecebe6'
+  ctx.font = 'bold 34px monospace'
+  const place = me.place != null ? `P${me.place}` : 'P-'
+  ctx.fillText(place, HUD_PAD + 12, HUD_PAD + 40)
+  const placeW = ctx.measureText(place).width
+  ctx.fillStyle = '#8f8d86'
+  ctx.font = 'bold 16px monospace'
+  ctx.fillText(`/${total}`, HUD_PAD + 14 + placeW, HUD_PAD + 40)
+  ctx.fillStyle = '#ecebe6'
+  ctx.font = 'bold 16px monospace'
+  ctx.fillText(`LAP ${Math.min(lap + 1, laps)}/${laps}`, HUD_PAD + 12, HUD_PAD + 64)
+  ctx.fillStyle = '#8f8d86'
+  ctx.font = '11px monospace'
+  const lead = leader ? leader.name : '-'
+  ctx.fillText(`LEADER ${lead.length > 16 ? lead.slice(0, 15) + '.' : lead}`, HUD_PAD + 12, HUD_PAD + 82)
+
+  // Bottom left: the item slot, as its icon and its name.
+  const itemY = CANVAS - HUD_PAD - 72
+  panel(ctx, HUD_PAD, itemY, 196, 72)
+  ctx.fillStyle = 'rgba(255, 255, 255, 0.06)'
+  ctx.fillRect(HUD_PAD + 8, itemY + 8, 56, 56)
+  drawItemIcon(ctx, me.item, HUD_PAD + 36, itemY + 36, 44)
+  ctx.textAlign = 'left'
+  ctx.fillStyle = '#8f8d86'
+  ctx.font = '10px monospace'
+  ctx.fillText('ITEM  SPACE', HUD_PAD + 76, itemY + 26)
+  ctx.fillStyle = me.item ? '#ecebe6' : '#8f8d86'
+  ctx.font = 'bold 20px monospace'
+  ctx.fillText(itemLabel(me.item), HUD_PAD + 76, itemY + 52)
+
+  // Bottom right: the speedometer.
+  const r = 62
+  const cx = CANVAS - HUD_PAD - r - 8
+  const cy = CANVAS - HUD_PAD - r - 8
+  ctx.fillStyle = 'rgba(11, 11, 15, 0.8)'
+  ctx.beginPath()
+  ctx.arc(cx, cy, r + 8, 0, Math.PI * 2)
+  ctx.fill()
+  const start = Math.PI * 0.75
+  const sweep = Math.PI * 1.5
+  const frac = Math.max(0, Math.min(1, shownSpeed / SPEEDO_MAX))
+  ctx.lineCap = 'round'
+  ctx.lineWidth = 7
+  ctx.strokeStyle = '#2b2b31'
+  ctx.beginPath()
+  ctx.arc(cx, cy, r - 4, start, start + sweep)
+  ctx.stroke()
+  ctx.strokeStyle = me.boosting ? '#f97316' : '#3ad1c4'
+  ctx.beginPath()
+  ctx.arc(cx, cy, r - 4, start, start + sweep * Math.max(0.001, frac))
+  ctx.stroke()
+  // A tick where plain top speed sits, so boost and slipstream read as extra.
+  const topAt = start + sweep * (TOP_SPEED / SPEEDO_MAX)
+  ctx.strokeStyle = '#ecebe6'
+  ctx.lineWidth = 2
+  ctx.lineCap = 'butt'
+  ctx.beginPath()
+  ctx.moveTo(cx + Math.cos(topAt) * (r - 12), cy + Math.sin(topAt) * (r - 12))
+  ctx.lineTo(cx + Math.cos(topAt) * (r + 3), cy + Math.sin(topAt) * (r + 3))
+  ctx.stroke()
+  ctx.textAlign = 'center'
+  ctx.fillStyle = '#ecebe6'
+  ctx.font = 'bold 30px monospace'
+  ctx.fillText(String(Math.round(shownSpeed * KMH_PER_TILE)), cx, cy + 8)
+  ctx.fillStyle = '#8f8d86'
+  ctx.font = '10px monospace'
+  ctx.fillText('KM/H', cx, cy + 24)
+  const tag = me.boosting ? 'BOOST' : me.drafting ? 'DRAFT' : ''
+  if (tag) {
+    ctx.fillStyle = me.boosting ? '#f97316' : '#3ad1c4'
+    ctx.font = 'bold 10px monospace'
+    ctx.fillText(tag, cx, cy + 42)
+  }
+  ctx.restore()
+}
+
+/** Driving against the course. Words first; the colour only backs them up. */
+function drawWrongWay(ctx, now) {
+  ctx.save()
+  const pulse = 0.75 + 0.25 * Math.sin(now / 160)
+  const y = CANVAS * 0.22
+  ctx.fillStyle = `rgba(11, 11, 15, ${0.85 * pulse})`
+  ctx.fillRect(CANVAS / 2 - 170, y - 34, 340, 68)
+  ctx.strokeStyle = '#eab308'
+  ctx.lineWidth = 2
+  ctx.strokeRect(CANVAS / 2 - 170, y - 34, 340, 68)
+  ctx.textAlign = 'center'
+  ctx.textBaseline = 'middle'
+  ctx.fillStyle = '#eab308'
+  ctx.font = 'bold 30px ui-sans-serif, system-ui, sans-serif'
+  ctx.fillText('WRONG WAY', CANVAS / 2, y - 6)
+  ctx.fillStyle = '#ecebe6'
+  ctx.font = '13px ui-sans-serif, system-ui, sans-serif'
+  ctx.fillText('Turn around', CANVAS / 2, y + 20)
+  ctx.restore()
 }
 
 const VIEW_KEY = 'cutline.view'
@@ -352,6 +636,8 @@ export default function Cutline() {
     })
   }, [])
   const lastFrameRef = useRef(0)
+  // The speed the dial shows, eased toward the snapshot's so the needle glides.
+  const shownSpeedRef = useRef(0)
   // A circuit arrives in `welcome`, possibly before the scene exists, so it is
   // held here and built by the render loop when the versions disagree.
   const gridRef = useRef(null)
@@ -587,7 +873,7 @@ export default function Cutline() {
         const tileRes = scene.maxTextureSize >= GRID * TILE_RES ? TILE_RES : TILE_RES / 2
         const ground = prerender(gridRef.current, tileRes)
         trackCanvasRef.current = ground // the minimap draws from the same canvas
-        scene.setTrack(ground, wallBlocks(gridRef.current, GRID, S_WALL), rampsRef.current)
+        scene.setTrack(ground, wallBlocks(gridRef.current, GRID, S_WALL), rampsRef.current, holeFaces(gridRef.current, GRID, S_HOLE))
         builtVersionRef.current = trackVersionRef.current
       }
       const track = trackCanvasRef.current
@@ -605,7 +891,9 @@ export default function Cutline() {
 
       // The buffer blends whichever array it was given the key for, so this is
       // the interpolated list, not the raw newest frame.
-      const cars = sampled.cars ?? []
+      // A car on a pad jump is drawn, and followed, turning toward the stretch it
+      // will land on, rather than snapping round on touchdown.
+      const cars = (sampled.cars ?? []).map((c) => (Number.isFinite(c.land) ? { ...c, heading: drawnHeading(c) } : c))
       const palette = resolvePalette()
 
       // --- 1. The car the camera follows -----------------------------------
@@ -692,6 +980,10 @@ export default function Cutline() {
             c.sliding && 'SLIDE',
             c.spinning && 'SPIN',
             c.airborne && 'AIR',
+            c.shield && 'SHIELD',
+            c.ghost && 'GHOST',
+            c.shocked && 'SHOCK',
+            c.falling && 'FELL',
             !c.alive && 'OUT',
           ].filter(Boolean)
           if (tags.length) {
@@ -838,6 +1130,20 @@ export default function Cutline() {
       ctx.fillText('CIRCUIT RADAR', mmX + 8, mmY + 8)
 
       ctx.restore()
+
+      // --- 5b. Driver HUD and the wrong-way warning ----------------------------
+      if (me) {
+        shownSpeedRef.current += ((me.speed ?? 0) - shownSpeedRef.current) * (1 - Math.exp(-12 * Math.min(dt, 0.1)))
+        drawHud(ctx, {
+          me,
+          total: cars.length,
+          lap: sampled.lap ?? 0,
+          laps: sampled.laps ?? 0,
+          leader: leaderCar,
+          shownSpeed: shownSpeedRef.current,
+        })
+        if (me.wrongWay && sampled.phase === 'racing') drawWrongWay(ctx, now)
+      }
 
       // --- 6. Non-Racing Overlay Banners ------------------------------------
       if (sampled.phase !== 'racing') {
@@ -1047,7 +1353,25 @@ export default function Cutline() {
                 </p>
               </div>
             )}
+            {/* On the game, not under it, so it is in reach when the view fills
+                the screen. The overlay canvas passes clicks through to it. */}
+            <button
+              type="button"
+              onClick={cycleView}
+              className="absolute bottom-3 left-1/2 -translate-x-1/2 border border-line bg-bg/80 px-3 py-1.5 text-[0.65rem] font-bold uppercase tracking-[0.12em] text-fg transition-colors hover:border-flare hover:text-flare"
+            >
+              View: {VIEW_LABEL[view]} (C)
+            </button>
           </div>
+
+          {/* The HUD is drawn into the game; this is the same reading for a
+              screen reader, which cannot see the canvas. */}
+          <p className="sr-only">
+            {me?.place != null ? `Place ${me.place} of ${cars.length}. ` : ''}
+            {hud ? `Lap ${Math.min(hud.lap + 1, hud.laps)} of ${hud.laps}. ` : ''}
+            {`Item: ${itemLabel(me?.item)}. `}
+            {leaderCar ? `Leader: ${leaderCar.name}.` : ''}
+          </p>
 
           {/* Lap banner. aria-live so it is announced rather than only seen, and
               pointer-events-none so it can never swallow a click meant for the
@@ -1068,43 +1392,6 @@ export default function Cutline() {
             </div>
           )}
 
-          <div className="mt-3 flex justify-end">
-            <button
-              type="button"
-              onClick={cycleView}
-              className="border border-line bg-surface px-4 py-2 text-xs font-bold uppercase tracking-[0.12em] text-fg transition-colors hover:border-flare hover:text-flare"
-            >
-              View: {VIEW_LABEL[view]} (C)
-            </button>
-          </div>
-
-          {/* Fixed-height HUD strip below canvas so layout never reflows */}
-          <div className="mt-3 grid grid-cols-2 sm:grid-cols-4 gap-px border border-line bg-line text-xs">
-            <div className="bg-bg p-2.5 h-16 flex flex-col justify-center">
-              <p className="rule-label">Place</p>
-              <p className="mt-0.5 font-mono text-base font-bold tabular-nums text-fg">
-                {me?.place != null ? `P${me.place}/${cars.length}` : '-'}
-              </p>
-            </div>
-            <div className="bg-bg p-2.5 h-16 flex flex-col justify-center">
-              <p className="rule-label">Lap</p>
-              <p className="mt-0.5 font-mono text-base font-bold tabular-nums text-fg">
-                {hud ? `LAP ${Math.min(hud.lap + 1, hud.laps)}/${hud.laps}` : '-'}
-              </p>
-            </div>
-            <div className="bg-bg p-2.5 h-16 flex flex-col justify-center">
-              <p className="rule-label">Item [SPACE]</p>
-              <p className="mt-0.5 font-mono text-base font-bold uppercase tracking-wider text-flare">
-                {itemLabel(me?.item)}
-              </p>
-            </div>
-            <div className="bg-bg p-2.5 h-16 flex flex-col justify-center">
-              <p className="rule-label">Leader</p>
-              <p className="mt-0.5 font-mono text-sm font-bold truncate text-fg">
-                {leaderCar ? `${leaderCar.name} (P1)` : '-'}
-              </p>
-            </div>
-          </div>
         </div>
 
         {/* Sidebar Roster and Info */}

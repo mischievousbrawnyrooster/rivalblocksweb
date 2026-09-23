@@ -7,6 +7,8 @@ export const RAMP_HEIGHT = 0.35
 export const RAMP_LENGTH = 1
 // How high a jump arcs above the line from the lip to the landing, in tiles.
 export const AIR_LIFT = 1.2
+// How deep a hole's pit is drawn, and how far a car that fell in sinks.
+export const PIT_DEPTH = 2.5
 
 /** The ramp surface under (x, y), or null off every ramp. */
 function rampUnder(ramps, x, y) {
@@ -43,10 +45,27 @@ export const rampLift = (ramps, x, y) => rampUnder(ramps, x, y) ?? 0
  */
 export function carLift(car, ramps) {
   if (!car) return 0
+  // Down a hole: it drops away, slowly at first, like a fall.
+  if (car.falling) return -PIT_DEPTH * Math.min(1, (car.fallT ?? 0)) ** 2
   const under = rampUnder(ramps, car.x, car.y)
   if (!car.airborne) return under ?? 0
   const t = car.airT ?? 0
   const arc = Math.sin(t * Math.PI) * AIR_LIFT
   if (under !== null) return Math.max(under, arc)
-  return RAMP_HEIGHT * (1 - t) + arc
+  // A spring hop leaves from the ground; a ramp launch from the lip.
+  return (car.hop ? 0 : RAMP_HEIGHT) * (1 - t) + arc
+}
+
+/**
+ * The heading a car is drawn at. On a pad's jump the server turns the car to
+ * face its landing stretch on touchdown; drawn as it is, that would be a snap,
+ * so it is turned through the air instead, the short way round, easing in and
+ * out over the flight. Every other car is drawn as the server has it.
+ */
+export function drawnHeading(car) {
+  if (!car.airborne || !Number.isFinite(car.land)) return car.heading
+  const t = Math.min(1, Math.max(0, car.airT ?? 0))
+  const eased = t * t * (3 - 2 * t)
+  const d = Math.atan2(Math.sin(car.land - car.heading), Math.cos(car.land - car.heading))
+  return car.heading + d * eased
 }

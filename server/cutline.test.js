@@ -1296,7 +1296,7 @@ test('the item bag is drawn the same way regardless of running position', () => 
 
   assert.ok(ITEM_BAG.length > 0)
   for (const item of ITEM_BAG) {
-    assert.ok(['boost', 'slick', 'banana'].includes(item), `unknown item ${item} in the bag`)
+    assert.ok(['boost', 'slick', 'banana', 'shield', 'spring', 'shock', 'puck', 'ghost', 'decoy'].includes(item), `unknown item ${item} in the bag`)
   }
 })
 
@@ -1526,7 +1526,11 @@ test('every circuit resolves to exactly one winner with bots only', () => {
       tick(match, TICK_MS, () => 0.5)
 
       for (const car of match.cars.values()) {
-        if (!car.alive) continue
+        // A car down a hole holds still for FALL_MS on purpose.
+        if (!car.alive || car.fellIn) {
+          repeats.set(car.id, 0)
+          continue
+        }
         const key = `${car.x}|${car.y}|${car.heading}|${car.vx}|${car.vy}`
         if (key === lastState.get(car.id)) {
           const count = (repeats.get(car.id) ?? 0) + 1
@@ -1629,7 +1633,7 @@ test('a spin ends, and the car drives again afterwards', () => {
 test('the bag carries bananas, and every entry is a real item', () => {
   assert.ok(ITEM_BAG.includes('banana'), 'banana must be drawable')
   for (const item of ITEM_BAG) {
-    assert.ok(['boost', 'slick', 'banana'].includes(item), `unknown item ${item} in the bag`)
+    assert.ok(['boost', 'slick', 'banana', 'shield', 'spring', 'shock', 'puck', 'ghost', 'decoy'].includes(item), `unknown item ${item} in the bag`)
   }
 })
 
@@ -1813,6 +1817,7 @@ test('the collision shape is derived from the drawn car, not written twice', () 
 import {
   S_GRAVEL,
   S_RAMP,
+  S_HOLE as SURF_HOLE,
   SURFACE_CHARS,
 } from './cutline.js'
 
@@ -1820,7 +1825,7 @@ test('every surface has a char, a grip entry, and a distinct value', () => {
   // Adding a surface touches SURFACE_CHARS, the GRIP table and the page's
   // prerender. Miss one and the wire carries undefined and the page draws
   // nothing, with no error anywhere. This covers the two the module owns.
-  const surfaces = [S_WALL, S_TARMAC, S_KERB, S_BOOST, S_OIL, S_PICKUP, S_LINE, S_GRAVEL, S_RAMP]
+  const surfaces = [S_WALL, S_TARMAC, S_KERB, S_BOOST, S_OIL, S_PICKUP, S_LINE, S_GRAVEL, S_RAMP, SURF_HOLE]
 
   assert.equal(new Set(surfaces).size, surfaces.length, 'surface values must be distinct')
   assert.equal(SURFACE_CHARS.length, surfaces.length, 'every surface needs a char')
@@ -2646,6 +2651,9 @@ test('cars cross every ramp the way it faces', () => {
         if (match.grid[Math.round(car.y) * RAMP_GRID + Math.round(car.x)] !== RAMP) continue
         const r = match.ramps.find((q) => underRamp(q, car.x, car.y))
         assert.ok(r, `${match.circuit.name}: a car on a ramp tile is under no listed ramp`)
+        // A pad sits at the outside of a corner, so cars skim along it; its own
+        // tests cover which of them it launches.
+        if (r.pad) continue
         const facing = (car.vx * Math.cos(r.heading) + car.vy * Math.sin(r.heading)) / speed
         assert.ok(facing > 0, `${match.circuit.name}: a car crossed the ramp at ${r.x.toFixed(1)},${r.y.toFixed(1)} against its facing`)
         crossings++
@@ -2730,4 +2738,671 @@ test('a car within reach of a ready box takes it, even with a spent box nearer',
   b.y = p.y + (q.y - p.y) * f
   assert.ok(Math.hypot(b.x - p.x, b.y - p.y) < Math.hypot(b.x - q.x, b.y - q.y), 'the spent box is the nearer one')
   assert.equal(pkCollect(match, b, () => 0), true, 'the ready box within reach must be taken')
+})
+
+// --- Wrong way -----------------------------------------------------------------
+import { make as wwMake, join as wwJoin, updateWrongWay, snapshot as wwSnapshot, WRONG_WAY_MS, WRONG_WAY_MIN_SPEED, CIRCUITS as WW_CIRCUITS } from './cutline.js'
+
+function wwRacing(circuitIndex = 0) {
+  const match = wwMake({ circuitIndex })
+  const car = wwJoin(match, { name: 'W' }, () => 0)
+  match.phase = 'racing'
+  return { match, car }
+}
+
+/** Put a car on the centre line at `index`, moving with (+1) or against (-1) the course. */
+function driving(match, car, index, sign, speed) {
+  const line = match.centerline
+  const a = line[(index - 1 + line.length) % line.length]
+  const b = line[(index + 1) % line.length]
+  const len = Math.hypot(b.x - a.x, b.y - a.y)
+  car.x = line[index].x
+  car.y = line[index].y
+  car.vx = ((b.x - a.x) / len) * speed * sign
+  car.vy = ((b.y - a.y) / len) * speed * sign
+  car.heading = Math.atan2(car.vy, car.vx)
+}
+
+const hold = (match, car, ms) => {
+  for (let t = 0; t < ms; t += 16) updateWrongWay(match, car, 16)
+}
+
+test('a car driving against the course is warned once it has kept at it', () => {
+  const { match, car } = wwRacing()
+  driving(match, car, 60, -1, WRONG_WAY_MIN_SPEED * 3)
+  hold(match, car, WRONG_WAY_MS - 50)
+  assert.equal(car.wrongWay, false, 'a moment facing back is not yet a warning')
+  hold(match, car, 100)
+  assert.equal(car.wrongWay, true, 'kept up, it is')
+  const mine = wwSnapshot(match).cars.find((c) => c.id === car.id)
+  assert.equal(mine.wrongWay, true, 'the page is told')
+})
+
+test('a car driving the course is never warned, all the way round', () => {
+  const { match, car } = wwRacing()
+  for (let i = 0; i < match.centerline.length; i += 3) {
+    driving(match, car, i, 1, WRONG_WAY_MIN_SPEED * 3)
+    hold(match, car, 48)
+    assert.equal(car.wrongWay, false, `warned at centre-line point ${i}`)
+  }
+})
+
+test('turning back round clears the warning at once', () => {
+  const { match, car } = wwRacing()
+  driving(match, car, 80, -1, WRONG_WAY_MIN_SPEED * 3)
+  hold(match, car, WRONG_WAY_MS + 100)
+  assert.equal(car.wrongWay, true)
+  driving(match, car, 80, 1, WRONG_WAY_MIN_SPEED * 3)
+  hold(match, car, 16)
+  assert.equal(car.wrongWay, false)
+})
+
+test('a car barely moving is not warned, whichever way it points', () => {
+  const { match, car } = wwRacing()
+  driving(match, car, 40, -1, WRONG_WAY_MIN_SPEED * 0.5)
+  hold(match, car, WRONG_WAY_MS * 2)
+  assert.equal(car.wrongWay, false)
+})
+
+test('a car taking a shortcut the right way is not warned', () => {
+  // On a chord the nearest stretch of trunk can run the other way, so the chord
+  // must be judged by its own direction.
+  let checked = 0
+  for (let i = 0; i < WW_CIRCUITS.length; i++) {
+    const { match, car } = wwRacing(i)
+    for (const s of match.shortcuts) {
+      const a = s.points[0]
+      const b = s.points[s.points.length - 1]
+      const len = Math.hypot(b.x - a.x, b.y - a.y)
+      for (const f of [0.3, 0.5, 0.7]) {
+        car.x = a.x + (b.x - a.x) * f
+        car.y = a.y + (b.y - a.y) * f
+        car.vx = ((b.x - a.x) / len) * WRONG_WAY_MIN_SPEED * 3
+        car.vy = ((b.y - a.y) / len) * WRONG_WAY_MIN_SPEED * 3
+        car.wrongWay = false
+        hold(match, car, WRONG_WAY_MS * 2)
+        assert.equal(car.wrongWay, false, `${match.circuit.name}: warned on its shortcut at ${f}`)
+        checked++
+      }
+    }
+  }
+  assert.ok(checked > 0, 'no circuit has a shortcut to test')
+})
+
+test('a snapshot carries each car’s speed, for the speedometer', () => {
+  const { match, car } = wwRacing()
+  car.vx = 3
+  car.vy = 4
+  const mine = wwSnapshot(match).cars.find((c) => c.id === car.id)
+  assert.equal(mine.speed, 5)
+})
+
+// --- The item kit ------------------------------------------------------------
+import {
+  make as itMake,
+  join as itJoin,
+  useItem as itUse,
+  applyHazards as itHazards,
+  resolveContact as itContact,
+  tick as itTick,
+  snapshot as itSnap,
+  ITEM_BAG as IT_BAG,
+  SHIELD_MS,
+  GHOST_MS,
+  SHOCK_RANGE,
+  SHOCK_KEEP,
+  PUCK_TTL_MS,
+  CAR_RADIUS as IT_CAR_RADIUS,
+} from './cutline.js'
+
+function field(n = 2) {
+  const match = itMake({ circuitIndex: 0 })
+  const cars = []
+  for (let i = 0; i < n; i++) cars.push(itJoin(match, { name: `I${i}` }, () => 0))
+  match.phase = 'racing'
+  return { match, cars }
+}
+
+/** Put a car on centre-line point `index`, facing along the course at `speed`. */
+function onLine(match, car, index, speed = 0) {
+  const line = match.centerline
+  const a = line[(index - 1 + line.length) % line.length]
+  const b = line[(index + 1) % line.length]
+  car.x = line[index].x
+  car.y = line[index].y
+  car.heading = Math.atan2(b.y - a.y, b.x - a.x)
+  car.vx = Math.cos(car.heading) * speed
+  car.vy = Math.sin(car.heading) * speed
+}
+
+const spun = (match, car) => match.now < (car.spinUntil ?? 0)
+const give = (match, car, item) => {
+  car.item = item
+  return itUse(match, car)
+}
+const dropAt = (match, kind, car) => match.hazards.push({ kind, x: car.x, y: car.y, until: match.now + 10000, by: 'someone' })
+
+test('every item is in the bag, and the bag does not look at the standings', () => {
+  for (const kind of ['boost', 'slick', 'banana', 'shield', 'spring', 'shock', 'puck', 'ghost', 'decoy']) {
+    assert.ok(IT_BAG.includes(kind), `${kind} is missing from the bag`)
+  }
+})
+
+test('a shield takes the next spinning hit, then it is gone', () => {
+  const { match, cars } = field(1)
+  const [car] = cars
+  onLine(match, car, 40)
+  give(match, car, 'shield')
+  dropAt(match, 'banana', car)
+  itHazards(match, car)
+  assert.equal(spun(match, car), false, 'the shield took the banana')
+  assert.equal(match.hazards[0].spent, true, 'the banana is used up')
+  match.hazards = []
+  dropAt(match, 'banana', car)
+  itHazards(match, car)
+  assert.equal(spun(match, car), true, 'one hit breaks the shield')
+})
+
+test('a shield wears off after SHIELD_MS', () => {
+  const { match, cars } = field(1)
+  const [car] = cars
+  onLine(match, car, 40)
+  give(match, car, 'shield')
+  match.now += SHIELD_MS + 1
+  dropAt(match, 'banana', car)
+  itHazards(match, car)
+  assert.equal(spun(match, car), true)
+})
+
+test('a shielded car crosses oil untouched, and keeps its shield', () => {
+  const { match, cars } = field(1)
+  const [car] = cars
+  onLine(match, car, 40)
+  give(match, car, 'shield')
+  dropAt(match, 'slick', car)
+  itHazards(match, car)
+  assert.equal(car.onSlick, false)
+  dropAt(match, 'banana', car)
+  itHazards(match, car)
+  assert.equal(spun(match, car), false, 'the oil did not use the shield up')
+})
+
+test('a spring hops the car where it is, and the page is told it was a hop', () => {
+  const { match, cars } = field(1)
+  const [car] = cars
+  onLine(match, car, 40, 5)
+  give(match, car, 'spring')
+  const mine = itSnap(match).cars.find((c) => c.id === car.id)
+  assert.equal(mine.airborne, true)
+  assert.equal(mine.hop, true, 'a hop starts from the ground, not a ramp lip')
+})
+
+test('a shock slows every other car within range, not the user, not those beyond', () => {
+  const { match, cars } = field(3)
+  const [user, near, far] = cars
+  onLine(match, user, 40, 10)
+  onLine(match, near, 40, 10)
+  near.x += SHOCK_RANGE * 0.5
+  onLine(match, far, 40, 10)
+  far.x += SHOCK_RANGE * 2
+  give(match, user, 'shock')
+  assert.ok(Math.abs(Math.hypot(near.vx, near.vy) - 10 * SHOCK_KEEP) < 1e-9, 'a car in range is slowed')
+  assert.ok(Math.abs(Math.hypot(far.vx, far.vy) - 10) < 1e-9, 'a car beyond range is not')
+  assert.ok(Math.abs(Math.hypot(user.vx, user.vy) - 10) < 1e-9, 'the user is not')
+  const snap = itSnap(match).cars
+  assert.equal(snap.find((c) => c.id === near.id).shocked, true, 'the page is told who was shocked')
+})
+
+test('a puck runs down the track to the car ahead and spins it', () => {
+  const { match, cars } = field(2)
+  const [shooter, ahead] = cars
+  onLine(match, shooter, 40)
+  onLine(match, ahead, 65)
+  ahead.lap = 1 // ahead in running order
+  give(match, shooter, 'puck')
+  let hit = false
+  for (let t = 0; t < PUCK_TTL_MS && !hit; t += 16) {
+    itTick(match, 16, () => 0.5)
+    if (spun(match, ahead)) hit = true
+  }
+  assert.ok(hit, 'the car ahead must be spun before the puck runs out')
+  assert.equal(spun(match, shooter), false)
+})
+
+test('a shield stops a puck', () => {
+  const { match, cars } = field(2)
+  const [shooter, ahead] = cars
+  onLine(match, shooter, 40)
+  onLine(match, ahead, 65)
+  ahead.lap = 1
+  give(match, ahead, 'shield')
+  give(match, shooter, 'puck')
+  for (let t = 0; t < PUCK_TTL_MS; t += 16) itTick(match, 16, () => 0.5)
+  assert.equal(spun(match, ahead), false)
+  assert.ok(!(match.now < (ahead.shieldUntil ?? 0)), 'and the shield is spent doing it')
+})
+
+test('a ghost drives through other cars and dropped hazards', () => {
+  const { match, cars } = field(2)
+  const [ghost, other] = cars
+  onLine(match, ghost, 40)
+  onLine(match, other, 40)
+  other.x += IT_CAR_RADIUS // overlapping
+  give(match, ghost, 'ghost')
+  const before = [ghost.x, ghost.y, other.x, other.y]
+  itContact(match)
+  assert.deepEqual([ghost.x, ghost.y, other.x, other.y], before, 'no shove either way')
+  dropAt(match, 'banana', ghost)
+  itHazards(match, ghost)
+  assert.equal(spun(match, ghost), false)
+  assert.ok(!match.hazards[0].spent, 'the banana is still there for someone else')
+  match.now += GHOST_MS + 1
+  itContact(match)
+  assert.notDeepEqual([ghost.x, ghost.y, other.x, other.y], before, 'solid again once it wears off')
+})
+
+test('a decoy box spins whoever drives into it', () => {
+  const { match, cars } = field(2)
+  const [dropper, victim] = cars
+  onLine(match, dropper, 40)
+  give(match, dropper, 'decoy')
+  const decoy = match.hazards.find((h) => h.kind === 'decoy')
+  assert.ok(decoy, 'a decoy is dropped')
+  victim.x = decoy.x
+  victim.y = decoy.y
+  itHazards(match, victim)
+  assert.equal(spun(match, victim), true)
+  assert.equal(decoy.spent, true)
+})
+
+test('the snapshot says who is shielded and who is a ghost', () => {
+  const { match, cars } = field(2)
+  const [a, b] = cars
+  give(match, a, 'shield')
+  give(match, b, 'ghost')
+  const snap = itSnap(match).cars
+  assert.equal(snap.find((c) => c.id === a.id).shield, true)
+  assert.equal(snap.find((c) => c.id === b.id).ghost, true)
+})
+
+// --- Ramps over holes ------------------------------------------------------------
+// Half the ramps have a hole past the lip, so they must be jumped. A car too slow
+// to launch drops in, and after FALL_MS is set down past the hole, stopped.
+import {
+  CIRCUITS as H_CIRCUITS,
+  carve as hCarve,
+  make as hMake,
+  join as hJoin,
+  tick as hTick,
+  applyInput as hInput,
+  snapshot as hSnap,
+  GRID as H_GRID,
+  S_WALL as H_WALL,
+  S_HOLE,
+  FALL_MS,
+  HOLE_TO,
+  RAMP_MIN_SPEED as H_MIN,
+  TOP_SPEED as H_TOP,
+  BOOST_MULT as H_BOOST,
+  SLIP_BOOST as H_SLIP,
+  AIR_MS as H_AIR,
+  CHECKPOINT_RADIUS as H_CP_RADIUS,
+} from './cutline.js'
+
+const hTile = (grid, x, y) => grid[Math.round(y) * H_GRID + Math.round(x)]
+// Every speed a car can launch at, finely enough that consecutive landings are
+// under half a tile apart: a wall between two sampled speeds must not hide.
+const LAUNCH_SPEEDS = []
+for (let v = H_MIN; v <= H_TOP * H_BOOST * H_SLIP + 1e-9; v += 0.5 / (H_AIR / 1000)) LAUNCH_SPEEDS.push(v)
+LAUNCH_SPEEDS.push(H_TOP * H_BOOST * H_SLIP)
+
+test('about half the ramps have a hole past the lip, and every hole has its ramp', () => {
+  let ramps = 0
+  let holes = 0
+  for (const c of H_CIRCUITS) {
+    const { ramps: rs, holes: hs } = hCarve(c.seed)
+    ramps += rs.length
+    holes += hs.length
+    for (const h of hs) {
+      assert.ok(
+        rs.some((r) => Math.hypot(r.x - h.x, r.y - h.y) < 1 && Math.cos(r.heading - h.heading) > 0.99),
+        `${c.name}: the hole at ${h.x},${h.y} has no ramp in front of it`,
+      )
+    }
+  }
+  assert.ok(holes > 0, 'no circuit has a hole')
+  assert.ok(holes <= Math.ceil(ramps / 2), `${holes} holes for ${ramps} ramps is more than half`)
+})
+
+test('every ramp jump lands on the road, at every launch speed', () => {
+  for (const c of H_CIRCUITS) {
+    const { grid, ramps } = hCarve(c.seed)
+    for (const r of ramps) {
+      if (r.pad) continue // a pad's flight is a fixed distance; its own tests cover it
+      const f = [Math.cos(r.heading), Math.sin(r.heading)]
+      const n = [-f[1], f[0]]
+      for (const v of LAUNCH_SPEEDS) {
+        for (const lane of [-(r.width - 1) / 2, 0, (r.width - 1) / 2]) {
+          const d = 0.5 + (v * H_AIR) / 1000
+          const x = r.x + f[0] * d + n[0] * lane
+          const y = r.y + f[1] * d + n[1] * lane
+          const s = hTile(grid, x, y)
+          assert.ok(s !== H_WALL && s !== S_HOLE, `${c.name}: a jump off the ramp at ${r.x},${r.y} at ${v.toFixed(1)} lands in a ${s === H_WALL ? 'wall' : 'hole'}`)
+        }
+      }
+    }
+  }
+})
+
+test('a hole spans the whole road, so there is no way round it', () => {
+  for (const c of H_CIRCUITS) {
+    const { grid, holes } = hCarve(c.seed)
+    for (const h of holes) {
+      const f = [Math.cos(h.heading), Math.sin(h.heading)]
+      const n = [-f[1], f[0]]
+      for (let d = 2; d <= HOLE_TO; d++) {
+        for (const side of [-1, 1]) {
+          for (let k = 0; ; k++) {
+            const s = hTile(grid, h.x + f[0] * d + n[0] * k * side, h.y + f[1] * d + n[1] * k * side)
+            if (s === H_WALL) break
+            assert.equal(s, S_HOLE, `${c.name}: a drivable tile beside the hole at ${h.x},${h.y}, ${k} across`)
+          }
+        }
+      }
+    }
+  }
+})
+
+test('a car that falls through a hole still passes every checkpoint around it', () => {
+  // A fall skips the road from the hole's edge to where the car is set down. In
+  // every lane, a checkpoint whose circle touches that skipped stretch must still
+  // come within reach just before the fall or just after it, on the straight
+  // either side of the hole, or its lap would not count.
+  let checked = 0
+  for (const c of H_CIRCUITS) {
+    const { holes, checkpoints, startSlots } = hCarve(c.seed)
+    for (const h of holes) {
+      const f = [Math.cos(h.heading), Math.sin(h.heading)]
+      const n = [-f[1], f[0]]
+      for (let lane = -(h.width - 1) / 2; lane <= (h.width - 1) / 2; lane++) {
+        const at = (d) => [h.x + f[0] * d + n[0] * lane, h.y + f[1] * d + n[1] * lane]
+        const within = (from, to) => {
+          const out = []
+          for (let d = from; d < to; d += 0.25) out.push(at(d))
+          return out
+        }
+        const skipped = within(2, HOLE_TO + 3)
+        const driven = [...within(-8, 2), ...within(HOLE_TO + 3, HOLE_TO + 11)]
+        for (const cp of checkpoints) {
+          if (!skipped.some(([x, y]) => Math.hypot(x - cp.x, y - cp.y) <= H_CP_RADIUS)) continue
+          assert.ok(driven.some(([x, y]) => Math.hypot(x - cp.x, y - cp.y) <= H_CP_RADIUS), `${c.name}: a fall in lane ${lane} skips a checkpoint`)
+          checked++
+        }
+      }
+      for (const s of startSlots) {
+        assert.ok(Math.hypot(s.x - h.x, s.y - h.y) > HOLE_TO + 2, `${c.name}: a hole on the starting grid`)
+      }
+    }
+  }
+  assert.ok(checked > 0, 'no hole has a checkpoint near it, so this checked nothing')
+})
+
+/** The first circuit with a hole, a match on it, and a car. */
+function holeMatch() {
+  for (let i = 0; i < H_CIRCUITS.length; i++) {
+    const match = hMake({ circuitIndex: i })
+    if (!match.holes.length) continue
+    const car = hJoin(match, { name: 'H' }, () => 0)
+    match.phase = 'racing'
+    return { match, car, hole: match.holes[0] }
+  }
+  return null
+}
+
+const alongHole = (hole, car) => (car.x - hole.x) * Math.cos(hole.heading) + (car.y - hole.y) * Math.sin(hole.heading)
+
+test('a car too slow to launch falls into the hole and is set down past it', () => {
+  const { match, car, hole } = holeMatch()
+  // Just past the ramp, before the hole, rolling in with nothing on.
+  car.x = hole.x + Math.cos(hole.heading) * 1.2
+  car.y = hole.y + Math.sin(hole.heading) * 1.2
+  car.heading = hole.heading
+  car.vx = Math.cos(hole.heading) * 5
+  car.vy = Math.sin(hole.heading) * 5
+  let fell = false
+  for (let t = 0; t < 600 && !fell; t += 16) {
+    hInput(match, car.id, { throttle: 0 })
+    hTick(match, 16, () => 0.5)
+    fell = Boolean(hSnap(match).cars.find((c) => c.id === car.id).falling)
+  }
+  assert.ok(fell, 'it must drop in')
+  for (let t = 0; t < FALL_MS + 100; t += 16) hTick(match, 16, () => 0.5)
+  const mine = hSnap(match).cars.find((c) => c.id === car.id)
+  assert.ok(!mine.falling, 'and come back out')
+  assert.ok(alongHole(hole, car) > HOLE_TO + 0.5, 'past the hole')
+  const s = hTile(match.grid, car.x, car.y)
+  assert.ok(s !== H_WALL && s !== S_HOLE, 'on the road')
+  assert.ok(Math.hypot(car.vx, car.vy) < 1, 'stopped')
+})
+
+test('a car fast enough flies the hole', () => {
+  const { match, car, hole } = holeMatch()
+  car.x = hole.x - Math.cos(hole.heading) * 3
+  car.y = hole.y - Math.sin(hole.heading) * 3
+  car.heading = hole.heading
+  car.vx = Math.cos(hole.heading) * (H_MIN + 2)
+  car.vy = Math.sin(hole.heading) * (H_MIN + 2)
+  for (let t = 0; t < 1500; t += 16) {
+    hInput(match, car.id, { throttle: 1 })
+    hTick(match, 16, () => 0.5)
+    assert.ok(!hSnap(match).cars.find((c) => c.id === car.id).falling, 'a car at speed must never fall')
+  }
+  assert.ok(alongHole(hole, car) > HOLE_TO, 'and ends up past the hole')
+})
+
+// --- In the air ------------------------------------------------------------------
+// A jump holds its speed: no braking, no drag from whatever is underneath, and
+// no off-road cap when that happens to be a wall. The landing checks assume it.
+import { make as airMake, join as airJoin, tick as airTick, applyInput as airInput, stepCar as airStep, AIR_MS as AIR_AIR_MS, GRID as AIR_GRID, S_WALL as AIR_WALL } from './cutline.js'
+
+function flying(speed) {
+  const match = airMake({ circuitIndex: 0 })
+  const car = airJoin(match, { name: 'A' }, () => 0)
+  match.phase = 'racing'
+  car.heading = 0
+  car.vx = speed
+  car.vy = 0
+  car.airUntil = match.now + AIR_AIR_MS * 10
+  return { match, car }
+}
+
+test('a car in the air cannot brake', () => {
+  const { match, car } = flying(12)
+  airInput(match, car.id, { throttle: 0, brake: 1 })
+  for (let t = 0; t < 500; t += 16) airStep(match, car, 0.016)
+  assert.ok(Math.hypot(car.vx, car.vy) > 12 - 1e-9, `braking in the air slowed it to ${Math.hypot(car.vx, car.vy).toFixed(2)}`)
+})
+
+test('a car flying over a wall keeps its speed', () => {
+  const { match, car } = flying(12)
+  // Put it over solid wall.
+  let found = false
+  for (let y = 0; y < AIR_GRID && !found; y++) {
+    for (let x = 0; x < AIR_GRID && !found; x++) {
+      if (match.grid[y * AIR_GRID + x] === AIR_WALL && x > 5 && y > 5 && x < AIR_GRID - 5) {
+        car.x = x
+        car.y = y
+        found = true
+      }
+    }
+  }
+  airInput(match, car.id, { throttle: 0, brake: 0 })
+  airStep(match, car, 0.016)
+  assert.ok(Math.hypot(car.vx, car.vy) > 12 - 1e-9, 'the wall below does not drag at it')
+})
+
+test('every drivable tile is joined to the road: no sealed pockets to get stuck in', () => {
+  // Run off laid past a wall tile it was refused left gravel islands sealed in
+  // wall. A car that got into one, off a diagonal landing, could never drive out.
+  for (const c of H_CIRCUITS) {
+    const { grid, centerline } = hCarve(c.seed)
+    const seen = new Uint8Array(H_GRID * H_GRID)
+    const stack = []
+    for (const p of centerline) {
+      const id = Math.round(p.y) * H_GRID + Math.round(p.x)
+      if (!seen[id] && grid[id] !== H_WALL) {
+        seen[id] = 1
+        stack.push(id)
+      }
+    }
+    while (stack.length) {
+      const id = stack.pop()
+      const x = id % H_GRID
+      const y = (id - x) / H_GRID
+      for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+        const nx = x + dx
+        const ny = y + dy
+        if (nx < 0 || ny < 0 || nx >= H_GRID || ny >= H_GRID) continue
+        const nid = ny * H_GRID + nx
+        if (seen[nid] || grid[nid] === H_WALL) continue
+        seen[nid] = 1
+        stack.push(nid)
+      }
+    }
+    let sealed = 0
+    for (let i = 0; i < grid.length; i++) if (grid[i] !== H_WALL && !seen[i]) sealed++
+    assert.equal(sealed, 0, `${c.name}: ${sealed} drivable tiles sealed off from the road`)
+  }
+})
+
+import { S_GRAVEL as H_GRAVEL } from './cutline.js'
+
+test('run off has no dead-end fingers poking into the wall', () => {
+  // Refusing run off next to another part of the lap left the edge jagged, with
+  // one-tile fingers into the wall. A bot that drove into one faced the wall and
+  // never came out. Every gravel tile must touch at least two drivable tiles.
+  for (const c of H_CIRCUITS) {
+    const { grid } = hCarve(c.seed)
+    const open = (x, y) => x >= 0 && y >= 0 && x < H_GRID && y < H_GRID && grid[y * H_GRID + x] !== H_WALL
+    for (let y = 0; y < H_GRID; y++) {
+      for (let x = 0; x < H_GRID; x++) {
+        if (grid[y * H_GRID + x] !== H_GRAVEL) continue
+        const ways = [[1, 0], [-1, 0], [0, 1], [0, -1]].filter(([dx, dy]) => open(x + dx, y + dy)).length
+        assert.ok(ways >= 2, `${c.name}: a dead-end finger of gravel at ${x},${y}`)
+      }
+    }
+  }
+})
+
+// --- Wall-jump pads -----------------------------------------------------------------
+// A pad at the outside of a corner, facing the wall, throws a car driving at it
+// over the wall onto a later stretch. The flight is exact: every speed lands in
+// the same place, and on touchdown the car faces along the stretch it landed on
+// and is credited the checkpoints it flew past.
+import { make as jMake, join as jJoin, tick as jTick, applyInput as jInput, carve as jCarve, CIRCUITS as J_CIRCUITS, GRID as J_GRID, S_WALL as J_WALL, S_HOLE as J_HOLE } from './cutline.js'
+
+const jTile = (grid, x, y) => grid[Math.round(y) * J_GRID + Math.round(x)]
+
+test('some circuits have a wall-jump pad, at most one each, landing every lane past a wall', () => {
+  let pads = 0
+  for (const c of J_CIRCUITS) {
+    const { grid, jumps, checkpoints } = jCarve(c.seed)
+    assert.ok(jumps.length <= 1, `${c.name} has ${jumps.length} pads`)
+    for (const p of jumps) {
+      pads++
+      const f = [Math.cos(p.heading), Math.sin(p.heading)]
+      const n = [-f[1], f[0]]
+      let crossesWall = false
+      for (let lane = -(p.width - 1) / 2; lane <= (p.width - 1) / 2; lane++) {
+        const d = 0.5 + p.distance
+        const s = jTile(grid, p.x + f[0] * d + n[0] * lane, p.y + f[1] * d + n[1] * lane)
+        assert.ok(s !== J_WALL && s !== J_HOLE, `${c.name}: a pad lands lane ${lane} in a ${s === J_WALL ? 'wall' : 'hole'}`)
+        for (let k = 1; k < p.distance; k++) if (jTile(grid, p.x + f[0] * (0.5 + k) + n[0] * lane, p.y + f[1] * (0.5 + k) + n[1] * lane) === J_WALL) crossesWall = true
+      }
+      assert.ok(crossesWall, `${c.name}: a pad that crosses no wall is just a ramp`)
+      assert.ok(!p.credits.includes(0), `${c.name}: a pad must never jump the finish line`)
+      for (const k of p.credits) assert.ok(k > 0 && k < checkpoints.length)
+    }
+  }
+  assert.ok(pads > 0, 'no circuit has a pad')
+})
+
+/** A match on the first circuit with a pad, a car, and the pad. */
+function padMatch() {
+  for (let i = 0; i < J_CIRCUITS.length; i++) {
+    const match = jMake({ circuitIndex: i })
+    if (!match.jumps.length) continue
+    const car = jJoin(match, { name: 'J' }, () => 0)
+    match.phase = 'racing'
+    return { match, car, pad: match.jumps[0] }
+  }
+  return null
+}
+
+/** Drive a car at the pad from a few tiles back, and run until it is down again. */
+function jumpPad(match, car, pad, speed) {
+  const f = [Math.cos(pad.heading), Math.sin(pad.heading)]
+  car.x = pad.x - f[0] * 2
+  car.y = pad.y - f[1] * 2
+  car.heading = pad.heading
+  car.vx = f[0] * speed
+  car.vy = f[1] * speed
+  let flew = false
+  for (let t = 0; t < 3000; t += 16) {
+    jInput(match, car.id, { throttle: 1 })
+    jTick(match, 16, () => 0.5)
+    const up = match.now < (car.airUntil ?? 0)
+    if (up && !flew) car.launchSpeed = Math.hypot(car.vx, car.vy)
+    if (up) flew = true
+    if (flew && !up && !car.guided) {
+      car.landSpeed = Math.hypot(car.vx, car.vy)
+      return true
+    }
+  }
+  return false
+}
+
+test('a car driving at a pad flies over the wall and lands facing along the stretch', () => {
+  const { match, car, pad } = padMatch()
+  assert.ok(jumpPad(match, car, pad, 12), 'it must launch and come down')
+  assert.ok(Math.hypot(car.x - pad.land.x, car.y - pad.land.y) < 1.5, `landed ${Math.hypot(car.x - pad.land.x, car.y - pad.land.y).toFixed(2)} from the target`)
+  const d = Math.atan2(Math.sin(car.heading - pad.land.heading), Math.cos(car.heading - pad.land.heading))
+  assert.ok(Math.abs(d) < 0.2, 'facing along the stretch it landed on')
+  assert.ok(Math.abs(car.landSpeed - car.launchSpeed) < 0.3, `launched at ${car.launchSpeed.toFixed(1)}, landed at ${car.landSpeed.toFixed(1)}`)
+})
+
+test('every launch speed lands a pad jump in the same place', () => {
+  const landed = []
+  for (const speed of [9, 16]) {
+    const { match, car, pad } = padMatch()
+    jumpPad(match, car, pad, speed)
+    landed.push([car.x, car.y])
+  }
+  assert.ok(Math.hypot(landed[0][0] - landed[1][0], landed[0][1] - landed[1][1]) < 1, 'slow and fast land together')
+})
+
+test('a pad jump counts the checkpoints it flew past', () => {
+  const { match, car, pad } = padMatch()
+  if (!pad.credits.length) return
+  const ring = match.checkpoints.length
+  car.nextCp = pad.credits[0]
+  car.cpTaken = pad.credits[0] - 1
+  jumpPad(match, car, pad, 12)
+  const last = pad.credits[pad.credits.length - 1]
+  assert.ok(car.cpTaken >= last, `credited up to checkpoint ${car.cpTaken}, owed ${last}`)
+  assert.notEqual(car.nextCp, pad.credits[0], 'no longer waiting on a checkpoint it flew past')
+  assert.ok(car.nextCp === (last + 1) % ring || car.cpTaken > last)
+})
+
+test('a car skimming along a pad sideways is not thrown over the wall', () => {
+  const { match, car, pad } = padMatch()
+  const n = [-Math.sin(pad.heading), Math.cos(pad.heading)]
+  car.x = pad.x
+  car.y = pad.y
+  car.heading = Math.atan2(n[1], n[0])
+  car.vx = n[0] * 12
+  car.vy = n[1] * 12
+  jInput(match, car.id, { throttle: 0 })
+  jTick(match, 16, () => 0.5)
+  assert.ok(!car.guided, 'only a car driving at the pad is launched by it')
 })

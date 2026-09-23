@@ -7,7 +7,7 @@
 import * as THREE from 'three'
 import { GRID, CAR_LENGTH, CAR_WIDTH, MAX_PLAYERS } from '../../server/cutline.js'
 import { toWorld, yawFor, wheelYawFor, WALL_HEIGHT, CAR_ROOF } from './raceCamera.js'
-import { carLift, RAMP_HEIGHT, RAMP_LENGTH } from './carLift.js'
+import { carLift, RAMP_HEIGHT, RAMP_LENGTH, PIT_DEPTH } from './carLift.js'
 
 const MAX_PICKUPS = 64
 const MAX_HAZARDS = 32 // the server caps at 16; this is headroom, not a rule
@@ -95,7 +95,13 @@ function buildCar(shared) {
   const shadow = new THREE.Mesh(shared.shadow, shared.shadowMat)
   shadow.rotation.x = -Math.PI / 2
 
-  return { group, shadow, paint, brake, front, color: null }
+  // A shield is a bubble round the car, so it reads by shape, not by colour.
+  const bubble = new THREE.Mesh(shared.bubble, shared.bubbleMat)
+  bubble.position.y = CAR_ROOF / 2
+  bubble.visible = false
+  group.add(bubble)
+
+  return { group, shadow, paint, brake, front, bubble, color: null }
 }
 
 export function makeCutlineScene(canvas) {
@@ -128,6 +134,8 @@ export function makeCutlineScene(canvas) {
     tyre: new THREE.MeshLambertMaterial({ color: 0x111114 }),
     headlight: new THREE.MeshBasicMaterial({ color: 0xfff5d6 }),
     shadowMat: new THREE.MeshBasicMaterial({ color: 0x000000, transparent: true, opacity: 0.35 }),
+    bubble: new THREE.SphereGeometry(CAR_LENGTH * 0.72, 20, 14),
+    bubbleMat: new THREE.MeshBasicMaterial({ color: 0x3ad1c4, transparent: true, opacity: 0.22, depthWrite: false }),
   }
   const pool = Array.from({ length: MAX_PLAYERS }, () => {
     const c = buildCar(shared)
@@ -148,6 +156,16 @@ export function makeCutlineScene(canvas) {
   const peelGeo = new THREE.TorusGeometry(0.22, 0.07, 6, 12, Math.PI).rotateX(-Math.PI / 2)
   const peelMat = new THREE.MeshLambertMaterial({ color: 0xfacc15 })
   const peels = dynamicLayer(peelGeo, peelMat, MAX_HAZARDS)
+  // A puck is a glowing disc; a decoy is an item box stood on its corner, the
+  // same size and colour family as the real thing but a different silhouette,
+  // so a sharp eye can tell it apart.
+  const puckGeo = new THREE.CylinderGeometry(0.35, 0.35, 0.12, 18)
+  const puckMat = new THREE.MeshBasicMaterial({ color: 0xf97316 })
+  const pucks = dynamicLayer(puckGeo, puckMat, MAX_HAZARDS)
+  const decoyGeo = new THREE.BoxGeometry(0.5, 0.5, 0.5).rotateX(Math.PI / 4).rotateZ(Math.atan(Math.SQRT1_2))
+  const decoyMat = new THREE.MeshLambertMaterial({ color: 0x2a9d93 })
+  const decoys = dynamicLayer(decoyGeo, decoyMat, MAX_HAZARDS)
+  scene.add(pucks, decoys)
   // An unknown hazard kind draws as this rather than as nothing, so a kind added
   // to the server shows up wrong instead of invisible.
   const unknownGeo = new THREE.OctahedronGeometry(0.35)
@@ -176,6 +194,10 @@ export function makeCutlineScene(canvas) {
   let walls = null
   let wedges = null
   let lips = null
+  let padWedges = null
+  let padArrows = null
+  let pitFloors = null
+  let pitWalls = null
   let trackRamps = []
 
   // A ramp's structure is its slope; the lip in the warning colour marks where
@@ -184,16 +206,35 @@ export function makeCutlineScene(canvas) {
   const wedgeMat = new THREE.MeshLambertMaterial({ color: 0x2b2118 })
   const lipGeo = new THREE.BoxGeometry(0.08, 0.05, 1).translate(RAMP_LENGTH / 2 - 0.04, RAMP_HEIGHT + 0.025, 0)
   const lipMat = new THREE.MeshLambertMaterial({ color: token('--warn', '#eab308') })
+  // A pit: a dark floor down PIT_DEPTH and walls round its outer edges, seen
+  // through the hole cut in the ground.
+  const pitFloorGeo = new THREE.PlaneGeometry(1, 1).rotateX(-Math.PI / 2)
+  const pitWallGeo = new THREE.PlaneGeometry(1, PIT_DEPTH)
+  const pitMat = new THREE.MeshLambertMaterial({ color: 0x0b0b0e, side: THREE.DoubleSide })
+  const padMat = new THREE.MeshLambertMaterial({ color: 0x1f8f86 })
+  // A flat chevron pointing along +x, lying level over the pad.
+  const arrowShape = new THREE.Shape()
+  arrowShape.moveTo(0.45, 0)
+  arrowShape.lineTo(-0.25, 0.4)
+  arrowShape.lineTo(-0.05, 0)
+  arrowShape.lineTo(-0.25, -0.4)
+  arrowShape.closePath()
+  const arrowGeo = new THREE.ShapeGeometry(arrowShape).rotateX(-Math.PI / 2)
+  const arrowMat = new THREE.MeshBasicMaterial({ color: 0xffffff, side: THREE.DoubleSide })
 
   function disposeTrack() {
-    for (const mesh of [ground, walls, wedges, lips]) if (mesh) scene.remove(mesh)
+    for (const mesh of [ground, walls, wedges, lips, padWedges, padArrows, pitFloors, pitWalls]) if (mesh) scene.remove(mesh)
     groundTex?.dispose()
     groundGeo?.dispose()
     groundMat?.dispose()
     walls?.dispose()
     wedges?.dispose()
     lips?.dispose()
-    groundTex = groundGeo = groundMat = ground = walls = wedges = lips = null
+    pitFloors?.dispose()
+    pitWalls?.dispose()
+    padWedges?.dispose()
+    padArrows?.dispose()
+    groundTex = groundGeo = groundMat = ground = walls = wedges = lips = padWedges = padArrows = pitFloors = pitWalls = null
     trackRamps = []
   }
 
@@ -206,7 +247,7 @@ export function makeCutlineScene(canvas) {
      * disposed first: a texture and a mesh per race that are never freed is GPU
      * memory that grows until the tab dies.
      */
-    setTrack(groundCanvas, wallBoxes, ramps = []) {
+    setTrack(groundCanvas, wallBoxes, ramps = [], pit = { floors: [], edges: [] }) {
       disposeTrack()
       // update() leaves `scratch` holding a pickup's spin; clear it, or every
       // wall on a restarted circuit is built turned by that angle.
@@ -217,7 +258,9 @@ export function makeCutlineScene(canvas) {
       groundTex.colorSpace = THREE.SRGBColorSpace
       groundTex.anisotropy = renderer.capabilities.getMaxAnisotropy()
       groundGeo = new THREE.PlaneGeometry(GRID, GRID)
-      groundMat = new THREE.MeshLambertMaterial({ map: groundTex })
+      // Hole tiles are clear in the ground canvas; alphaTest cuts them out of the
+      // plane so the pit below shows through.
+      groundMat = new THREE.MeshLambertMaterial({ map: groundTex, alphaTest: 0.5 })
       ground = new THREE.Mesh(groundGeo, groundMat)
       ground.rotation.x = -Math.PI / 2
       // Tile x spans [x - 0.5, x + 0.5], matching the physics.
@@ -235,22 +278,54 @@ export function makeCutlineScene(canvas) {
       scene.add(walls)
 
       trackRamps = ramps
-      wedges = new THREE.InstancedMesh(wedgeGeo, wedgeMat, Math.max(1, ramps.length))
-      lips = new THREE.InstancedMesh(lipGeo, lipMat, Math.max(1, ramps.length))
-      ramps.forEach((r, i) => {
-        scratch.position.set(...toWorld(r.x, r.y, 0))
-        scratch.rotation.set(0, yawFor(r.heading), 0)
-        scratch.scale.set(1, 1, r.width)
-        scratch.updateMatrix()
-        wedges.setMatrixAt(i, scratch.matrix)
-        lips.setMatrixAt(i, scratch.matrix)
-      })
+      // A plain ramp and a wall-jump pad share a wedge but not a look: a pad is
+      // teal with a chevron floating over it, pointing where it throws you, so
+      // it is told apart by shape as well as colour.
+      const plain = ramps.filter((r) => !r.pad)
+      const pads = ramps.filter((r) => r.pad)
+      const layer = (geo, mat, list, lift = 0, scaleAcross = true) => {
+        const mesh = new THREE.InstancedMesh(geo, mat, Math.max(1, list.length))
+        list.forEach((r, i) => {
+          scratch.position.set(...toWorld(r.x, r.y, lift))
+          scratch.rotation.set(0, yawFor(r.heading), 0)
+          scratch.scale.set(1, 1, scaleAcross ? r.width : 1)
+          scratch.updateMatrix()
+          mesh.setMatrixAt(i, scratch.matrix)
+        })
+        mesh.count = list.length
+        mesh.instanceMatrix.needsUpdate = true
+        return mesh
+      }
+      wedges = layer(wedgeGeo, wedgeMat, plain)
+      lips = layer(lipGeo, lipMat, plain)
+      padWedges = layer(wedgeGeo, padMat, pads)
+      padArrows = layer(arrowGeo, arrowMat, pads, RAMP_HEIGHT + 0.45, false)
       scratch.rotation.set(0, 0, 0)
       scratch.scale.set(1, 1, 1)
-      wedges.count = lips.count = ramps.length
-      wedges.instanceMatrix.needsUpdate = true
-      lips.instanceMatrix.needsUpdate = true
-      scene.add(wedges, lips)
+      scene.add(wedges, lips, padWedges, padArrows)
+
+      // The pits under holes: a floor per hole tile, a wall per outer edge.
+      pitFloors = new THREE.InstancedMesh(pitFloorGeo, pitMat, Math.max(1, pit.floors.length))
+      pit.floors.forEach((f, i) => {
+        scratch.position.set(...toWorld(f.x, f.y, -PIT_DEPTH))
+        scratch.rotation.set(0, 0, 0)
+        scratch.updateMatrix()
+        pitFloors.setMatrixAt(i, scratch.matrix)
+      })
+      pitFloors.count = pit.floors.length
+      pitWalls = new THREE.InstancedMesh(pitWallGeo, pitMat, Math.max(1, pit.edges.length))
+      pit.edges.forEach((e, i) => {
+        scratch.position.set(...toWorld(e.x + e.dx / 2, e.y + e.dy / 2, -PIT_DEPTH / 2))
+        // The wall plane is built facing +z; turn it to face along its edge.
+        scratch.rotation.set(0, e.dx !== 0 ? Math.PI / 2 : 0, 0)
+        scratch.updateMatrix()
+        pitWalls.setMatrixAt(i, scratch.matrix)
+      })
+      scratch.rotation.set(0, 0, 0)
+      pitWalls.count = pit.edges.length
+      pitFloors.instanceMatrix.needsUpdate = true
+      pitWalls.instanceMatrix.needsUpdate = true
+      scene.add(pitFloors, pitWalls)
     },
 
     /** Move every object to where the snapshot says, apply the camera, draw. */
@@ -264,7 +339,7 @@ export function makeCutlineScene(canvas) {
         const car = cars[i]
         const show = Boolean(car) && car.id !== frame?.hideId
         c.group.visible = show
-        c.shadow.visible = show
+        c.shadow.visible = show && !car.falling
         if (!show) continue
 
         // Cached by colour, not by slot, so a theme switch repaints the car.
@@ -273,7 +348,9 @@ export function makeCutlineScene(canvas) {
           c.paint.color.set(color)
           c.color = color
         }
-        c.paint.opacity = car.alive ? 1 : 0.35
+        // Out, or a ghost: see-through. The label says which.
+        c.paint.opacity = !car.alive ? 0.35 : car.ghost ? 0.3 : 1
+        c.bubble.visible = Boolean(car.shield)
 
         const lift = carLift(car, trackRamps)
         c.group.position.set(...toWorld(car.x, car.y, lift))
@@ -293,22 +370,26 @@ export function makeCutlineScene(canvas) {
 
       let s = 0
       let b = 0
+      let pk = 0
+      let dc = 0
       let u = 0
       for (const h of frame?.hazards ?? []) {
         if (h.kind === 'slick') {
           if (s < MAX_HAZARDS) place(slicks, s++, h.x, h.y, 0.02)
         } else if (h.kind === 'banana') {
           if (b < MAX_HAZARDS) place(peels, b++, h.x, h.y, 0.08)
+        } else if (h.kind === 'puck') {
+          if (pk < MAX_HAZARDS) place(pucks, pk++, h.x, h.y, 0.18, now / 60)
+        } else if (h.kind === 'decoy') {
+          if (dc < MAX_HAZARDS) place(decoys, dc++, h.x, h.y, 0.55 + Math.sin(now / 300 + h.x) * 0.12, now / 900)
         } else if (u < MAX_HAZARDS) {
           place(unknowns, u++, h.x, h.y, 0.4, now / 400)
         }
       }
-      slicks.count = s
-      peels.count = b
-      unknowns.count = u
-      slicks.instanceMatrix.needsUpdate = true
-      peels.instanceMatrix.needsUpdate = true
-      unknowns.instanceMatrix.needsUpdate = true
+      for (const [mesh, count] of [[slicks, s], [peels, b], [pucks, pk], [decoys, dc], [unknowns, u]]) {
+        mesh.count = count
+        mesh.instanceMatrix.needsUpdate = true
+      }
 
       const sk = frame?.skids ?? []
       skids.count = Math.min(sk.length, MAX_SKIDS)
@@ -368,15 +449,21 @@ export function makeCutlineScene(canvas) {
       wedgeMat.dispose()
       lipGeo.dispose()
       lipMat.dispose()
+      pitFloorGeo.dispose()
+      pitWallGeo.dispose()
+      pitMat.dispose()
+      padMat.dispose()
+      arrowGeo.dispose()
+      arrowMat.dispose()
       for (const c of pool) {
         c.paint.dispose()
         c.brake.dispose()
       }
-      for (const g of [shared.body, shared.cabin, shared.wheel, shared.lamp, shared.shadow]) g.dispose()
-      for (const m of [shared.glass, shared.tyre, shared.headlight, shared.shadowMat]) m.dispose()
-      for (const mesh of [pickups, slicks, peels, unknowns, skids]) mesh.dispose()
-      for (const g of [pickupGeo, slickGeo, peelGeo, unknownGeo, skidGeo]) g.dispose()
-      for (const m of [pickupMat, slickMat, peelMat, unknownMat, skidMat]) m.dispose()
+      for (const g of [shared.body, shared.cabin, shared.wheel, shared.lamp, shared.shadow, shared.bubble]) g.dispose()
+      for (const m of [shared.glass, shared.tyre, shared.headlight, shared.shadowMat, shared.bubbleMat]) m.dispose()
+      for (const mesh of [pickups, slicks, peels, pucks, decoys, unknowns, skids]) mesh.dispose()
+      for (const g of [pickupGeo, slickGeo, peelGeo, puckGeo, decoyGeo, unknownGeo, skidGeo]) g.dispose()
+      for (const m of [pickupMat, slickMat, peelMat, puckMat, decoyMat, unknownMat, skidMat]) m.dispose()
       renderer.dispose()
       renderer.forceContextLoss()
     },

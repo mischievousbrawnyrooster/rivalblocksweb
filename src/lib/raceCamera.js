@@ -130,7 +130,19 @@ export function upFor(position, target, heading) {
 }
 
 export function makeRaceCamera() {
-  return { ready: false, heading: 0, position: [0, 0, 0], target: [0, 0, 0], fov: CHASE_FOV }
+  return {
+    ready: false,
+    heading: 0,
+    position: [0, 0, 0],
+    target: [0, 0, 0],
+    // Where the camera and its target sit relative to the car. This is what
+    // eases, never the absolute position: easing that made the camera trail a
+    // moving car by speed / rate, a tile at top speed, so the car drifted up the
+    // screen as it accelerated and looked laggy.
+    offPos: [0, 0, 0],
+    offTgt: [0, 0, 0],
+    fov: CHASE_FOV,
+  }
 }
 
 const poseOf = (cam) => ({
@@ -155,11 +167,14 @@ export function stepCamera(cam, view, car, dt, nose) {
 
   const t = Number.isFinite(dt) && dt > 0 ? Math.min(dt, MAX_DT) : 0
   const heading = Number.isFinite(car.heading) ? car.heading : cam.heading
+  const at = toWorld(car.x, car.y, 0)
 
   if (!cam.ready) {
     // First frame: place the camera exactly, rather than easing in from the origin.
     const p = targetPose(v, car, heading, nose)
     cam.heading = heading
+    cam.offPos = sub(p.position, at)
+    cam.offTgt = sub(p.target, at)
     cam.position = p.position.slice()
     cam.target = p.target.slice()
     cam.fov = p.fov
@@ -172,16 +187,15 @@ export function stepCamera(cam, view, car, dt, nose) {
   cam.heading = Math.atan2(Math.sin(cam.heading), Math.cos(cam.heading))
 
   const p = targetPose(v, car, cam.heading, nose)
-  if (v === 'bumper') {
-    // Locked. Any lag leaves the camera behind the bumper, inside the car. That
-    // holds during a switch too, so switching into bumper is a deliberate cut.
-    cam.position = p.position.slice()
-    cam.target = p.target.slice()
-  } else {
-    const k = ease(v === 'top' ? TOP_POS_RATE : CHASE_POS_RATE, t)
-    cam.position = lerp3(cam.position, p.position, k)
-    cam.target = lerp3(cam.target, p.target, k)
-  }
+  // Bumper is locked: any lag leaves the camera behind the bumper, inside the
+  // car, so switching into it is a deliberate cut. The others ease their offset
+  // from the car, which rides with the car at any speed and still glides
+  // through a view switch.
+  const k = v === 'bumper' ? 1 : ease(v === 'top' ? TOP_POS_RATE : CHASE_POS_RATE, t)
+  cam.offPos = lerp3(cam.offPos, sub(p.position, at), k)
+  cam.offTgt = lerp3(cam.offTgt, sub(p.target, at), k)
+  cam.position = [at[0] + cam.offPos[0], at[1] + cam.offPos[1], at[2] + cam.offPos[2]]
+  cam.target = [at[0] + cam.offTgt[0], at[1] + cam.offTgt[1], at[2] + cam.offTgt[2]]
   cam.fov += (p.fov - cam.fov) * ease(FOV_RATE, t)
   return poseOf(cam)
 }

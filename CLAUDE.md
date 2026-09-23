@@ -101,7 +101,8 @@ body feels the replay delay as the whole world lagging the mouse.
 land unevenly (measured on Windows: 46 Hz, gaps of 16 or 30 ms), and drawing
 your own car at the newest one froze it on 67 of 165 frames and then jumped it
 double. In 2D the world stepped with it and hid that; behind a chase camera it
-read as the car stuttering. Interpolated, no frame freezes, for 60 ms of delay.
+read as the car stuttering. Interpolated, no frame freezes, for 40 ms of delay
+(`DELAY_MS`, sized to the longest snapshot gap plus jitter).
 Cutline has no mouse-look, so Blockout 3D's reason for the exemption does not
 apply. `heading` is blended too, the short way round: taken from the newer
 frame alone, a car's facing froze on 153 of 506 cornering frames and then
@@ -342,6 +343,73 @@ is nothing to lock. `BOARD_DIR` says where they live (`./data` in dev,
 - **Cutline: checkpoints sit only on the trunk, never on a shortcut branch and
   never inside the stretch a branch skips.** Both routes then pass every
   checkpoint in order and the ring needs no knowledge that a branch exists.
+- **Cutline: no drivable way round a checkpoint, and a test proves it by flood
+  fill.** Parallel stretches sit `MIN_WALL` apart and corner run off digs
+  `GRAVEL_DEPTH` in, so run off once ate the wall on every circuit and left
+  gravel bridges skipping up to half a lap: 72 of 96 checkpoints could be driven
+  round, and a lap taken that way silently never counted. Run off now never
+  touches ground owned by a part of the lap more than `RUNOFF_OWN_SPAN` points
+  away. A shortcut is kept only if carving it into a copy leaves no checkpoint
+  that can be driven round, best first, up to `SHORTCUT_TRIES`; skipping no
+  checkpoint was not enough, because a chord that starts on a checkpoint can be
+  entered beside its circle.
+- **Cutline: a car takes the nearest READY box in `PICKUP_REACH`.** Judged
+  against the nearest box of any kind, a car passing between two got nothing
+  when another car had just emptied the nearer one.
+- **Cutline: moving instanced layers are never frustum culled.** An
+  `InstancedMesh` computes its bounding sphere once and never again, so pickups,
+  hazards and skids vanished whenever that stale sphere was off screen. Build
+  them with `dynamicLayer`. Walls and ramp wedges are placed once per circuit
+  before their first draw, so they keep culling.
+- **Cutline: the wrong-way warning is a rule, not a page guess.**
+  `updateWrongWay` judges where a car is going against the tangent of the
+  nearest centre-line point, and warns after `WRONG_WAY_MS` above
+  `WRONG_WAY_MIN_SPEED`. The page only draws `wrongWay` from the snapshot.
+- **Cutline: the HUD is drawn into the overlay canvas, not under it.** Place,
+  lap, leader, item and a speedometer (`speed` from the snapshot, eased on the
+  page) sit on the game so they are seen when it fills the screen; a screen
+  reader gets the same reading from an `sr-only` line. Every item has a
+  procedural icon (`drawItemIcon`), each a different shape.
+- **Cutline: the camera eases its offset from the car, never its absolute
+  position.** Easing the absolute position made it trail a moving car by
+  speed / rate, a tile at top speed, so the car drifted up the screen as it
+  accelerated and looked laggy. The offset rides with the car at any speed and
+  still glides through a view switch.
+- **Cutline: the item kit is flat, and a spin goes through `takeHit`.** Boost,
+  oil, banana, shield (6 s: oil does nothing, the next spin or shock breaks it),
+  spring (a hop from the ground), shock (every other car within `SHOCK_RANGE`
+  keeps `SHOCK_KEEP` of its speed), puck (runs the centre line to the car ahead,
+  homes in close), ghost (3 s through cars and dropped hazards) and decoy (a
+  fake box, stood on its corner so it can be told apart). A ghost is never hit
+  and a shield takes the hit instead, in one place.
+- **Cutline: rare snapshot flags are sent only while true.** `shield`, `ghost`,
+  `shocked`, `hop`, `wrongWay`, `falling` and `land` would push a full frame of
+  eight cars past its 4 KB budget if every car always carried them; the page
+  reads a missing flag as false.
+- **Cutline: a jump holds its speed.** In the air there is no brake, no drag
+  and no off-road cap from a wall below. Every ramp's landing checks, in
+  `rampLandsClear` and the tests, sample every half tile of landing distance
+  from the slowest launch to boosted in a slipstream, and assume exactly that.
+- **Cutline: about half the ramps have a hole past the lip.** `S_HOLE` spans
+  the whole road, rows `HOLE_FROM` to `HOLE_TO` ahead of every other intact ramp
+  clear of the grid. A car that drives in falls for `FALL_MS` and is set down
+  past it, stopped. A fall skips far less road than a checkpoint circle is
+  across, so a lap still counts, and a test walks every lane to prove it. Every
+  ramp is re-checked after a hole is dug, or a boosted jump off the ramp before
+  can land in it.
+- **Cutline: run off has no dead-end fingers.** Refusing gravel next to another
+  part of the lap left one-tile fingers into the wall; a bot that drove into one
+  faced the wall forever. Gravel with fewer than two ways out goes back to wall.
+- **Cutline: a wall-jump pad is a jump pad, at most one per circuit.** It sits at
+  the outside of a corner facing the wall, launches only a car driving at it
+  (`PAD_ALIGN`), lines it up and flies it exactly `distance` tiles past the lip
+  at any speed with no steering or thrust, so every lane is checked to land on
+  one later stretch. On touchdown the car faces along that stretch and is
+  credited the checkpoints it flew past; the finish line is never jumped. A
+  free-flight jump over a wall was tried first: its landings spread over eight
+  tiles with speed and some always hit a wall, and those that did not landed
+  across a road too narrow to turn in. The Spindle, Draw Bench and Cinder Yard
+  have one; the others have no spot that passes.
 - **Cutline: ramp height is render only.** The rules track `airUntil` and
   nothing else; `airT` exists for the page to draw an arc with. Giving the rules
   a z axis would make this a different game.
