@@ -21,6 +21,8 @@ import {
   surfaceAt,
   stampTrack,
   walkLine,
+  SHORTCUT_CHANCE,
+  SHORTCUT_WIDTH,
 } from './cutline.js'
 
 test('createRng is deterministic for a seed and differs across seeds', () => {
@@ -2403,5 +2405,75 @@ test('an encoded circuit still fits a welcome frame', () => {
     assert.ok(encoded.length < 4096, `${circuit.name}: encoded to ${encoded.length} bytes`)
   }
 })
+
+test('a shortcut branches from the trunk and rejoins it', () => {
+  let found = 0
+  for (const circuit of CIRCUITS) {
+    const { shortcuts, centerline } = carve(circuit.seed)
+    if (!shortcuts || shortcuts.length === 0) continue
+    found++
+    for (const s of shortcuts) {
+      assert.ok(s.fromIndex >= 0 && s.fromIndex < centerline.length, 'branch point on the line')
+      assert.ok(s.toIndex >= 0 && s.toIndex < centerline.length, 'rejoin point on the line')
+      assert.notEqual(s.fromIndex, s.toIndex, 'a shortcut must go somewhere')
+      assert.ok(s.points.length > 1, 'a shortcut must have a path')
+    }
+  }
+  assert.ok(found > 0, 'no circuit had a shortcut')
+})
+
+test('no checkpoint ever sits on a shortcut or inside the stretch it skips', () => {
+  // This is the rule that keeps the checkpoint ring ignorant of branches. Break
+  // it and taking the shortcut silently stops the lap counting, which is the
+  // lap bug from the other direction.
+  for (const circuit of CIRCUITS) {
+    const { shortcuts, checkpoints, centerline } = carve(circuit.seed)
+    if (!shortcuts || shortcuts.length === 0) continue
+    for (const s of shortcuts) {
+      for (const cp of checkpoints) {
+        const inSkipped = s.fromIndex < s.toIndex
+          ? cp.index > s.fromIndex && cp.index < s.toIndex
+          : cp.index > s.fromIndex || cp.index < s.toIndex
+        assert.ok(
+          !inSkipped,
+          `${circuit.name}: checkpoint at ${cp.index} lies inside a stretch a shortcut skips`,
+        )
+      }
+    }
+  }
+})
+
+test('a lap completed via a shortcut still counts', () => {
+  const idx = CIRCUITS.findIndex((c) => (carve(c.seed).shortcuts ?? []).length > 0)
+  if (idx < 0) return // no shortcut on any circuit is covered by the test above
+  const match = make({ circuitIndex: idx })
+  join(match, { name: 'S' }, () => 0)
+  startRace(match)
+  const [car] = [...match.cars.values()]
+
+  // Take every checkpoint, which is what a shortcut runner still does, then
+  // cross the line.
+  for (let c = 1; c < match.checkpoints.length; c++) {
+    const cp = match.checkpoints[c]
+    car.x = cp.x
+    car.y = cp.y
+    updateProgress(match, car)
+  }
+  crossLine(match, car)
+  assert.equal(car.lap, 1, 'a lap taken via the shortcut must count')
+})
+
+test('a shortcut is narrower than the trunk it bypasses', () => {
+  for (const circuit of CIRCUITS) {
+    const { shortcuts, meta } = carve(circuit.seed)
+    for (const s of shortcuts ?? []) {
+      assert.ok(
+        SHORTCUT_WIDTH < meta[s.fromIndex].width,
+        `a shortcut must cost something: ${SHORTCUT_WIDTH} against ${meta[s.fromIndex].width}`,
+      )
+    }
+  }
+})
+
 
 

@@ -425,6 +425,11 @@ const LANE_GAP = 1.5                 // tiles between cars across the road
 // so meeting a row is a choice of lane instead of a choice of whether to bother.
 export const PICKUP_ROW = 4
 
+// A shortcut is a chord across the cycle: shorter than the trunk between the
+// same two points, and narrower, so it costs control to save distance.
+export const SHORTCUT_CHANCE = 0.5   // per circuit, from the decoration stream
+export const SHORTCUT_WIDTH = 5
+
 /** The surface at a tile. Anything off the grid is wall, so no caller needs a bounds check. */
 export function surfaceAt(grid, x, y) {
   if (x < 0 || y < 0 || x >= GRID || y >= GRID) return S_WALL
@@ -649,7 +654,69 @@ export function carve(seed) {
     }
   }
 
-  return { grid, centerline, meta, checkpoints, startSlots, pickups }
+  // 8. Shortcuts. A chord between two points far apart along the lap but close
+  //    in space. Checkpoints are placed in stage 6 from startIndex, so the chord
+  //    is chosen to skip a stretch that contains none: both routes then pass
+  //    every checkpoint and the ring never learns a branch exists.
+  const shortcuts = []
+  if (rng() < SHORTCUT_CHANCE) {
+    const n = centerline.length
+    const cpIndices = checkpoints.map((c) => c.index)
+    const skipsACheckpoint = (from, to) =>
+      cpIndices.some((ci) => (from < to ? ci > from && ci < to : ci > from || ci < to))
+
+    let best = null
+    for (let a = 0; a < n; a += 2) {
+      for (let b = a + Math.max(8, Math.floor(n * 0.05)); b < a + Math.floor(n * 0.4); b += 2) {
+        const to = b % n
+        if (skipsACheckpoint(a, to)) continue
+        const d = Math.hypot(centerline[a].x - centerline[to].x, centerline[a].y - centerline[to].y)
+        const along = (to - a + n) % n
+        // Worth cutting only if the straight line is much shorter than the road.
+        if (d > along * 0.55) continue
+        if (!best || d < best.d) best = { from: a, to, d }
+      }
+    }
+
+    if (best) {
+      const from = centerline[best.from]
+      const to = centerline[best.to]
+      const steps = Math.max(2, Math.round(best.d))
+      const points = []
+      for (let s = 0; s <= steps; s++) {
+        const t = s / steps
+        points.push({ x: from.x + (to.x - from.x) * t, y: from.y + (to.y - from.y) * t })
+      }
+
+      const half = Math.floor(SHORTCUT_WIDTH / 2)
+      for (let s = 0; s < points.length - 1; s++) {
+        const p = points[s]
+        const q = points[s + 1]
+        const dx = q.x - p.x
+        const dy = q.y - p.y
+        const len = Math.hypot(dx, dy) || 1
+        const nx = -dy / len
+        const ny = dx / len
+        for (let off = -half; off <= half; off++) {
+          walkLine(
+            Math.round(p.x + nx * off),
+            Math.round(p.y + ny * off),
+            Math.round(q.x + nx * off),
+            Math.round(q.y + ny * off),
+            (x, y) => {
+              // Never overwrite the racing surface, only wall and run off.
+              const at = surfaceAt(grid, x, y)
+              if (at === S_WALL || at === S_GRAVEL) put(x, y, Math.abs(off) === half ? S_KERB : S_TARMAC)
+            },
+          )
+        }
+      }
+
+      shortcuts.push({ fromIndex: best.from, toIndex: best.to, points })
+    }
+  }
+
+  return { grid, centerline, meta, checkpoints, startSlots, pickups, shortcuts }
 }
 
 /**
@@ -757,7 +824,7 @@ export function make(options = {}) {
     ? ((options.circuitIndex % CIRCUITS.length) + CIRCUITS.length) % CIRCUITS.length
     : 0
   const circuit = CIRCUITS[circuitIndex]
-  const { grid, centerline, meta, checkpoints, startSlots, pickups } = carve(circuit.seed)
+  const { grid, centerline, meta, checkpoints, startSlots, pickups, shortcuts } = carve(circuit.seed)
 
   return {
     circuit,
@@ -768,6 +835,7 @@ export function make(options = {}) {
     checkpoints,
     startSlots,
     pickups: pickups ?? [],
+    shortcuts: shortcuts ?? [],
     cars: new Map(),
     nextId: 1,
     phase: 'waiting', // waiting | countdown | racing | over
