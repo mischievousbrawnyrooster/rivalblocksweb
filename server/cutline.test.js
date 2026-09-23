@@ -2617,6 +2617,17 @@ test('carve lists every ramp, and every ramp tile lies under one', () => {
         assert.ok(ramps.some((r) => underRamp(r, x, y)), `${circuit.name}: the ramp tile at ${x},${y} has no listed ramp over it`)
       }
     }
+    // And the reverse: a wedge over a tile that is not a ramp lifts a car the
+    // rules never launch. Later stages of carve lay pickup pads over some.
+    for (const r of ramps) {
+      const nx = -Math.sin(r.heading)
+      const ny = Math.cos(r.heading)
+      for (let k = -(r.width - 1) / 2; k <= (r.width - 1) / 2; k++) {
+        const x = Math.round(r.x + nx * k)
+        const y = Math.round(r.y + ny * k)
+        assert.equal(grid[y * RAMP_GRID + x], RAMP, `${circuit.name}: the ramp listed at ${r.x},${r.y} covers ${x},${y}, which is not a ramp tile`)
+      }
+    }
   }
   assert.ok(listed > 0, 'no circuit has a ramp, so nothing here was tested')
 })

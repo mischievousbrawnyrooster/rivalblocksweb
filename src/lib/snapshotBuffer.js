@@ -15,7 +15,7 @@
  * nothing simulates ahead of the server, the client merely declines to hold a
  * received position back by three frames.
  *
- * Only positions are blended. Tiles, phase, the board and everything else come
+ * Only positions and heading are blended. Tiles, phase, the board and everything else come
  * from the newer frame untouched: a half-collapsed tile is not a thing, and a
  * blended leaderboard would be nonsense.
  *
@@ -93,6 +93,14 @@ export function makeBuffer(delayMs, key = 'players') {
         // that nothing reads but everything passes along.
         if (Number.isFinite(a.fall) && Number.isFinite(p.fall)) {
           blended.fall = a.fall + (p.fall - a.fall) * alpha
+        }
+        // Cutline's cars face a heading. Taken from the newer frame alone it
+        // stepped at the rhythm frames arrived, so a car behind a chase camera
+        // twitched through corners. Blended the short way round, so a turn
+        // through +/-PI does not spin the long way.
+        if (Number.isFinite(a.heading) && Number.isFinite(p.heading)) {
+          const d = Math.atan2(Math.sin(p.heading - a.heading), Math.cos(p.heading - a.heading))
+          blended.heading = a.heading + d * alpha
         }
         return blended
       })

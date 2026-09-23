@@ -173,3 +173,30 @@ test('a key that matches nothing yields an empty array, which is how Cutline shi
   assert.deepEqual(s.players, [], 'a mismatched key is silent, not loud')
   assert.equal(s.cars.length, 1, 'the real bodies ride through untouched and unblended')
 })
+
+test('heading is blended between two frames, the same as position', () => {
+  // Position alone was blended, so a car's facing stepped at the rhythm frames
+  // arrived: measured, it froze on 153 of 506 cornering frames and then turned
+  // up to three times the usual amount in one.
+  const b = makeBuffer(100, 'cars')
+  b.push({ cars: [{ id: 'c-1', x: 0, y: 0, heading: 0 }] }, 0)
+  b.push({ cars: [{ id: 'c-1', x: 4, y: 0, heading: 1 }] }, 100)
+  const [car] = b.sample(150).cars
+  assert.ok(Math.abs(car.heading - 0.5) < 1e-6, `heading was ${car.heading}, expected the midpoint`)
+})
+
+test('heading is blended the short way round through +/-180 degrees', () => {
+  const b = makeBuffer(100, 'cars')
+  const nearPi = (179 * Math.PI) / 180
+  b.push({ cars: [{ id: 'c-1', x: 0, y: 0, heading: nearPi }] }, 0)
+  b.push({ cars: [{ id: 'c-1', x: 0, y: 0, heading: -nearPi }] }, 100)
+  const [car] = b.sample(150).cars
+  assert.ok(Math.abs(Math.cos(car.heading) + 1) < 1e-6, `heading ${car.heading} swung through 0 instead of 180`)
+})
+
+test('a body without a heading is not given one', () => {
+  const b = makeBuffer(100)
+  b.push({ players: [{ id: 1, x: 0, y: 0, z: 0, fall: 0 }] }, 0)
+  b.push({ players: [{ id: 1, x: 2, y: 0, z: 0, fall: 0 }] }, 100)
+  assert.ok(!('heading' in b.sample(150).players[0]), 'Blockout 3D bodies must not grow a heading')
+})

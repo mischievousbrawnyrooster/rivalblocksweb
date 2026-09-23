@@ -581,10 +581,10 @@ export function carve(seed) {
   }
 
   // 3. Decorate. Boost on straights, oil on corner exits, ramps on long straights.
-  //    Ramps are also listed, because the grid says where a ramp is but not
-  //    which way it faces, and the page draws each one as a wedge rising the way
-  //    the lap runs. Listing them costs no rule: the launch still reads the grid.
-  const ramps = []
+  //    Ramp strips are also remembered, because the grid says where a ramp is
+  //    but not which way it faces; `rampRuns` turns them into the list the page
+  //    draws once every later stage has stamped the grid.
+  const rampStrips = []
   for (let i = 0; i < centerline.length; i++) {
     const m = meta[i]
     const p = centerline[i]
@@ -598,11 +598,7 @@ export function carve(seed) {
     for (let off = -half; off <= half; off++) {
       put(p.x - t.y * off, p.y + t.x * off, surface)
     }
-    // Listed at the strip's middle tile, not the raw point, so the wedge drawn
-    // there covers the tiles a car is launched from rather than straddling them.
-    if (surface === S_RAMP) {
-      ramps.push({ x: Math.round(p.x), y: Math.round(p.y), heading: Math.atan2(t.y, t.x), width: 2 * half + 1 })
-    }
+    if (surface === S_RAMP) rampStrips.push({ p, t, half })
   }
 
   // 4. Pickup ranks, spread to the local width.
@@ -725,7 +721,39 @@ export function carve(seed) {
     }
   }
 
-  return { grid, centerline, meta, checkpoints, startSlots, pickups, shortcuts, ramps }
+  return { grid, centerline, meta, checkpoints, startSlots, pickups, shortcuts, ramps: rampRuns(grid, rampStrips) }
+}
+
+/**
+ * The ramps the page draws, read from the finished grid. Later stages lay
+ * pickup pads over some ramp tiles, and a wedge drawn over a pad lifts a car
+ * the rules never launch, so each strip becomes one entry per unbroken run of
+ * tiles that are still ramps. Each entry is centred on its tiles, not on the
+ * raw centre-line point, so the wedge covers exactly the tiles that launch.
+ */
+function rampRuns(grid, strips) {
+  const ramps = []
+  for (const { p, t, half } of strips) {
+    const heading = Math.atan2(t.y, t.x)
+    let run = []
+    const flush = () => {
+      if (run.length) {
+        const a = run[0]
+        const b = run[run.length - 1]
+        ramps.push({ x: (a.x + b.x) / 2, y: (a.y + b.y) / 2, heading, width: run.length })
+      }
+      run = []
+    }
+    // The same tiles stage 3 stamped, in order across the road.
+    for (let off = -half; off <= half; off++) {
+      const x = Math.round(p.x - t.y * off)
+      const y = Math.round(p.y + t.x * off)
+      if (surfaceAt(grid, x, y) === S_RAMP) run.push({ x, y })
+      else flush()
+    }
+    flush()
+  }
+  return ramps
 }
 
 /** Everything about a circuit that distinguishes it from another one. */

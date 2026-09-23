@@ -103,7 +103,9 @@ your own car at the newest one froze it on 67 of 165 frames and then jumped it
 double. In 2D the world stepped with it and hid that; behind a chase camera it
 read as the car stuttering. Interpolated, no frame freezes, for 60 ms of delay.
 Cutline has no mouse-look, so Blockout 3D's reason for the exemption does not
-apply.
+apply. `heading` is blended too, the short way round: taken from the newer
+frame alone, a car's facing froze on 153 of 506 cornering frames and then
+turned up to three times the usual amount in one.
 
 **Full state every tick, never diffs.** `snapshot()` returns `state.tiles` **by live reference**, not a copy. That is only safe because `server.js` calls `JSON.stringify(snapshot(match))` synchronously in the same turn as `tick()`. Never retain a snapshot across an await, a timer, or a later tick, and never stash them for diffing.
 
@@ -345,15 +347,21 @@ is nothing to lock. `BOARD_DIR` says where they live (`./data` in dev,
   a z axis would make this a different game.
 - **Cutline: ramps are listed as well as painted.** The grid says where a ramp
   is but not which way it faces, so `carve` also returns `ramps` (`{x, y,
-  heading, width}`, at the strip's middle tile) and `welcome` ships them. The
-  page draws a wedge rising the way the lap runs. The launch still reads only
-  the grid. A test runs bots over every ramp and fails if one is crossed
-  against its facing.
-- **Cutline: a car's drawn height is `carLift`, the higher of the ramp under it
-  and its jump arc.** The higher, not the sum, so a launched car rides up the
-  slope into its arc with no step. `RAMP_HEIGHT` stays below `AIR_LIFT` for the
-  same reason. The bumper eye rises by the same amount; chase and top-down hold
-  steady.
+  heading, width}`) and `welcome` ships them. The page draws a wedge rising the
+  way the lap runs. The launch still reads only the grid. `rampRuns` builds the
+  list from the finished grid, one entry per unbroken run of ramp tiles,
+  because pickup pads are laid over some ramp tiles later in `carve`; a wedge
+  over a pad lifted cars the rules never launched. Tests fail if a ramp tile
+  has no wedge, if a wedge covers a tile that is not a ramp, or if bots cross a
+  ramp against its facing.
+- **Cutline: a car's drawn height is `carLift`.** On a ramp it rides the slope;
+  off it the jump arc sits on a line from the lip's height down to the ground.
+  The rules renew a car's flight on every tick it spends on a ramp tile, so
+  `airT` is still 0 at the lip, and an arc that started from the ground there
+  dropped the car the lip's height in one frame. The bumper eye rises by the
+  same amount; chase and top-down hold steady. Not covered: a car still in the
+  air when it crosses a second ramp has its flight renewed by the rules, so it
+  is drawn snapping down onto that ramp.
 - **Cutline: game y maps to three.js +z, never -z.** `toWorld` in
   `raceCamera.js` is the only place the mapping lives, and every camera pose is
   built through it. Mapping y to -z mirrors the world: a right-hand steer shows
