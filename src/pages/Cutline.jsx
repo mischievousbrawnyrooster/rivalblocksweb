@@ -7,7 +7,15 @@ import { makeBuffer } from '../lib/snapshotBuffer.js'
 import { useTitle } from '../lib/useTitle.js'
 import { useFavicon } from '../lib/useFavicon.js'
 import { makeCutlineScene } from '../lib/cutlineScene.js'
-import { makeRaceCamera, stepCamera, DEFAULT_VIEW, CAR_ROOF, VIEW_CELLS } from '../lib/raceCamera.js'
+import {
+  makeRaceCamera,
+  stepCamera,
+  nextView,
+  isView,
+  DEFAULT_VIEW,
+  CAR_ROOF,
+  VIEW_CELLS,
+} from '../lib/raceCamera.js'
 import { wallBlocks } from '../lib/wallBlocks.js'
 import {
   GRID,
@@ -266,6 +274,19 @@ function itemLabel(item) {
   return 'EMPTY -'
 }
 
+const VIEW_KEY = 'cutline.view'
+const VIEW_LABEL = { top: 'Top-down', chase: 'Chase', bumper: 'Bumper' }
+
+function loadView() {
+  // localStorage can throw in a private window or with storage blocked.
+  try {
+    const v = window.localStorage.getItem(VIEW_KEY)
+    return isView(v) ? v : DEFAULT_VIEW
+  } catch {
+    return DEFAULT_VIEW
+  }
+}
+
 function statusLine(hud, myId) {
   if (!hud) return 'Connecting to Cutline match server.'
   if (hud.phase === 'waiting') {
@@ -313,7 +334,22 @@ export default function Cutline() {
   const sceneRef = useRef(null)
   const [webglFailed, setWebglFailed] = useState(false)
   const camRef = useRef(makeRaceCamera())
-  const viewRef = useRef(DEFAULT_VIEW)
+  // State for the button label, mirrored into a ref for the render loop, which
+  // runs outside React and must see a change on its very next frame.
+  const [view, setView] = useState(loadView)
+  const viewRef = useRef(view)
+  viewRef.current = view
+  const cycleView = useCallback(() => {
+    setView((v) => {
+      const next = nextView(v)
+      try {
+        window.localStorage.setItem(VIEW_KEY, next)
+      } catch {
+        // Not remembered, but the view still changes.
+      }
+      return next
+    })
+  }, [])
   const lastFrameRef = useRef(0)
   // A circuit arrives in `welcome`, possibly before the scene exists, so it is
   // held here and built by the render loop when the versions disagree.
@@ -402,6 +438,13 @@ export default function Cutline() {
   useEffect(() => {
     const onKeyDown = (e) => {
       if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return
+      // C cycles the view. Not on key repeat, or holding it spins through every
+      // view, and not with a modifier, so copying text leaves the view alone.
+      // Steering is untouched: it is relative to the car in every view.
+      if (e.code === 'KeyC' && !e.ctrlKey && !e.metaKey && !e.altKey) {
+        if (!e.repeat) cycleView()
+        return
+      }
       if (['Space', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.code)) {
         e.preventDefault()
       }
@@ -426,7 +469,7 @@ export default function Cutline() {
       window.removeEventListener('keyup', onKeyUp)
       window.removeEventListener('blur', onBlur)
     }
-  }, [])
+  }, [cycleView])
 
   // --- Input uplink tick loop -----------------------------------------------
   useEffect(() => {
@@ -1019,6 +1062,16 @@ export default function Cutline() {
               </div>
             </div>
           )}
+
+          <div className="mt-3 flex justify-end">
+            <button
+              type="button"
+              onClick={cycleView}
+              className="border border-line bg-surface px-4 py-2 text-xs font-bold uppercase tracking-[0.12em] text-fg transition-colors hover:border-flare hover:text-flare"
+            >
+              View: {VIEW_LABEL[view]} (C)
+            </button>
+          </div>
 
           {/* Fixed-height HUD strip below canvas so layout never reflows */}
           <div className="mt-3 grid grid-cols-2 sm:grid-cols-4 gap-px border border-line bg-line text-xs">
