@@ -23,6 +23,7 @@ npm run cutline  # Cutline                        :8088  ← /cutline-ws
 node server/cutline-select.mjs   # regenerate CIRCUITS by measured difference
 npm test         # node --test over src/lib and server/*.test.js
 npm run build    # static output to dist/
+npm run check:bundle   # after build: fails if three.js reaches the main chunk
 ```
 
 Each play route needs `npm run dev` **and** its own match server. They are
@@ -68,7 +69,11 @@ Three layers with a deliberate, enforced split:
 | `src/pages/Blockout3D.jsx` | Scene, camera, input, HUD | Simulation, prediction, rule checks |
 | `src/pages/VoidDrillers.jsx` | Canvas, camera, particles, HUD | Simulation, prediction, rule checks |
 | `src/pages/CipherRun.jsx` | Canvas, chibi runners, input, HUD | Simulation, prediction, rule checks |
-| `src/pages/Cutline.jsx` | Canvas, cars, HUD | Simulation, prediction, rule checks |
+| `src/pages/Cutline.jsx` | WebGL and overlay canvases, input, HUD | Simulation, prediction, rule checks |
+| `src/lib/cutlineScene.js` | Cutline's three.js scene | Game rules, simulation, prediction |
+| `src/lib/raceCamera.js` | Game-to-three.js mapping, view poses, smoothing | three.js, the DOM, any import |
+| `src/lib/wallBlocks.js` | Which wall tiles are drawn in 3D | three.js, the DOM, any import |
+| `src/lib/carLift.js` | How high a car is drawn: ramp slope or jump arc | three.js, the DOM, any import |
 
 
 `game.js` has zero imports on purpose — that purity is why all ~60 tests live against it and why `server.js` and `Play.jsx` have none. Put new logic there, not in the socket wrapper.
@@ -92,6 +97,13 @@ else stays smoothed 60 ms back (`sample(now, liveId)`). That is still not
 prediction — nothing simulates ahead of the server, and the position drawn is
 one the server has already sent. It is there because a camera attached to a
 body feels the replay delay as the whole world lagging the mouse.
+**Cutline does not exempt anyone** (`sample(now)`, no `liveId`). Its snapshots
+land unevenly (measured on Windows: 46 Hz, gaps of 16 or 30 ms), and drawing
+your own car at the newest one froze it on 67 of 165 frames and then jumped it
+double. In 2D the world stepped with it and hid that; behind a chase camera it
+read as the car stuttering. Interpolated, no frame freezes, for 60 ms of delay.
+Cutline has no mouse-look, so Blockout 3D's reason for the exemption does not
+apply.
 
 **Full state every tick, never diffs.** `snapshot()` returns `state.tiles` **by live reference**, not a copy. That is only safe because `server.js` calls `JSON.stringify(snapshot(match))` synchronously in the same turn as `tick()`. Never retain a snapshot across an await, a timer, or a later tick, and never stash them for diffing.
 
@@ -331,6 +343,42 @@ is nothing to lock. `BOARD_DIR` says where they live (`./data` in dev,
 - **Cutline: ramp height is render only.** The rules track `airUntil` and
   nothing else; `airT` exists for the page to draw an arc with. Giving the rules
   a z axis would make this a different game.
+- **Cutline: ramps are listed as well as painted.** The grid says where a ramp
+  is but not which way it faces, so `carve` also returns `ramps` (`{x, y,
+  heading, width}`, at the strip's middle tile) and `welcome` ships them. The
+  page draws a wedge rising the way the lap runs. The launch still reads only
+  the grid. A test runs bots over every ramp and fails if one is crossed
+  against its facing.
+- **Cutline: a car's drawn height is `carLift`, the higher of the ramp under it
+  and its jump arc.** The higher, not the sum, so a launched car rides up the
+  slope into its arc with no step. `RAMP_HEIGHT` stays below `AIR_LIFT` for the
+  same reason. The bumper eye rises by the same amount; chase and top-down hold
+  steady.
+- **Cutline: game y maps to three.js +z, never -z.** `toWorld` in
+  `raceCamera.js` is the only place the mapping lives, and every camera pose is
+  built through it. Mapping y to -z mirrors the world: a right-hand steer shows
+  as a left turn and the minimap disagrees with the view, and nothing errors.
+- **Cutline: the camera up vector is derived from the view, never fixed.**
+  three.js `lookAt` breaks when up is parallel to the view, and top-down looks
+  straight down while chase uses world up, so any fixed up vector goes
+  degenerate partway through a switch. `upFor` is perpendicular by construction.
+- **Cutline: bumper position is locked, never smoothed.** At top speed any lag
+  leaves the camera behind the bumper, inside the car. Switching into bumper is
+  therefore a cut, on purpose.
+- **Cutline: steering is never rotated by the camera.** Blockout Royale 3D
+  rotates input by camera yaw in `followCamera.worldDir`. Cutline steers a rate
+  relative to the car, and copying that rotation would break it.
+- **Cutline: `WALL_HEIGHT` and the chase camera height are one setting.**
+  `chaseClearance` says how far behind the car a wall must be before the chase
+  camera sees over it, and a test holds it under `CHASE_CLEAR_MAX`.
+- **Cutline is a lazy route, and `npm run check:bundle` enforces it.** three.js
+  is ~570 KB. Importing Cutline or Blockout 3D eagerly would add it to every page.
+- **Cutline's ground is the 2D prerender, used as one texture.** `setTrack`
+  disposes the previous circuit first, and `dispose` calls `forceContextLoss`.
+  Without the first, GPU memory grows every restart; without the second, WebGL
+  contexts pile up as a player clicks around the site (measured: 10 visits left
+  10 live contexts) until the browser kills the oldest. Checking this with full
+  page loads proves nothing, since a load frees every context anyway.
 - **Cutline: the car's collision shape derives from the car that is drawn.**
   `CAR_LENGTH` and `CAR_WIDTH` are the page's dimensions and the hitbox's, and
   `CAR_RADIUS` derives from `CAR_WIDTH`. They drifted once: the page drew a body
