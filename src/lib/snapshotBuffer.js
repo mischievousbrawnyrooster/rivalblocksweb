@@ -18,8 +18,15 @@
  * Only positions are blended. Tiles, phase, the board and everything else come
  * from the newer frame untouched: a half-collapsed tile is not a thing, and a
  * blended leaderboard would be nonsense.
+ *
+ * `key` names the array of bodies inside a snapshot, because the two games that
+ * use this buffer do not agree on the noun: Blockout 3D sends `players` and
+ * Cutline sends `cars`. It is a parameter rather than a rename because each
+ * game's snapshot should speak its own domain, and because a buffer that
+ * silently found nothing under the wrong key returned an empty array rather
+ * than an error. That is exactly how Cutline shipped rendering no cars at all.
  */
-export function makeBuffer(delayMs) {
+export function makeBuffer(delayMs, key = 'players') {
   const frames = []
 
   return {
@@ -55,11 +62,11 @@ export function makeBuffer(delayMs) {
       const alpha = span > 0 ? Math.max(0, Math.min(1, (t - older.at) / span)) : 1
 
       const newest = frames[frames.length - 1]
-      const livePlayer = liveId != null ? newest?.snap?.players?.find((p) => p.id === liveId) : null
+      const livePlayer = liveId != null ? newest?.snap?.[key]?.find((p) => p.id === liveId) : null
 
-      const was = new Map((older.snap.players ?? []).map((p) => [p.id, p]))
+      const was = new Map((older.snap[key] ?? []).map((p) => [p.id, p]))
       let liveIncluded = false
-      const players = (newer.snap.players ?? []).map((p) => {
+      const players = (newer.snap[key] ?? []).map((p) => {
         // The player this client is following is drawn where the server last
         // put them (the newest frame in the buffer), not three frames back.
         // With the camera attached to that body, holding it back is felt as
@@ -95,7 +102,7 @@ export function makeBuffer(delayMs) {
 
       return {
         ...newer.snap,
-        players,
+        [key]: players,
       }
     },
   }

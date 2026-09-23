@@ -215,6 +215,22 @@ export default function AdminMatch({ adminKey }) {
         controllable
         adminKey={adminKey}
       />
+      {/* Neither of these has an ARENAS entry, for the same reason Blockout 3D
+          has none: Cipher Run picks a protocol and Cutline rotates circuits, so
+          neither exposes a named arena to switch to. The arena row renders empty
+          and restart, botsonly and fill-to all still work. */}
+      <MatchPanel
+        title="Cipher Run"
+        path="/cipherrun-ws"
+        controllable
+        adminKey={adminKey}
+      />
+      <MatchPanel
+        title="Cutline"
+        path="/cutline-ws"
+        controllable
+        adminKey={adminKey}
+      />
     </div>
   )
 }

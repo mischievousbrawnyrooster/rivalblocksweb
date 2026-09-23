@@ -17,8 +17,12 @@ import {
   S_OIL,
   S_PICKUP,
   S_LINE,
+  S_GRAVEL,
+  S_RAMP,
   SURFACE_CHARS,
   decodeMap,
+  CAR_LENGTH,
+  CAR_WIDTH,
 } from '../../server/cutline.js'
 
 const CANVAS = 768
@@ -215,6 +219,33 @@ function prerender(map) {
         g.strokeStyle = 'rgba(56, 189, 248, 0.3)'
         g.lineWidth = 1
         g.stroke()
+      } else if (surface === S_GRAVEL) {
+        // Loose stone. Stippled so it reads as run off rather than as tarmac in
+        // a different shade, which colour alone would not carry.
+        g.fillStyle = '#4a4438'
+        g.fillRect(tx, ty, T, T)
+        g.fillStyle = 'rgba(0, 0, 0, 0.35)'
+        for (let d = 0; d < 6; d++) {
+          const gx = tx + ((x * 7 + y * 13 + d * 11) % T)
+          const gy = ty + ((x * 17 + y * 5 + d * 19) % T)
+          g.fillRect(gx, gy, 2, 2)
+        }
+      } else if (surface === S_RAMP) {
+        // A ramp reads as raised: a bright leading lip and chevrons pointing the
+        // way it launches, so it is never mistaken for a boost strip.
+        g.fillStyle = '#2b2118'
+        g.fillRect(tx, ty, T, T)
+        g.fillStyle = cWarn
+        g.fillRect(tx, ty, T, Math.max(2, T * 0.18))
+        g.strokeStyle = cWarn
+        g.lineWidth = 2
+        for (const cy of [ty + T * 0.45, ty + T * 0.72]) {
+          g.beginPath()
+          g.moveTo(tx + T * 0.2, cy + T * 0.12)
+          g.lineTo(tx + T * 0.5, cy - T * 0.08)
+          g.lineTo(tx + T * 0.8, cy + T * 0.12)
+          g.stroke()
+        }
       }
     }
   }
@@ -230,7 +261,7 @@ function formatLapTime(ms) {
 function itemLabel(item) {
   if (item === 'boost') return 'BOOST »'
   if (item === 'slick') return 'SLICK ◈'
-  if (item === 'wall') return 'WALL ≡'
+  if (item === 'banana') return 'BANANA ◑'
   return 'EMPTY -'
 }
 
@@ -266,11 +297,16 @@ export default function Cutline() {
   const [myId, setMyId] = useState(null)
   const [circuitName, setCircuitName] = useState('')
   const [hud, setHud] = useState(null)
+  // Crossing the line is the one moment in a race worth interrupting the screen
+  // for, and it was passing silently. `lapFlash` holds the lap just completed;
+  // `lastLapRef` is what stops the same crossing announcing itself every frame.
+  const [lapFlash, setLapFlash] = useState(null)
+  const lastLapRef = useRef(0)
 
   const wsRef = useRef(null)
   const canvasRef = useRef(null)
   const trackCanvasRef = useRef(null)
-  const bufRef = useRef(makeBuffer(DELAY_MS))
+  const bufRef = useRef(makeBuffer(DELAY_MS, 'cars'))
   const myIdRef = useRef(null)
   const keysRef = useRef(new Set())
   const wantsReadyRef = useRef(false)
@@ -285,7 +321,7 @@ export default function Cutline() {
     }
 
     wantsReadyRef.current = andReady
-    bufRef.current = makeBuffer(DELAY_MS)
+    bufRef.current = makeBuffer(DELAY_MS, 'cars')
     keysRef.current.clear()
     skidsRef.current = []
 
@@ -316,7 +352,7 @@ export default function Cutline() {
         setMyId(msg.id)
         setCircuitName(msg.circuit?.name ?? '')
         trackCanvasRef.current = prerender(decode(msg.circuit?.map ?? ''))
-        bufRef.current = makeBuffer(DELAY_MS)
+        bufRef.current = makeBuffer(DELAY_MS, 'cars')
         setStatus('live')
 
         if (wantsReadyRef.current) {
@@ -402,6 +438,30 @@ export default function Cutline() {
     return () => clearInterval(timer)
   }, [status])
 
+  // Announce a completed lap. Driven off the snapshot rather than a local guess,
+  // so it fires exactly when the server banked the lap and never when it did not.
+  useEffect(() => {
+    const mine = hud?.cars?.find((c) => c.id === myId)
+    if (!mine) return
+    if (mine.lap > lastLapRef.current) {
+      lastLapRef.current = mine.lap
+      if (mine.lap > 0) {
+        setLapFlash({ lap: mine.lap, of: hud.laps, at: Date.now() })
+      }
+    } else if (mine.lap < lastLapRef.current) {
+      // A restart resets the counter, so the next lap 1 still announces itself.
+      lastLapRef.current = mine.lap
+    }
+  }, [hud, myId])
+
+  // The banner clears itself. Keyed on `at` so a lap completed while one is
+  // already showing restarts the timer rather than inheriting the old one.
+  useEffect(() => {
+    if (!lapFlash) return
+    const id = setTimeout(() => setLapFlash(null), 1600)
+    return () => clearTimeout(id)
+  }, [lapFlash])
+
   // --- Render loop ----------------------------------------------------------
   useEffect(() => {
     if (status !== 'live') return
@@ -439,13 +499,17 @@ export default function Cutline() {
         return
       }
 
-      const cars = sampled.players ?? sampled.cars ?? []
+      // The buffer blends whichever array it was given the key for, so this is
+      // the interpolated list, not the raw newest frame.
+      const cars = sampled.cars ?? []
       const palette = resolvePalette()
 
       // --- 1. Follow Camera & Heading-Up Orientation -------------------------
       const me = cars.find((c) => c.id === myIdRef.current)
       const aliveCars = cars.filter((c) => c.alive)
-      const leaderCar = aliveCars[0] ?? cars[0]
+      // `cars` arrives in join order, not running order, so the first entry is
+      // whoever joined first. The leader is the car the server placed first.
+      const leaderCar = cars.find((c) => c.place === 1) ?? aliveCars[0] ?? cars[0]
       const focusCar = me && me.alive ? me : leaderCar
 
       const focusX = focusCar ? focusCar.x : GRID / 2
@@ -540,46 +604,38 @@ export default function Cutline() {
           ctx.fill()
 
           ctx.restore()
-        } else if (h.kind === 'wall') {
-          // Concrete impact crash barrier
+        } else if (h.kind === 'banana') {
+          // A banana peel. Small, bright and unmistakably not part of the road,
+          // because it is one use and you only get to see it once. Structure as
+          // well as colour: a crescent with a stalk, so it reads without relying
+          // on yellow alone.
           ctx.save()
           ctx.translate(hx, hy)
+          ctx.rotate(Math.sin(now / 600 + hx) * 0.3)
 
-          const bw = u * 0.85
-          const bh = u * 0.85
+          const r = u * 0.3
 
-          ctx.fillStyle = 'rgba(0, 0, 0, 0.5)'
-          ctx.fillRect(-bw / 2 + 3, -bh / 2 + 4, bw, bh)
-
-          ctx.fillStyle = '#1e1e24'
-          ctx.fillRect(-bw / 2, -bh / 2, bw, bh)
-
-          ctx.strokeStyle = '#3f3f46'
-          ctx.lineWidth = 1.5
-          ctx.strokeRect(-bw / 2, -bh / 2, bw, bh)
-
-          ctx.save()
+          ctx.fillStyle = 'rgba(0, 0, 0, 0.45)'
           ctx.beginPath()
-          ctx.rect(-bw / 2, -bh / 2, bw, bh)
-          ctx.clip()
-
-          ctx.strokeStyle = '#fbbf24'
-          ctx.lineWidth = 3.5
-          for (let d = -bw * 1.5; d <= bw * 1.5; d += 8) {
-            ctx.beginPath()
-            ctx.moveTo(d, -bh / 2 - 2)
-            ctx.lineTo(d + bh + 4, bh / 2 + 2)
-            ctx.stroke()
-          }
-          ctx.restore()
-
-          const flasherPulse = Math.sin(now / 100) > 0 ? 1 : 0.2
-          ctx.fillStyle = `rgba(245, 158, 11, ${0.4 + 0.6 * flasherPulse})`
-          ctx.beginPath()
-          ctx.arc(0, 0, u * 0.18, 0, Math.PI * 2)
+          ctx.ellipse(2, 3, r, r * 0.62, 0, 0, Math.PI * 2)
           ctx.fill()
-          ctx.strokeStyle = '#ffffff'
-          ctx.lineWidth = 1
+
+          ctx.fillStyle = '#facc15'
+          ctx.beginPath()
+          ctx.arc(0, 0, r, Math.PI * 0.15, Math.PI * 0.85)
+          ctx.arc(0, r * 0.42, r * 0.92, Math.PI * 0.85, Math.PI * 0.15, true)
+          ctx.closePath()
+          ctx.fill()
+
+          ctx.strokeStyle = '#a16207'
+          ctx.lineWidth = 1.2
+          ctx.stroke()
+
+          ctx.strokeStyle = '#713f12'
+          ctx.lineWidth = 2
+          ctx.beginPath()
+          ctx.moveTo(-r * 0.85, r * 0.1)
+          ctx.lineTo(-r * 1.15, -r * 0.35)
           ctx.stroke()
 
           ctx.restore()
@@ -654,13 +710,30 @@ export default function Cutline() {
         ctx.translate(cx, cy)
         ctx.rotate(car.heading)
 
-        const L = u * 1.45 // ~50px
-        const W = u * 0.82 // ~29px
+        // Drawn from the same constants the collision shape derives from, so
+        // the car you see and the car you hit are the same size.
+        const L = u * CAR_LENGTH
+        const W = u * CAR_WIDTH
         const halfL = L / 2
         const halfW = W / 2
 
         if (!alive) {
           ctx.globalAlpha = 0.35
+        }
+
+        // Render only: the server sends airborne and a normalised airT and the
+        // page invents the arc. No rule reads any of this back.
+        const lift = car.airborne ? Math.sin((car.airT ?? 0) * Math.PI) : 0
+        if (lift > 0) {
+          ctx.save()
+          ctx.globalAlpha = 0.35
+          ctx.fillStyle = '#000'
+          ctx.beginPath()
+          ctx.ellipse(0, lift * u * 0.5, L * 0.45, W * 0.4, 0, 0, Math.PI * 2)
+          ctx.fill()
+          ctx.restore()
+          ctx.translate(0, -lift * u * 0.5)
+          ctx.scale(1 + lift * 0.18, 1 + lift * 0.18)
         }
 
         // Dynamic Headlights (cast forward onto the track)
@@ -819,14 +892,29 @@ export default function Cutline() {
         renderWheel(halfL * 0.52, halfW * 0.78, steerAngle)
 
         // Car Body Drop Shadow
-        ctx.fillStyle = 'rgba(0, 0, 0, 0.45)'
-        ctx.beginPath()
-        if (typeof ctx.roundRect === 'function') {
-          ctx.roundRect(-halfL * 0.85 + 2, -halfW * 0.55 + 2, L * 0.85, W * 0.55, 4)
-        } else {
-          ctx.rect(-halfL * 0.85 + 2, -halfW * 0.55 + 2, L * 0.85, W * 0.55)
+        if (!car.airborne) {
+          ctx.fillStyle = 'rgba(0, 0, 0, 0.45)'
+          ctx.beginPath()
+          if (typeof ctx.roundRect === 'function') {
+            ctx.roundRect(-halfL * 0.85 + 2, -halfW * 0.55 + 2, L * 0.85, W * 0.55, 4)
+          } else {
+            ctx.rect(-halfL * 0.85 + 2, -halfW * 0.55 + 2, L * 0.85, W * 0.55)
+          }
+          ctx.fill()
         }
-        ctx.fill()
+
+        // Distinct airborne outline ring / glow aura (WCAG 1.4.1 compliance)
+        if (car.airborne && alive) {
+          ctx.save()
+          ctx.strokeStyle = '#fbbf24'
+          ctx.lineWidth = 2
+          ctx.shadowColor = '#fbbf24'
+          ctx.shadowBlur = 8
+          ctx.beginPath()
+          ctx.ellipse(0, 0, halfL * 1.15, halfW * 1.15, 0, 0, Math.PI * 2)
+          ctx.stroke()
+          ctx.restore()
+        }
 
         // Aerodynamic GT Chassis Body with sculpted wheel arches
         ctx.fillStyle = color
@@ -851,8 +939,8 @@ export default function Cutline() {
         ctx.closePath()
         ctx.fill()
 
-        ctx.strokeStyle = isMe ? '#ffffff' : '#0b0b0d'
-        ctx.lineWidth = isMe ? 1.8 : 1.2
+        ctx.strokeStyle = isMe ? '#ffffff' : (car.airborne && alive ? '#fbbf24' : '#0b0b0d')
+        ctx.lineWidth = isMe ? 1.8 : (car.airborne && alive ? 1.6 : 1.2)
         ctx.stroke()
 
         // Front Splitter Lip
@@ -1134,21 +1222,15 @@ export default function Cutline() {
             placeholder="Driver callsign"
             className="min-w-48 flex-1 border border-line bg-surface px-4 py-3.5 text-sm text-fg placeholder:text-muted focus:border-flare focus:outline-none"
           />
-          <div className="flex gap-2">
-            <button
-              type="submit"
-              className="bg-flare px-6 py-3.5 text-xs font-bold uppercase tracking-[0.12em] text-on-flare transition-opacity hover:opacity-90"
-            >
-              Enter Grid
-            </button>
-            <button
-              type="button"
-              onClick={() => connect(name, true)}
-              className="border border-line bg-surface px-5 py-3.5 text-xs font-bold uppercase tracking-[0.12em] text-fg transition-colors hover:border-flare hover:text-flare"
-            >
-              Start with bots
-            </button>
-          </div>
+          {/* Bots are chosen from inside the lobby, not from the join screen. You
+              name yourself and enter the grid first, so the decision to race AI
+              is made where you can already see who else turned up. */}
+          <button
+            type="submit"
+            className="bg-flare px-6 py-3.5 text-xs font-bold uppercase tracking-[0.12em] text-on-flare transition-opacity hover:opacity-90"
+          >
+            Enter Grid
+          </button>
         </form>
       </section>
     )
@@ -1198,7 +1280,9 @@ export default function Cutline() {
   const cars = hud?.cars ?? []
   const me = cars.find((c) => c.id === myId)
   const aliveCars = cars.filter((c) => c.alive)
-  const leaderCar = aliveCars[0] ?? cars[0]
+  // `cars` arrives in join order, not running order, so the first entry is
+      // whoever joined first. The leader is the car the server placed first.
+      const leaderCar = cars.find((c) => c.place === 1) ?? aliveCars[0] ?? cars[0]
 
   // Sorted roster by place/order
   const sortedRoster = [...cars].sort((a, b) => {
@@ -1254,6 +1338,25 @@ export default function Cutline() {
             aria-label={`Cutline circuit canvas. ${statusLine(hud, myId)}`}
             className="w-full max-w-[768px] aspect-square border border-line bg-bg select-none block"
           />
+
+          {/* Lap banner. aria-live so it is announced rather than only seen, and
+              pointer-events-none so it can never swallow a click meant for the
+              canvas underneath. */}
+          {lapFlash && (
+            <div
+              className="pointer-events-none absolute inset-x-0 top-10 flex justify-center"
+              aria-live="polite"
+            >
+              <div className="border border-flare bg-bg/85 px-8 py-4 text-center">
+                <p className="rule-label text-flare">
+                  {lapFlash.lap >= lapFlash.of ? 'Final lap complete' : 'Lap complete'}
+                </p>
+                <p className="display mt-1 text-4xl tabular-nums">
+                  {Math.min(lapFlash.lap + 1, lapFlash.of)} / {lapFlash.of}
+                </p>
+              </div>
+            </div>
+          )}
 
           {/* Fixed-height HUD strip below canvas so layout never reflows */}
           <div className="mt-3 grid grid-cols-2 sm:grid-cols-4 gap-px border border-line bg-line text-xs">
@@ -1329,6 +1432,11 @@ export default function Cutline() {
                         Slide
                       </span>
                     )}
+                    {car.airborne && isAlive && (
+                      <span className="text-[0.625rem] text-warn font-mono uppercase tracking-wider">
+                        Air ◬
+                      </span>
+                    )}
                     <span className="ml-auto font-mono text-xs tabular-nums text-muted">
                       {formatLapTime(car.bestLapMs)}
                     </span>
@@ -1401,6 +1509,14 @@ export default function Cutline() {
               <li className="flex items-center gap-2">
                 <span className="font-mono font-bold text-fg">▦ Line:</span>
                 <span>Chequered start, finish and timing line.</span>
+              </li>
+              <li className="flex items-center gap-2">
+                <span className="font-mono font-bold text-[#4a4438]">∴ Gravel:</span>
+                <span>Loose run-off stones, heavily scrubs speed.</span>
+              </li>
+              <li className="flex items-center gap-2">
+                <span className="font-mono font-bold text-warn">◬ Ramp:</span>
+                <span>Elevation kicker, launches car into the air.</span>
               </li>
             </ul>
           </div>

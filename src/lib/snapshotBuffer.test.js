@@ -134,3 +134,42 @@ test('a snapshot that does carry fall still blends it', () => {
   assert.ok(Number.isFinite(body.fall), 'fall must still interpolate for Blockout 3D')
   assert.ok(body.fall > 0 && body.fall <= 1)
 })
+
+test('a buffer keyed to another noun blends that array instead', () => {
+  // Cutline's snapshots call the array `cars`, not `players`. The buffer is
+  // shared, so the caller names the key rather than every game agreeing on one
+  // noun.
+  const b = makeBuffer(100, 'cars')
+  b.push({ cars: [{ id: 'c-1', x: 0, y: 0, heading: 0 }] }, 0)
+  b.push({ cars: [{ id: 'c-1', x: 4, y: 0, heading: 0 }] }, 100)
+
+  const s = b.sample(150)
+  assert.equal(s.players, undefined, 'it must not invent a players array')
+  assert.equal(s.cars.length, 1, 'the cars array must survive')
+  assert.ok(Math.abs(s.cars[0].x - 2) < 1e-6, `x was ${s.cars[0].x}, expected the midpoint`)
+})
+
+test('the default key is still players, so Blockout 3D is unaffected', () => {
+  const b = makeBuffer(100)
+  b.push({ players: [{ id: 1, x: 0, y: 0, z: 0, fall: 0 }] }, 0)
+  b.push({ players: [{ id: 1, x: 2, y: 0, z: 0, fall: 0 }] }, 100)
+  const s = b.sample(150)
+  assert.equal(s.players.length, 1)
+  assert.ok(Math.abs(s.players[0].x - 1) < 1e-6)
+})
+
+test('a key that matches nothing yields an empty array, which is how Cutline shipped blind', () => {
+  // This is the trap, written down. sample() cannot tell a snapshot with no
+  // bodies from a snapshot whose bodies are under a different name: both give
+  // back an empty array and no error. Cutline passed the default key while
+  // sending `cars`, so every frame rendered an empty track and 672 tests
+  // stayed green. If this assertion ever fails, the buffer learned to complain
+  // and this test should become that complaint.
+  const b = makeBuffer(100, 'players')
+  b.push({ cars: [{ id: 'c-1', x: 0, y: 0 }] }, 0)
+  b.push({ cars: [{ id: 'c-1', x: 4, y: 0 }] }, 100)
+
+  const s = b.sample(150)
+  assert.deepEqual(s.players, [], 'a mismatched key is silent, not loud')
+  assert.equal(s.cars.length, 1, 'the real bodies ride through untouched and unblended')
+})

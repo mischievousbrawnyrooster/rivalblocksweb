@@ -17,6 +17,7 @@ npm.cmd run blast:dm # Blastworks (Deathmatch)      127.0.0.1:8084  ← /blast-d
 npm.cmd run drillers # Void Drillers                127.0.0.1:8086  ← /voiddrillers-ws
 npm.cmd run cipher   # Cipher Run                   127.0.0.1:8087  ← /cipherrun-ws
 npm.cmd run cutline  # Cutline                      127.0.0.1:8088  ← /cutline-ws
+node server/cutline-select.mjs   # regenerate CIRCUITS by measured difference
 npm.cmd run build    # static production build to dist/
 ```
 
@@ -124,7 +125,12 @@ The project contains a static marketing SPA and seven authoritative multiplayer 
 
 ### Cutline (Elimination Circuit Racer)
 - **Steering Rate Control**: Steering is transmitted as a held rate (`steer: -1 | 0 | 1`) at 60 Hz (`TURN_RATE = 2.4` rad/s, `TURN_FALLOFF = 0.35`). Network latency is felt as steering inertia rather than nose-position drift, keeping the controls tight under strict server authority without prediction.
-- **Harmonic Circuit Centerlines**: Circuits are generated as polar harmonic curves (`HARMONICS = [2, 3, 4]`, `BASE_RADIUS = 30`), producing periodic closed loops without seams. Curvature is strictly bounded (`MAX_CORNER_RAD = 0.30`) so all turns remain driveable.
+- **Lattice Cycle**: A circuit is a closed cycle on a lattice, not a polar curve. The old centreline was `r(angle)` as a sum of harmonics, which is single valued in angle, so it always bent around the grid centre: every corner turned the same way and curvature was global, which is why every circuit read as the same deformed circle. A lattice cycle never revisits a vertex, which is what makes self-intersection impossible, and `cycleAccepted` refuses an oval rather than repairing one. `MIN_SIGN_CHANGES` is the rule that does that; loosening it brings the old defect back in a new shape.
+- **Derived Constants**: `LATTICE_CELL` is derived from `SEGMENT_WIDTH_MAX + MIN_WALL`. Two parallel corridors that merge read as a shortcut nobody designed, and the checkpoint ring rejects the lap that results. Every geometric constant derives from `SEGMENT_WIDTH_MAX` or from `meta[i].width`, never from a number written twice. A hardcoded `CHECKPOINT_RADIUS` of 4.0 survived one widening of the road and silently put the outer racing line out of reach: a car 4 tiles off centre missed 10 of 11 checkpoints and its lap never counted, which reads as a lap counter that randomly stops.
+- **Shortcuts**: Checkpoints sit only on the trunk, never on a shortcut branch and never inside the stretch a branch skips. Both routes then pass every checkpoint in order and the ring needs no knowledge that a branch exists.
+- **Ramps**: Ramp height is render only. The rules track `airUntil` and nothing else; `airT` exists for the page to draw an arc with. Giving the rules a z axis would make this a different game.
+- **Collision Shape**: The car's collision shape derives from the car that is drawn. `CAR_LENGTH` and `CAR_WIDTH` are the page's dimensions and the hitbox's, and `CAR_RADIUS` derives from `CAR_WIDTH`. They drifted once: the page drew a body 1.45 by 0.82 while walls were tested at a single point at the car's centre, so a nose could sit most of a tile inside a wall with nothing registering.
+- **Corner Vocabulary**: `MAX_CORNER_RAD` is the tightest entry in `CORNERS`, not a ceiling every circuit hugs. Corner speeds are derived from the handling model: `v = TURN_RATE / (k + TURN_RATE * TURN_FALLOFF / TOP_SPEED)`. The vocabulary spans flat out to 33% of top speed on purpose, because a racer whose corners never need a brake has removed the main thing a driver does.
 - **Static Track & Dynamic Hazards**: Carved track grids are run-length encoded and sent once on join via `welcome`. Active oil slicks and wall barriers reside in `state.hazards` (capped at `MAX_HAZARDS = 24`) rather than altering track tiles, keeping snapshots under 1 KB.
 - **Instant Cut on Leader Lap**: The moment the race leader crosses the start/finish line, the driver currently running in last place is cut immediately, regardless of where they are on the circuit.
 - **Flat Item Bag & Pure Slipstream**: Pickup crates yield boost, slick, or wall with equal probability regardless of race standing. Slipstream drafting behind leading cars is the sole catch-up mechanic.
