@@ -140,7 +140,8 @@ export const disconnectMatch = (match, id) => {
 
 const alivePlayers = (match) => [...match.players.values()].filter((p) => p.connected && p.run?.alive)
 const spectatorTarget = (match) => alivePlayers(match).sort((a, b) =>
-  b.run.score - a.run.score || b.run.x - a.run.x || String(a.id).localeCompare(String(b.id)))[0]
+  b.run.score - a.run.score || b.run.x - a.run.x ||
+  String(a.id).localeCompare(String(b.id), undefined, { numeric: true }))[0]
 
 export const stepMatch = (match) => {
   if (match.phase === 'countdown' && --match.countdown === 0) {
@@ -192,7 +193,8 @@ export const snapshot = (match, viewerId, board, personalBest) => {
   const viewedId = viewed?.id ?? match.lastViewedId
   const run = viewed?.run ?? match.players.get(viewedId)?.run
   return { t: 'snap', phase: match.phase, viewedId: viewedId ?? null, personalBest,
-    players: [...match.players.values()].map(playerView),
+    players: [...match.players.values()].filter((p) => !p.spectating && (p.connected || p.run))
+      .map(playerView),
     gates: gateWindow(match.seed, run?.x ?? 0), board }
 }
 
