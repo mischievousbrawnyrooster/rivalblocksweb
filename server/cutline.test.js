@@ -3581,3 +3581,132 @@ test('a rear-end hit shoves the car ahead and costs the one behind, conserving m
   assert.equal(a.vx, 10)
   assert.equal(b.vx, 4)
 })
+
+/** An open-ground car already drifting right at about 9 tiles/s. */
+function drifting() {
+  const { match, car } = openGround()
+  placed(match, car, { x: GRID / 2, y: GRID / 2, heading: 0, speed: 9 })
+  applyInput(match, car.id, { throttle: 1, steer: 1, drift: 1 })
+  for (let i = 0; i < 20; i++) stepCar(match, car, TICK_MS / 1000)
+  assert.equal(car.driftDir, 1, 'the setup must be drifting')
+  assert.ok(car.driftChain > 0, 'the setup must have built a chain')
+  return { match, car }
+}
+
+const lostIt = (car, why) => {
+  assert.equal(car.driftDir, 0, `${why}: the drift must end`)
+  assert.equal(car.driftScore, 0, `${why}: nothing is banked`)
+  assert.equal(car.driftEnd?.lost, true, `${why}: the end is recorded as lost`)
+}
+
+test('drift input is clamped to a boolean', () => {
+  const { match, car } = openGround()
+  for (const drift of [NaN, 'yes', '1', {}, [], null, undefined, 2]) {
+    applyInput(match, car.id, { drift })
+    assert.equal(car.drift, false, `${JSON.stringify(drift)} must not hold a drift`)
+  }
+  applyInput(match, car.id, { drift: 1 })
+  assert.equal(car.drift, true)
+  applyInput(match, car.id, { drift: true })
+  assert.equal(car.drift, true)
+})
+
+test('a drift needs Shift, a steer and DRIFT_MIN_SPEED', () => {
+  const at = (speed, input) => {
+    const { match, car } = openGround()
+    placed(match, car, { x: 20, y: GRID / 2, heading: 0, speed })
+    applyInput(match, car.id, input)
+    stepCar(match, car, TICK_MS / 1000)
+    stepCar(match, car, TICK_MS / 1000)
+    return car.driftDir
+  }
+  const fast = hd.DRIFT_MIN_SPEED + 2
+  assert.equal(at(fast, { drift: 1, steer: 1, throttle: 1 }), 1, 'right steer drifts right')
+  assert.equal(at(fast, { drift: 1, steer: -1, throttle: 1 }), -1, 'left steer drifts left')
+  assert.equal(at(hd.DRIFT_MIN_SPEED - 1, { drift: 1, steer: 1, throttle: 1 }), 0, 'too slow')
+  assert.equal(at(fast, { drift: 1, steer: 0, throttle: 1 }), 0, 'no steer')
+  assert.equal(at(fast, { drift: 0, steer: 1, throttle: 1 }), 0, 'no Shift')
+})
+
+test('at the same speed a drift turns the path tighter than grip and keeps its speed', () => {
+  const turned = (drift) => {
+    const { match, car } = openGround()
+    placed(match, car, { x: GRID / 2, y: GRID / 2, heading: 0, speed: 9 })
+    applyInput(match, car.id, { throttle: 1, steer: 1, drift: drift ? 1 : 0 })
+    let path = 0
+    let last = 0
+    for (let t = 0; t < 500; t += TICK_MS) {
+      const h = car.heading
+      stepCar(match, car, TICK_MS / 1000)
+      assert.ok(car.heading - h <= TURN_RATE * hd.DRIFT_TURN * (TICK_MS / 1000) + 1e-9, 'a step never out-turns TURN_RATE * DRIFT_TURN')
+      const dir = Math.atan2(car.vy, car.vx)
+      path += Math.atan2(Math.sin(dir - last), Math.cos(dir - last))
+      last = dir
+    }
+    return { path, speed: speedOf(car) }
+  }
+  const grip = turned(false)
+  const drift = turned(true)
+  assert.ok(drift.path > grip.path * 1.5, `drift turned ${drift.path.toFixed(2)} rad, grip ${grip.path.toFixed(2)}`)
+  assert.ok(drift.speed > grip.speed * 0.9, `a drift carries its speed: ${drift.speed.toFixed(2)} vs ${grip.speed.toFixed(2)}`)
+})
+
+test('letting go of Shift banks the chain', () => {
+  const { match, car } = drifting()
+  const chain = car.driftChain
+  applyInput(match, car.id, { throttle: 1, steer: 1, drift: 0 })
+  stepCar(match, car, TICK_MS / 1000)
+  assert.equal(car.driftDir, 0)
+  assert.equal(car.driftScore, Math.round(chain))
+  assert.deepEqual({ pts: car.driftEnd.pts, lost: car.driftEnd.lost }, { pts: Math.round(chain), lost: false })
+})
+
+test('a spin, leaving the ground, a hole or a wall loses the chain', () => {
+  {
+    const { match, car } = drifting()
+    car.spinUntil = match.now + hd.SPIN_MS
+    stepCar(match, car, TICK_MS / 1000)
+    lostIt(car, 'spun')
+  }
+  {
+    const { match, car } = drifting()
+    car.airUntil = match.now + hd.AIR_MS
+    car.airMs = hd.AIR_MS
+    stepCar(match, car, TICK_MS / 1000)
+    lostIt(car, 'airborne')
+    for (let t = 0; t < hd.AIR_MS + 200; t += TICK_MS) {
+      match.now += TICK_MS
+      stepCar(match, car, TICK_MS / 1000)
+    }
+    assert.ok(Number.isFinite(car.x) && Number.isFinite(car.y), 'it lands in one piece')
+  }
+  {
+    const { match, car } = drifting()
+    car.fellIn = { x: car.x, y: car.y, heading: 0, width: 3 }
+    car.fallUntil = match.now + hd.FALL_MS
+    stepCar(match, car, TICK_MS / 1000)
+    lostIt(car, 'down a hole')
+  }
+  {
+    const { match, car } = drifting()
+    // One row ahead of a car already turned to face +y, so it cannot miss.
+    wallRow(match, Math.round(car.y) + 1)
+    for (let i = 0; i < 120 && car.driftDir; i++) stepCar(match, car, TICK_MS / 1000)
+    lostIt(car, 'into a wall')
+  }
+})
+
+test('a new race starts every car with no drift and no drift points', () => {
+  const match = racing(2)
+  for (const car of match.cars.values()) {
+    Object.assign(car, { drift: true, driftDir: 1, driftChain: 500, driftScore: 9000, driftEnd: { pts: 500, lost: false, at: match.now } })
+  }
+  startRace(match)
+  for (const car of match.cars.values()) {
+    assert.equal(car.drift, false)
+    assert.equal(car.driftDir, 0)
+    assert.equal(car.driftChain, 0)
+    assert.equal(car.driftScore, 0)
+    assert.equal(car.driftEnd, null)
+  }
+})
