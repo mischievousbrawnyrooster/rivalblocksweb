@@ -91,7 +91,13 @@ A drift never raises the speed cap. It changes turning and grip only.
   `ACCEL_FADE` and `DRAG` are retuned together so 0 to `TOP_SPEED` takes about
   3 s and thrust at `TOP_SPEED` still exceeds drag (a test holds this).
 * `BRAKE` lowered so top speed to a stop takes about 1 s.
-* Coasting keeps the existing `DRAG`-driven slow-down.
+* Brake cuts thrust. Measured in the prototype: with the weaker brake, a car
+  holding both (every bot does) accelerated below about 7 tiles/s instead of
+  slowing.
+* Coasting keeps the existing `DRAG`-driven slow-down, with `DRAG` lowered so
+  a lifted car rolls on rather than being engine braked.
+* Prototype values: `ACCEL` 17, `ACCEL_FADE` 0.56, `BRAKE` 11, `DRAG` 0.5.
+  Measured 0 to top in 2.85 s and top to a stop in 0.99 s.
 
 ### 3d. Walls
 
@@ -132,14 +138,21 @@ The per-axis check stays; the blocked axis is the wall normal.
 
 ### Physics while drifting
 
-* Lateral grip is `min(surface grip, DRIFT_GRIP)`: looser than gravel, more
-  bite than oil.
-* Turn rate is `TURN_RATE * DRIFT_TURN` (about 1.5x) with `TURN_FALLOFF`
+* Turn rate is `TURN_RATE * DRIFT_TURN` (1.8x) with `TURN_FALLOFF`
   mostly waived, driven by `driftDir` plus the driver's steer: into the drift
   tightens, centred holds, counter-steer widens.
-* Extra drag `DRIFT_DRAG`, so a drift costs some speed.
-* Intended outcome: a hairpin taken at about 8 tiles/s where grip needs about
-  4.5; a sweeper slower drifted than gripped.
+* Sideways speed is turned into forward speed rather than scrubbed, so the
+  drift carries its speed round the corner. Without this, the prototype
+  showed the turn rate a hairpin needs bleeding speed faster than any throttle
+  could replace. Lateral grip is `min(surface grip, DRIFT_GRIP)`, and
+  `DRIFT_GRIP` (6, a little under tarmac's 7) only sets how sideways the car
+  sits: about 40 to 45 degrees of slip.
+* Extra drag `DRIFT_DRAG`, so a drift costs speed: little at 8 tiles/s, where
+  thrust covers it, and more near the top, which is what makes a sweeper
+  slower drifted than gripped.
+* Measured in the prototype: at 9 tiles/s a drift turns the car's path at
+  about 0.5 rad per tile, near the hairpin's 0.6, where grip manages about
+  0.25 at that speed.
 
 ### End
 
@@ -155,6 +168,13 @@ The per-axis check stays; the blocked axis is the wall normal.
 * `driftScore` resets in `startRace`. It is never passed to the board.
 
 ### Snapshot
+
+**The frame is already near its budget.** Eight cars and a full hazard list
+measure 3.8 KB today, and the drift fields add up to 85 bytes a car. So
+`drafting`, `boosting`, `sliding`, `spinning` and `airborne`, sent as `false`
+on every car every tick, join the rare-flag rule and are sent only while true.
+That frees about 670 bytes. Every reader on the page already treats a missing
+flag as false.
 
 Rare-flag rule, sent only while true, to keep eight cars inside 4 KB:
 
@@ -193,7 +213,8 @@ render, not prediction.
 
 * `buildCar`: body, cabin and lamps move into a `chassis` group that takes roll,
   pitch and bounce. Wheels stay on the ground.
-* Wheels spin by distance travelled over wheel radius.
+* Wheel spin is dropped: the wheels are plain untextured cylinders, so a
+  spinning one looks exactly like a still one.
 
 ### 5c. Drift effects
 
@@ -209,7 +230,8 @@ render, not prediction.
   struck through when lost. Different words and shapes, not only colour
   (WCAG 1.4.1).
 * Race total: a `DRIFT` line in the top-left panel.
-* Results table: a Drift column beside best lap.
+* Driver Roster (the sidebar list, which is where best lap is shown): a Drift
+  column beside Best Lap.
 * The `sr-only` line includes the race total.
 
 ### 5e. Needle speedometer (`drawHud`)
