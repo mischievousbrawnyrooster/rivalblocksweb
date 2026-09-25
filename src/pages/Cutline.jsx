@@ -735,9 +735,10 @@ export default function Cutline() {
   const lastFrameRef = useRef(0)
   // The speed the dial shows, eased toward the snapshot's so the needle glides.
   const shownSpeedRef = useRef(0)
-  // When this client first saw the current drift end, so its popup rises and
-  // fades from then. The rules decide the end; this only times the drawing.
-  const driftEndRef = useRef({ key: null, at: 0 })
+  // Timed from the moment a drift ends, so its popup rises and fades from
+  // then. Two ends worth the same points both show: this watches the edge
+  // where `drift` goes from truthy to falsy, never the end's value.
+  const driftEndRef = useRef({ was: false, at: 0 })
   // A circuit arrives in `welcome`, possibly before the scene exists, so it is
   // held here and built by the render loop when the versions disagree.
   const gridRef = useRef(null)
@@ -1253,8 +1254,8 @@ export default function Cutline() {
           leader: leaderCar,
           shownSpeed: shownSpeedRef.current,
         })
-        const endKey = me.driftEnd ? `${me.driftEnd.pts}:${me.driftEnd.lost}` : null
-        if (endKey !== driftEndRef.current.key) driftEndRef.current = { key: endKey, at: now }
+        if (driftEndRef.current.was && !me.drift && me.driftEnd) driftEndRef.current.at = now
+        driftEndRef.current.was = Boolean(me.drift)
         if (sampled.phase === 'racing' && (me.drift || me.driftEnd)) {
           drawDrift(ctx, me, now, me.driftEnd && { ...me.driftEnd, at: driftEndRef.current.at })
         }
