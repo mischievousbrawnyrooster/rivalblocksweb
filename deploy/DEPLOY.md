@@ -120,7 +120,7 @@ disk, and the config has not changed.
 
 ## The match servers
 
-`/play` needs a process holding the match, and there are eight of them — one per
+`/play` needs a process holding the match, and there are nine of them — one per
 game, plus a second Blastworks for the other mode. nginx keeps serving the site
 exactly as before and proxies each path to its own port.
 
@@ -134,6 +134,7 @@ exactly as before and proxies each path to its own port.
 | `/voiddrillers-ws` | 8086 | `server/voiddrillers-server.js` | Void Drillers |
 | `/cipherrun-ws` | 8087 | `server/cipherrun-server.js` | Cipher Run |
 | `/cutline-ws` | 8088 | `server/cutline-server.js` | Cutline |
+| `/ventline-ws` | 8089 | `server/ventline-server.js` | Ventline, solo and live |
 
 **No path but the first may begin with `/ws`.** nginx matches locations by
 prefix, so `/ws-fracture` would be swallowed by the Blockout Royale rule and
@@ -144,6 +145,9 @@ sides.
 Each process holds its own match in memory and knows its own port, so one
 crashing takes nothing else with it and there is no configuration to keep in
 step between them.
+Ventline's solo runs and live rounds share its one process and its one
+`BOARD_DIR/board-ventline.json` file. Keep runtime board JSON in `BOARD_DIR`;
+never copy it into `public/` or `dist/`.
 
 ### Install Node (once)
 
@@ -215,7 +219,8 @@ sudo systemctl enable --now \
     rivalblocks@blockout3d-server \
     rivalblocks@voiddrillers-server \
     rivalblocks@cipherrun-server \
-    rivalblocks@cutline-server
+    rivalblocks@cutline-server \
+    rivalblocks@ventline-server
 systemctl status "rivalblocks@*"
 ```
 
@@ -250,17 +255,22 @@ If a board never appears, the handshake is the first suspect. Check every path �
 a mistake in the prefix rules shows as one game working and another not:
 
 ```bash
-for path in /ws /fracture-ws /blast-ws /blast-dm-ws /blockout3d-ws /voiddrillers-ws /cipherrun-ws /cutline-ws; do
+for path in /ws /fracture-ws /blast-ws /blast-dm-ws /blockout3d-ws /voiddrillers-ws /cipherrun-ws /cutline-ws /ventline-ws; do
   printf "%s " "$path"
-  curl -s -o /dev/null -w "%{http_code}\n" -N \
+  set --
+  if [ "$path" = /ventline-ws ]; then set -- -H 'Sec-WebSocket-Protocol: ventline.v1'; fi
+  curl --max-time 3 -s -o /dev/null -w "%{http_code}\n" -N \
     -H "Connection: Upgrade" -H "Upgrade: websocket" \
     -H "Sec-WebSocket-Version: 13" -H "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==" \
-    "http://localhost$path"
+    "$@" \
+    "http://localhost$path" || [ "$?" -eq 28 ]
 done
 ```
 
-Expect `101` from each. Anything else means that `location` block did not take,
-or the service behind it is down — check
+`curl` stays connected after an upgrade, so the timeout bounds each probe and
+lets the loop advance. Timeout exit 28 is expected; the printed `101` is the
+success signal. Anything else means the `location` block did not take or the
+service behind it is down — check
 `journalctl -u rivalblocks@<instance> -n 50`.
 
 The leaderboard is an ordinary GET, so it needs no special handling:
@@ -286,7 +296,8 @@ sudo systemctl start \
     rivalblocks@blockout3d-server \
     rivalblocks@voiddrillers-server \
     rivalblocks@cipherrun-server \
-    rivalblocks@cutline-server
+    rivalblocks@cutline-server \
+    rivalblocks@ventline-server
 ```
 
 nginx needs nothing unless its config changed. The leaderboard is untouched by
@@ -351,7 +362,7 @@ into one service directory per server — it reads the directory name to know wh
 server it is starting.
 
 ```sh
-for s in server fracture-server blastworks-server blastworks-dm blockout3d-server voiddrillers-server cipherrun-server cutline-server; do
+for s in server fracture-server blastworks-server blastworks-dm blockout3d-server voiddrillers-server cipherrun-server cutline-server ventline-server; do
   sudo mkdir -p "/etc/sv/rivalblocks-$s"
   sudo cp rivalblocks.run "/etc/sv/rivalblocks-$s/run"
   sudo chmod +x "/etc/sv/rivalblocks-$s/run"

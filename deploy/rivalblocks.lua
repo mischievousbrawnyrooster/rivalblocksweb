@@ -21,13 +21,13 @@
 --
 --   2. By the path in the upgrade request -- /ws, /fracture-ws, /blast-ws,
 --      /blast-dm-ws, /blockout3d-ws, /voiddrillers-ws, /cipherrun-ws,
---      /cutline-ws. Needs the handshake in the capture but
+--      /cutline-ws, /ventline-ws. Needs the handshake in the capture but
 --      nothing whatsoever from the client, so it reads captures taken before
 --      any of this existed. It is also the only signal that survives a proxy:
 --      capture at the browser and every game shares one port, 5173 in dev and
 --      80 deployed, but the path still differs.
 --
---   3. By port. A frame on 8081..8088 that looks like our JSON is claimed
+--   3. By port. A frame on 8081..8089 that looks like our JSON is claimed
 --      without a handshake at all, which is what reads a capture started in
 --      the middle of a session. Only true on the loopback hop to the match
 --      server, where the ports are the real ones.
@@ -45,6 +45,7 @@ local games = {
   { key = 'voiddrillers.v1', id = 'voiddrillers', title = 'Void Drillers', col = 'VOIDDRILLERS', ports = { 8086 } },
   { key = 'cipherrun.v1',  id = 'cipherrun',  title = 'Cipher Run',         col = 'CIPHERRUN',  ports = { 8087 } },
   { key = 'cutline.v1',    id = 'cutline',    title = 'Cutline',            col = 'CUTLINE',    ports = { 8088 } },
+  { key = 'ventline.v1',   id = 'ventline',   title = 'Ventline',           col = 'VENTLINE',   ports = { 8089 } },
 }
 
 -- Every field is declared for every game rather than only the ones that game
@@ -83,6 +84,7 @@ local inputs = {
   voiddrillers = { join=1, input=1, ready=1 },
   cipherrun  = { join=1, input=1, vote=1, avatar=1, ready=1, pick=1 },
   cutline    = { join=1, input=1, ready=1 },
+  ventline   = { join=1, ready=1, flap=1, retry=1 },
 }
 
 local admin = { admin=1, kick=1, restart=1, botsonly=1, bots=1, arena=1 }
@@ -101,6 +103,7 @@ local by_path = {
   ['/voiddrillers-ws'] = 'voiddrillers',
   ['/cipherrun-ws']  = 'cipherrun',
   ['/cutline-ws']    = 'cutline',
+  ['/ventline-ws']   = 'ventline',
 }
 
 local f_stream = Field.new('tcp.stream')
