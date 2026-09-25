@@ -112,7 +112,7 @@ setInterval(() => {
     stepMatch(match)
     if (match.phase === 'over') {
       keep.bank(match, matchResults(match))
-      if (++overTicks >= 250) restartMatch()
+      if (++overTicks > 250) restartMatch()
     }
     // Snapshot output may contain live references; serialize in this tick.
     for (const ws of wss.clients) {

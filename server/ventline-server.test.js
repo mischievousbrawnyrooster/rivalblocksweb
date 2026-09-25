@@ -57,7 +57,7 @@ const send = (ws, value) => ws.send(JSON.stringify(value))
 const messages = (ws) => {
   const queue = []
   ws.on('message', raw => queue.push(JSON.parse(raw)))
-  return async (predicate, timeout = 5000) => {
+  const next = async (predicate, timeout = 5000) => {
     const until = Date.now() + timeout
     while (Date.now() < until) {
       const index = queue.findIndex(predicate)
@@ -66,6 +66,8 @@ const messages = (ws) => {
     }
     throw new Error('expected frame timed out')
   }
+  next.clear = () => { queue.length = 0 }
+  return next
 }
 const board = dir => JSON.parse(readFileSync(join(dir, 'board-ventline.json'), 'utf8'))
 const row = (dir, name) => board(dir).players.find(player => player.name === name)
@@ -141,6 +143,10 @@ test('two live players share gates, spectators cannot flap, and live round banks
   const wc = await nextC(m => m.t === 'welcome')
   const watched = await nextC(m => m.t === 'snap' && m.phase === 'playing')
   assert.equal(watched.players.some(p => p.id === wc.id), false)
+  let resultFrames = 0
+  a.on('message', raw => {
+    if (JSON.parse(raw).phase === 'over') resultFrames++
+  })
   send(c, { t: 'flap' })
   send(c, { t: 'score', score: 9999 })
   await Promise.all([
@@ -152,10 +158,19 @@ test('two live players share gates, spectators cannot flap, and live round banks
   assert.equal(row(dir, 'Live A').matches, 1)
   assert.equal(row(dir, 'Live B').matches, 1)
   assert.equal(row(dir, 'Live A').bestScore, 0)
-  const lobby = await nextA(m => m.t === 'snap' && m.phase === 'lobby', 6000)
-  assert.deepEqual(lobby.players.map(p => p.id), [wa.id, wb.id])
+  const lobby = await nextA(m => m.t === 'snap' && m.phase === 'lobby' &&
+    m.players.some(p => p.id === wc.id), 12000)
+  assert.equal(resultFrames, 250)
+  assert.deepEqual(lobby.players.map(p => p.id), [wa.id, wb.id, wc.id])
   assert.equal(row(dir, 'Live A').matches, 1)
   assert.equal(row(dir, 'Live B').matches, 1)
+  nextA.clear()
+  send(a, { t: 'ready' })
+  await new Promise(resolve => setTimeout(resolve, 100))
+  nextA.clear()
+  assert.equal((await nextA(m => m.t === 'snap')).phase, 'lobby')
+  send(b, { t: 'ready' })
+  assert.equal((await nextA(m => m.t === 'snap' && m.phase === 'countdown')).phase, 'countdown')
 })
 
 test('wrong handshake and malformed or oversized frames do not crash the process', async t => {
