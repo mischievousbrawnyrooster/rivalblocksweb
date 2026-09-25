@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { projectWorld, projectMap } from './ventlineView.js'
+import { projectWorld, projectMap, mapMarkers } from './ventlineView.js'
 import { gateAt } from '../../server/ventline.js'
 
 test('camera movement shifts a shutter while world height stays scaled', () => {
@@ -54,4 +54,26 @@ test('map projects authoritative player coordinates and keeps overlapping slots 
   assert.equal(view.players[0].solid, true)
   assert.equal(view.players[1].solid, false)
   assert.deepEqual(snapshot.players.map(player => [player.x, player.y]), [[1200, 200], [1200, 200]])
+})
+
+test('coincident rival and viewed player share one solid marker with both slot labels', () => {
+  const view = projectMap({ viewedId: 'p1', gates: [gateAt(7, 5)], players: [
+    { id: 'p2', slot: 1, x: 1200, y: 200, alive: true },
+    { id: 'p1', slot: 0, x: 1200, y: 200, alive: true },
+  ] }, 160, 100)
+  assert.deepEqual(mapMarkers(view.players, 1000, new Map()), [
+    { x: 40, y: view.players[0].y, solid: true, labels: ['1', '2'] },
+  ])
+})
+
+test('result markers retain only crash Xs visible at freeze time', () => {
+  const players = [
+    { id: 'p1', slot: 0, x: 20, y: 50, alive: true, solid: true, label: '1' },
+    { id: 'p2', slot: 1, x: 40, y: 50, alive: false, solid: false, label: '2' },
+    { id: 'p3', slot: 2, x: 60, y: 50, alive: false, solid: false, label: '3' },
+  ]
+  const crashUntil = new Map([['p2', 1500], ['p3', 800]])
+  const frozen = new Set(['p2'])
+  assert.deepEqual(mapMarkers(players, 1000, crashUntil, frozen), mapMarkers(players, 2500, crashUntil, frozen))
+  assert.deepEqual(mapMarkers(players, 2500, crashUntil, frozen).map(marker => marker.labels), [['1'], ['×2']])
 })

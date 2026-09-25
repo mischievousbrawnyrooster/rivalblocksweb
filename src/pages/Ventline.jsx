@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { useTitle } from '../lib/useTitle.js'
-import { projectWorld, projectMap } from '../lib/ventlineView.js'
+import { projectWorld, projectMap, mapMarkers } from '../lib/ventlineView.js'
 
 const W = 960
 const H = 600
@@ -97,7 +97,7 @@ function drawDrone(ctx, player, cameraX, c, flash, alpha = 1, label = '') {
   ctx.restore()
 }
 
-function drawMap(ctx, snap, c, now, crashUntil) {
+function drawMap(ctx, snap, c, now, crashUntil, frozenCrashes) {
   ctx.clearRect(0, 0, 176, 128)
   if (!snap?.viewedId) return
   const x = 8, y = 22, w = 160, h = 100
@@ -132,18 +132,18 @@ function drawMap(ctx, snap, c, now, crashUntil) {
       ctx.fillText('↯', gate.x + 4, (gate.charged.lo + gate.charged.hi) / 2 + 3)
     }
   }
-  for (const player of map.players) {
-    if (!player.alive && now > (crashUntil.get(player.id) ?? 0)) continue
-    if (player.x < 0 || player.x > w || player.y < 0 || player.y > h) continue
-    ctx.strokeStyle = player.solid ? c.flare : c.fg
-    ctx.fillStyle = player.solid ? c.flare : c.hole
+  for (const marker of mapMarkers(map.players, now, crashUntil, frozenCrashes)) {
+    if (marker.x < 0 || marker.x > w || marker.y < 0 || marker.y > h) continue
+    ctx.strokeStyle = marker.solid ? c.flare : c.fg
+    ctx.fillStyle = marker.solid ? c.flare : c.hole
     ctx.lineWidth = 1.5
-    ctx.beginPath(); ctx.arc(player.x, player.y, 4, 0, Math.PI * 2)
+    ctx.beginPath(); ctx.arc(marker.x, marker.y, 4, 0, Math.PI * 2)
     ctx.fill(); ctx.stroke()
-    ctx.fillStyle = c.fg
+    ctx.fillStyle = document.documentElement.dataset.theme === 'light' ? c.surface : c.fg
     ctx.font = 'bold 10px ui-monospace, monospace'
     ctx.textAlign = 'center'
-    ctx.fillText(player.alive ? player.label : '×', player.labelX, player.labelY)
+    ctx.fillText(marker.labels.join(' '), Math.max(14, Math.min(w - 14, marker.x)),
+      marker.y < 12 ? marker.y + 16 : marker.y - 7)
   }
   ctx.restore()
 }
@@ -211,6 +211,7 @@ export default function Ventline() {
   const receivedAtRef = useRef(0)
   const intervalRef = useRef(50)
   const finalMapRef = useRef(null)
+  const finalCrashesRef = useRef(null)
   const crashUntilRef = useRef(new Map())
   const idRef = useRef(null)
   const audioRef = useRef(null)
@@ -256,6 +257,7 @@ export default function Ventline() {
     snapRef.current = null
     previousRef.current = null
     finalMapRef.current = null
+    finalCrashesRef.current = null
     crashUntilRef.current.clear()
     idRef.current = null
     eventSeqRef.current = 0
@@ -287,8 +289,14 @@ export default function Ventline() {
       if (receivedAtRef.current) intervalRef.current = Math.max(16, receivedAt - receivedAtRef.current)
       receivedAtRef.current = receivedAt
       snapRef.current = message
-      if (message.phase === 'over') finalMapRef.current ??= message
-      else finalMapRef.current = null
+      if (message.phase === 'over' && !finalMapRef.current) {
+        finalMapRef.current = message
+        finalCrashesRef.current = new Set(message.players.filter(player => !player.alive &&
+          receivedAt <= (crashUntilRef.current.get(player.id) ?? 0)).map(player => player.id))
+      } else if (message.phase !== 'over') {
+        finalMapRef.current = null
+        finalCrashesRef.current = null
+      }
       setSnap(message)
       if (previousPhase && previousPhase !== 'lobby' && message.phase === 'lobby') {
         setReady(false)
@@ -327,7 +335,8 @@ export default function Ventline() {
     const render = now => {
       draw(ctx, snapRef.current, previousRef.current, receivedAtRef.current, intervalRef.current,
         idRef.current, now, cueUntilRef.current, reducedRef.current)
-      drawMap(mapCtx, finalMapRef.current ?? snapRef.current, palette(), now, crashUntilRef.current)
+      drawMap(mapCtx, finalMapRef.current ?? snapRef.current, palette(), now,
+        crashUntilRef.current, finalCrashesRef.current)
       frame = requestAnimationFrame(render)
     }
     frame = requestAnimationFrame(render)

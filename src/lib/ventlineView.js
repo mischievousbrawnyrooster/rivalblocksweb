@@ -29,8 +29,22 @@ export function projectMap(snapshot, width, height) {
       solid: player.id === snapshot.viewedId,
       alive: player.alive,
       label: String(player.slot + 1),
-      labelX: (player.x - origin) * scaleX + (player.slot % 2 ? 9 : -9),
-      labelY: player.y * scaleY + 3 + Math.floor(player.slot / 2) * 9,
     }))
   return { gates, players }
+}
+
+export function mapMarkers(players, now, crashUntil, frozenCrashes = null) {
+  const groups = new Map()
+  for (const player of players) {
+    if (!player.alive && !(frozenCrashes
+      ? frozenCrashes.has(player.id) : now <= (crashUntil.get(player.id) ?? 0))) continue
+    const key = `${player.x}:${player.y}`
+    if (!groups.has(key)) groups.set(key, { x: player.x, y: player.y, solid: false, labels: [] })
+    const marker = groups.get(key)
+    marker.solid ||= player.solid
+    marker.labels.push({ slot: player.slot, text: player.alive ? player.label : `×${player.label}` })
+  }
+  return [...groups.values()].map(marker => ({ ...marker,
+    labels: marker.labels.sort((a, b) => a.slot - b.slot).map(label => label.text),
+  }))
 }
