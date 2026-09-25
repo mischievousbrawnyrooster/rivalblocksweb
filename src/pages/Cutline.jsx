@@ -1488,45 +1488,6 @@ export default function Cutline() {
               </div>
             </dl>
           </div>
-
-          {/* Track Surface Guide */}
-          <div>
-            <p className="rule-label">Track Surface Guide</p>
-            <ul className="mt-2 space-y-1.5 text-xs text-muted">
-              <li className="flex items-center gap-2">
-                <span className="font-mono font-bold text-fg">· Tarmac:</span>
-                <span>Standard racing asphalt, peak grip.</span>
-              </li>
-              <li className="flex items-center gap-2">
-                <span className="font-mono font-bold text-warn">≡ Kerb:</span>
-                <span>Striped rumble boundary, reduces lateral grip.</span>
-              </li>
-              <li className="flex items-center gap-2">
-                <span className="font-mono font-bold text-flare">» Boost:</span>
-                <span>Speed induction strip, surges acceleration.</span>
-              </li>
-              <li className="flex items-center gap-2">
-                <span className="font-mono font-bold text-fg">◈ Oil:</span>
-                <span>Slick hazard surface, scrubs tire traction.</span>
-              </li>
-              <li className="flex items-center gap-2">
-                <span className="font-mono font-bold text-flare">✶ Item:</span>
-                <span>Pickup crate granting Boost, Slick, or Barrier.</span>
-              </li>
-              <li className="flex items-center gap-2">
-                <span className="font-mono font-bold text-fg">▦ Line:</span>
-                <span>Chequered start, finish and timing line.</span>
-              </li>
-              <li className="flex items-center gap-2">
-                <span className="font-mono font-bold text-[#4a4438]">∴ Gravel:</span>
-                <span>Loose run-off stones, heavily scrubs speed.</span>
-              </li>
-              <li className="flex items-center gap-2">
-                <span className="font-mono font-bold text-warn">◬ Ramp:</span>
-                <span>Elevation kicker, launches car into the air.</span>
-              </li>
-            </ul>
-          </div>
         </div>
       </div>
 
