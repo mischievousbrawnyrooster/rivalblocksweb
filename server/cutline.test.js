@@ -1577,12 +1577,18 @@ test('the snapshot carries the held steer and brake the page draws with', () => 
   const match = racing(2)
   const [car] = [...match.cars.values()]
 
+  // Lock to lock is STEER_OUT to centre then STEER_IN out; twice that is slack.
+  const settle = () => {
+    for (let t = 0; t <= 2 * (hd.STEER_IN + hd.STEER_OUT) * 1000; t += TICK_MS) stepCar(match, car, TICK_MS / 1000)
+  }
   applyInput(match, car.id, { steer: -1, brake: 1, throttle: 1 })
+  settle()
   const left = snapshot(match).cars.find((c) => c.id === car.id)
   assert.equal(left.steer, -1, 'steer must reach the page')
   assert.equal(left.brake, true, 'brake must reach the page')
 
   applyInput(match, car.id, { steer: 1, brake: 0, throttle: 1 })
+  settle()
   const right = snapshot(match).cars.find((c) => c.id === car.id)
   assert.equal(right.steer, 1, 'steer must track the held input, not a constant')
   assert.equal(right.brake, false)
@@ -2231,6 +2237,7 @@ test('an airborne car ignores hazards and walls, then lands', () => {
   car.vx = RAMP_MIN_SPEED
   car.vy = 0
   car.steer = 1
+  car.steerNow = 1
   car.airUntil = match.now + AIR_MS
   stepCar(match, car, 0.05)
   const airTurn = car.heading
@@ -2241,6 +2248,7 @@ test('an airborne car ignores hazards and walls, then lands', () => {
   car.vx = RAMP_MIN_SPEED
   car.vy = 0
   car.steer = 1
+  car.steerNow = 1
   car.airUntil = 0
   stepCar(match, car, 0.05)
   const groundTurn = car.heading
@@ -3405,4 +3413,40 @@ test('a car skimming along a pad sideways is not thrown over the wall', () => {
   jInput(match, car.id, { throttle: 0 })
   jTick(match, 16, () => 0.5)
   assert.ok(!car.guided, 'only a car driving at the pad is launched by it')
+})
+
+// --- Handling: steering builds, grip fades, weight, walls, contact, drift -----
+import * as hd from './cutline.js'
+
+/** A match whose whole grid is tarmac, with one car at rest facing +x. */
+function openGround() {
+  const match = racing(1)
+  match.grid.fill(S_TARMAC)
+  const [car] = [...match.cars.values()]
+  Object.assign(car, { x: 5, y: GRID / 2, heading: 0, vx: 0, vy: 0 })
+  return { match, car }
+}
+
+/** Step a car for `seconds` at the real tick, wrapping it back before the far edge. */
+function drive(match, car, seconds) {
+  for (let t = 0; t < seconds * 1000; t += TICK_MS) {
+    stepCar(match, car, TICK_MS / 1000)
+    if (car.x > GRID - 5) car.x = 5
+  }
+}
+
+test('steering builds to full lock over STEER_IN and lets go over STEER_OUT', () => {
+  const { match, car } = openGround()
+  applyInput(match, car.id, { steer: 1 })
+  stepCar(match, car, TICK_MS / 1000)
+  assert.ok(car.steerNow > 0 && car.steerNow < 1, `one tick must not reach full lock, got ${car.steerNow}`)
+
+  drive(match, car, hd.STEER_IN)
+  assert.equal(car.steerNow, 1, 'held for STEER_IN, the wheel reaches full lock')
+
+  applyInput(match, car.id, { steer: 0 })
+  // One extra tick: five steps of 0.2 from 1 land a hair above 0 in floating point.
+  drive(match, car, hd.STEER_OUT + TICK_MS / 1000)
+  assert.equal(car.steerNow, 0, 'released for STEER_OUT, the wheel is back at centre')
+  assert.ok(hd.STEER_OUT < hd.STEER_IN, 'letting go is quicker than turning in')
 })

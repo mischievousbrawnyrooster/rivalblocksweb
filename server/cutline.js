@@ -1289,6 +1289,7 @@ export function join(match, info = {}, rng = Math.random) {
     heading: start.heading,
     vx: 0,
     vy: 0,
+    steerNow: 0,
     lap: 0,
     // A car sitting on the line has already taken checkpoint 0, so it waits
     // for 1. Starting at 0 would let a car count a lap without moving.
@@ -1328,6 +1329,8 @@ export const BRAKE = 26.0
 export const DRAG = 1.2
 export const TURN_RATE = 3.2         // rad/s at low speed
 export const TURN_FALLOFF = 0.45     // fraction of turn rate lost at top speed
+export const STEER_IN = 0.15         // seconds from centre to full lock
+export const STEER_OUT = 0.08        // seconds from full lock back to centre
 
 export const OFFTRACK_CAP = 6.5
 export const OFFTRACK_DRAG = 6.0
@@ -1444,6 +1447,21 @@ export function applyInput(match, id, input) {
   return true
 }
 
+/**
+ * The wheel follows the held key rather than jumping to it: full lock after
+ * STEER_IN, back to centre after STEER_OUT. The heading still turns at a rate
+ * the server applies, so the no-prediction steering model is untouched; only
+ * how fast that rate arrives has changed.
+ */
+function steerToward(car, dt) {
+  const target = car.steer ?? 0
+  const now = car.steerNow ?? 0
+  // Toward centre (letting go, or crossing to the other lock) is the quicker move.
+  const outward = target !== 0 && Math.sign(target) === Math.sign(now || target)
+  const step = dt / (outward ? STEER_IN : STEER_OUT)
+  car.steerNow = Math.abs(target - now) <= step ? target : now + Math.sign(target - now) * step
+}
+
 /** The speed cap a car is currently allowed, including boost and slipstream. */
 export function topSpeedOf(match, car) {
   let cap = TOP_SPEED
@@ -1482,7 +1500,9 @@ export function stepCar(match, car, dt) {
   const cap = offTrack ? OFFTRACK_CAP : topSpeedOf(match, car)
 
   // 1. Steer. A rate, never a target: this is what makes the game playable
-  //    without client-side prediction.
+  //    without client-side prediction. steerNow eases toward the held key;
+  //    the heading still turns at a rate.
+  steerToward(car, dt)
   const speed = Math.hypot(car.vx, car.vy)
   const falloff = 1 - TURN_FALLOFF * Math.min(1, speed / TOP_SPEED)
   const spinning = match.now < (car.spinUntil ?? 0)
@@ -1492,7 +1512,7 @@ export function stepCar(match, car, dt) {
     car.heading += SPIN_RATE * dt
   } else {
     const steerAuthority = airborne ? AIR_STEER : car.onSlick ? SLICK_TURN : 1
-    car.heading += (car.steer ?? 0) * TURN_RATE * falloff * steerAuthority * dt
+    car.heading += car.steerNow * TURN_RATE * falloff * steerAuthority * dt
   }
 
   // The turn above is never tested against walls, and last tick's contact shove
@@ -2289,6 +2309,7 @@ export function startRace(match) {
     car.bestLapMs = null
     car.lapStartedAt = 0
     car.steer = 0
+    car.steerNow = 0
     car.throttle = false
     car.brake = false
     car.wantsUse = false
@@ -2417,10 +2438,10 @@ export function snapshot(match) {
       // turn it toward through the air rather than all at once on landing.
       ...(car.guided && match.now < (car.airUntil ?? 0) && { land: Math.round(car.guided.land.heading * 1000) / 1000 }),
       // The page turns the front wheels by `steer` and lights the brake lamps by
-      // `brake`. Both are held input the server already owns, and without them on
-      // the wire the page silently drew straight wheels and dark lamps forever,
-      // because an absent field reads as a falsy one.
-      steer: car.steer ?? 0,
+      // `brake`. Without them on the wire the page silently drew straight wheels
+      // and dark lamps forever, because an absent field reads as a falsy one.
+      // `steer` is the eased wheel, so the drawn wheels turn in as the car does.
+      steer: Math.round((car.steerNow ?? 0) * 100) / 100,
       brake: Boolean(car.brake),
       speed: Math.round(Math.hypot(car.vx, car.vy) * 10) / 10,
       // Rare states are sent only while true, which keeps a full frame of eight
