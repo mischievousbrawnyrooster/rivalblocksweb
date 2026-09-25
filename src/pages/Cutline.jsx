@@ -38,6 +38,7 @@ import {
   TOP_SPEED,
   BOOST_MULT,
   SLIP_BOOST,
+  DRIFT_SHOW_MS,
 } from '../../server/cutline.js'
 
 const CANVAS = 768
@@ -460,7 +461,7 @@ function drawHud(ctx, { me, total, lap, laps, leader, shownSpeed }) {
   ctx.textBaseline = 'alphabetic'
 
   // Top left: place, lap, leader.
-  panel(ctx, HUD_PAD, HUD_PAD, 196, 92)
+  panel(ctx, HUD_PAD, HUD_PAD, 196, 110)
   ctx.textAlign = 'left'
   ctx.fillStyle = '#ecebe6'
   ctx.font = 'bold 34px monospace'
@@ -477,6 +478,7 @@ function drawHud(ctx, { me, total, lap, laps, leader, shownSpeed }) {
   ctx.font = '11px monospace'
   const lead = leader ? leader.name : '-'
   ctx.fillText(`LEADER ${lead.length > 16 ? lead.slice(0, 15) + '.' : lead}`, HUD_PAD + 12, HUD_PAD + 82)
+  ctx.fillText(`DRIFT ${(me.driftScore ?? 0).toLocaleString('en-US')}`, HUD_PAD + 12, HUD_PAD + 100)
 
   // Bottom left: the item slot, as its icon and its name.
   const itemY = CANVAS - HUD_PAD - 72
@@ -493,47 +495,142 @@ function drawHud(ctx, { me, total, lap, laps, leader, shownSpeed }) {
   ctx.fillText(itemLabel(me.item), HUD_PAD + 76, itemY + 52)
 
   // Bottom right: the speedometer.
-  const r = 62
+  drawSpeedo(ctx, me, shownSpeed)
+  ctx.restore()
+}
+
+/**
+ * A needle dial: ticks every 20 km/h and a number every 40. The stretch past
+ * plain top speed is hatched and labelled BOOST, so it reads without colour.
+ */
+function drawSpeedo(ctx, me, shownSpeed) {
+  const r = 66
   const cx = CANVAS - HUD_PAD - r - 8
   const cy = CANVAS - HUD_PAD - r - 8
-  ctx.fillStyle = 'rgba(11, 11, 15, 0.8)'
+  const maxKmh = SPEEDO_MAX * KMH_PER_TILE
+  const topKmh = TOP_SPEED * KMH_PER_TILE
+  const start = Math.PI * 0.75
+  const sweep = Math.PI * 1.5
+  const angleAt = (kmh) => start + sweep * Math.max(0, Math.min(1, kmh / maxKmh))
+  const at = (a, rad) => [cx + Math.cos(a) * rad, cy + Math.sin(a) * rad]
+
+  ctx.save()
+  ctx.fillStyle = 'rgba(11, 11, 15, 0.85)'
   ctx.beginPath()
   ctx.arc(cx, cy, r + 8, 0, Math.PI * 2)
   ctx.fill()
-  const start = Math.PI * 0.75
-  const sweep = Math.PI * 1.5
-  const frac = Math.max(0, Math.min(1, shownSpeed / SPEEDO_MAX))
-  ctx.lineCap = 'round'
-  ctx.lineWidth = 7
-  ctx.strokeStyle = '#2b2b31'
+
+  // The boost zone: a hatched band from top speed to the end of the dial.
+  ctx.save()
   ctx.beginPath()
-  ctx.arc(cx, cy, r - 4, start, start + sweep)
-  ctx.stroke()
-  ctx.strokeStyle = me.boosting ? '#f97316' : '#3ad1c4'
-  ctx.beginPath()
-  ctx.arc(cx, cy, r - 4, start, start + sweep * Math.max(0.001, frac))
-  ctx.stroke()
-  // A tick where plain top speed sits, so boost and slipstream read as extra.
-  const topAt = start + sweep * (TOP_SPEED / SPEEDO_MAX)
-  ctx.strokeStyle = '#ecebe6'
+  ctx.arc(cx, cy, r, angleAt(topKmh), angleAt(maxKmh))
+  ctx.arc(cx, cy, r - 12, angleAt(maxKmh), angleAt(topKmh), true)
+  ctx.closePath()
+  ctx.clip()
+  ctx.strokeStyle = 'rgba(249, 115, 22, 0.75)'
   ctx.lineWidth = 2
-  ctx.lineCap = 'butt'
-  ctx.beginPath()
-  ctx.moveTo(cx + Math.cos(topAt) * (r - 12), cy + Math.sin(topAt) * (r - 12))
-  ctx.lineTo(cx + Math.cos(topAt) * (r + 3), cy + Math.sin(topAt) * (r + 3))
-  ctx.stroke()
-  ctx.textAlign = 'center'
-  ctx.fillStyle = '#ecebe6'
-  ctx.font = 'bold 30px monospace'
-  ctx.fillText(String(Math.round(shownSpeed * KMH_PER_TILE)), cx, cy + 8)
+  for (let d = -3 * r; d < r; d += 6) {
+    ctx.beginPath()
+    ctx.moveTo(cx + d, cy - r)
+    ctx.lineTo(cx + d + 2 * r, cy + r)
+    ctx.stroke()
+  }
+  ctx.restore()
+
+  ctx.strokeStyle = '#ecebe6'
   ctx.fillStyle = '#8f8d86'
   ctx.font = '10px monospace'
-  ctx.fillText('KM/H', cx, cy + 24)
+  ctx.textAlign = 'center'
+  ctx.textBaseline = 'middle'
+  for (let kmh = 0; kmh <= maxKmh; kmh += 20) {
+    const a = angleAt(kmh)
+    const long = kmh % 40 === 0
+    ctx.lineWidth = long ? 2 : 1
+    ctx.beginPath()
+    ctx.moveTo(...at(a, r - (long ? 10 : 6)))
+    ctx.lineTo(...at(a, r))
+    ctx.stroke()
+    if (long) ctx.fillText(String(kmh), ...at(a, r - 21))
+  }
+  ctx.fillStyle = '#f97316'
+  ctx.font = 'bold 8px monospace'
+  ctx.fillText('BOOST', ...at(angleAt((topKmh + maxKmh) / 2), r - 33))
+
+  // The needle, from a short tail through the hub.
+  const a = angleAt(shownSpeed * KMH_PER_TILE)
+  ctx.strokeStyle = me.boosting ? '#f97316' : '#ecebe6'
+  ctx.lineWidth = 3
+  ctx.lineCap = 'round'
+  ctx.beginPath()
+  ctx.moveTo(...at(a + Math.PI, 10))
+  ctx.lineTo(...at(a, r - 8))
+  ctx.stroke()
+  ctx.fillStyle = '#ecebe6'
+  ctx.beginPath()
+  ctx.arc(cx, cy, 5, 0, Math.PI * 2)
+  ctx.fill()
+
+  // The reading sits in the gap at the bottom of the dial.
+  ctx.font = 'bold 20px monospace'
+  ctx.fillText(String(Math.round(shownSpeed * KMH_PER_TILE)), cx, cy + 34)
+  ctx.fillStyle = '#8f8d86'
+  ctx.font = '9px monospace'
+  ctx.fillText('KM/H', cx, cy + 49)
   const tag = me.boosting ? 'BOOST' : me.drafting ? 'DRAFT' : ''
   if (tag) {
     ctx.fillStyle = me.boosting ? '#f97316' : '#3ad1c4'
-    ctx.font = 'bold 10px monospace'
-    ctx.fillText(tag, cx, cy + 42)
+    ctx.font = 'bold 9px monospace'
+    ctx.fillText(tag, cx, cy + 61)
+  }
+  ctx.restore()
+}
+
+/**
+ * The drift chain, top centre: growing and beating faster while it builds,
+ * then shown as +N when banked or LOST struck through when lost. The words and
+ * the strike carry which, not only the colour.
+ */
+function drawDrift(ctx, me, now, end) {
+  ctx.save()
+  ctx.textAlign = 'center'
+  ctx.textBaseline = 'middle'
+  const x = CANVAS / 2
+
+  if (me.drift) {
+    const chain = me.driftChain ?? 0
+    const beat = 1 + 0.06 * Math.sin(now / Math.max(45, 140 - chain / 40))
+    ctx.fillStyle = 'rgba(11, 11, 15, 0.8)'
+    ctx.fillRect(x - 90, 22, 180, 58)
+    ctx.fillStyle = '#8f8d86'
+    ctx.font = 'bold 11px monospace'
+    ctx.fillText('DRIFT', x, 36)
+    ctx.save()
+    ctx.translate(x, 60)
+    ctx.scale(beat, beat)
+    ctx.fillStyle = '#ecebe6'
+    ctx.font = 'bold 28px monospace'
+    ctx.fillText(chain.toLocaleString('en-US'), 0, 0)
+    ctx.restore()
+  }
+
+  if (end) {
+    const t = Math.min(1, (now - end.at) / DRIFT_SHOW_MS)
+    const y = 104 - t * 30
+    const pts = end.pts.toLocaleString('en-US')
+    ctx.globalAlpha = 1 - t
+    if (end.lost) {
+      ctx.fillStyle = '#eab308'
+      ctx.font = 'bold 18px monospace'
+      ctx.fillText('LOST', x, y)
+      ctx.font = 'bold 14px monospace'
+      ctx.fillText(pts, x, y + 20)
+      const w = ctx.measureText(pts).width
+      ctx.fillRect(x - w / 2 - 2, y + 19, w + 4, 2)
+    } else {
+      ctx.fillStyle = '#3ad1c4'
+      ctx.font = 'bold 22px monospace'
+      ctx.fillText(`+${pts}`, x, y)
+    }
   }
   ctx.restore()
 }
@@ -638,6 +735,9 @@ export default function Cutline() {
   const lastFrameRef = useRef(0)
   // The speed the dial shows, eased toward the snapshot's so the needle glides.
   const shownSpeedRef = useRef(0)
+  // When this client first saw the current drift end, so its popup rises and
+  // fades from then. The rules decide the end; this only times the drawing.
+  const driftEndRef = useRef({ key: null, at: 0 })
   // A circuit arrives in `welcome`, possibly before the scene exists, so it is
   // held here and built by the render loop when the versions disagree.
   const gridRef = useRef(null)
@@ -778,6 +878,7 @@ export default function Cutline() {
       const throttle = keys.has('KeyW') || keys.has('ArrowUp') ? 1 : 0
       const brake = keys.has('KeyS') || keys.has('ArrowDown') ? 1 : 0
       const use = keys.has('Space') || keys.has('KeyE') || keys.has('KeyF')
+      const drift = keys.has('ShiftLeft') || keys.has('ShiftRight') ? 1 : 0
 
       // Strictly rate-based: never send a target coordinate, only driving rates
       ws.send(
@@ -787,6 +888,7 @@ export default function Cutline() {
           throttle,
           brake,
           use,
+          drift,
         }),
       )
     }, SEND_MS)
@@ -1151,6 +1253,11 @@ export default function Cutline() {
           leader: leaderCar,
           shownSpeed: shownSpeedRef.current,
         })
+        const endKey = me.driftEnd ? `${me.driftEnd.pts}:${me.driftEnd.lost}` : null
+        if (endKey !== driftEndRef.current.key) driftEndRef.current = { key: endKey, at: now }
+        if (sampled.phase === 'racing' && (me.drift || me.driftEnd)) {
+          drawDrift(ctx, me, now, me.driftEnd && { ...me.driftEnd, at: driftEndRef.current.at })
+        }
         if (me.wrongWay && sampled.phase === 'racing') drawWrongWay(ctx, now)
       }
 
@@ -1379,6 +1486,7 @@ export default function Cutline() {
             {me?.place != null ? `Place ${me.place} of ${cars.length}. ` : ''}
             {hud ? `Lap ${Math.min(hud.lap + 1, hud.laps)} of ${hud.laps}. ` : ''}
             {`Item: ${itemLabel(me?.item)}. `}
+            {`Drift points: ${(me?.driftScore ?? 0).toLocaleString('en-US')}. `}
             {leaderCar ? `Leader: ${leaderCar.name}.` : ''}
           </p>
 
@@ -1409,7 +1517,7 @@ export default function Cutline() {
           <div>
             <div className="flex items-baseline justify-between">
               <p className="rule-label">Driver Roster</p>
-              <p className="rule-label">Best Lap</p>
+              <p className="rule-label">Drift / Best Lap</p>
             </div>
             <ul className="mt-3 space-y-2">
               {sortedRoster.map((car) => {
@@ -1454,6 +1562,9 @@ export default function Cutline() {
                       </span>
                     )}
                     <span className="ml-auto font-mono text-xs tabular-nums text-muted">
+                      {car.driftScore ? car.driftScore.toLocaleString('en-US') : '-'}
+                    </span>
+                    <span className="w-16 text-right font-mono text-xs tabular-nums text-muted">
                       {formatLapTime(car.bestLapMs)}
                     </span>
                   </li>
@@ -1490,6 +1601,10 @@ export default function Cutline() {
               <div className="flex justify-between gap-3">
                 <dt>Brake / Reverse</dt>
                 <dd className="font-mono text-xs text-fg">S or Down Arrow</dd>
+              </div>
+              <div className="flex justify-between gap-3">
+                <dt>Drift</dt>
+                <dd className="font-mono text-xs text-fg">Shift + steer</dd>
               </div>
               <div className="flex justify-between gap-3">
                 <dt>Use Item</dt>
