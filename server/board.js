@@ -69,6 +69,14 @@ export const BOARDS = [
     fights: false,
     bests: [{ key: 'fastestTime', label: 'Winning lap', short: 'Lap' }],
   },
+  {
+    file: 'board-ventline.json',
+    game: 'ventline',
+    mode: null,
+    title: 'Ventline',
+    fights: false,
+    bests: [{ key: 'bestScore', label: 'Best score', short: 'Best' }],
+  },
 ]
 
 // Enough names that nobody who plays regularly falls off, few enough that a
@@ -82,13 +90,16 @@ export const boardFor = (game, mode = null) =>
 
 export const emptyBoard = (game, mode = null) => ({ game, mode, updated: 0, players: [] })
 
+const isScore = (n) => Number.isSafeInteger(n) && n >= 0
+
 const isRow = (r) =>
   !!r &&
   typeof r.name === 'string' &&
   ['wins', 'kills', 'deaths', 'matches', 'last'].every((k) => Number.isFinite(r[k])) &&
   (r.fastestTime === undefined || r.fastestTime === null || Number.isFinite(r.fastestTime)) &&
   (r.peakWpm === undefined || r.peakWpm === null || Number.isFinite(r.peakWpm)) &&
-  (r.avgAcc === undefined || r.avgAcc === null || Number.isFinite(r.avgAcc))
+  (r.avgAcc === undefined || r.avgAcc === null || Number.isFinite(r.avgAcc)) &&
+  (r.bestScore === undefined || isScore(r.bestScore))
 
 /**
  * Whether something read off disk is a board.
@@ -98,7 +109,8 @@ const isRow = (r) =>
  * shape must read as "no board yet", never as a crash inside a match server.
  */
 export const isBoard = (b) =>
-  !!b && typeof b === 'object' && Array.isArray(b.players) && b.players.every(isRow)
+  !!b && typeof b === 'object' && Array.isArray(b.players) &&
+  b.players.every((r) => isRow(r) && (b.game !== 'ventline' || isScore(r.bestScore)))
 
 /**
  * The row for a name, made if it is not there yet.
@@ -136,6 +148,10 @@ export const rank = (players) =>
     return a.name < b.name ? -1 : a.name > b.name ? 1 : 0
   })
 
+export const rankForBoard = (board, players) => board?.game === 'ventline'
+  ? [...players].sort((a, b) => (b.bestScore ?? 0) - (a.bestScore ?? 0) || b.wins - a.wins || (a.name < b.name ? -1 : a.name > b.name ? 1 : 0))
+  : rank(players)
+
 /**
  * Kills against deaths, or null where the game keeps neither.
  *
@@ -150,7 +166,7 @@ export const kd = (row) =>
   row.kills === 0 && row.deaths === 0 ? null : row.kills / Math.max(1, row.deaths)
 
 /** The head of the board, for the strip that rides along in a match snapshot. */
-export const top = (board, n = TOP_N) => rank(board?.players ?? []).slice(0, n)
+export const top = (board, n = TOP_N) => rankForBoard(board, board?.players ?? []).slice(0, n)
 
 /**
  * Folds one finished match into a board and hands back a new one.
@@ -171,6 +187,7 @@ export function merge(board, results, at) {
     if (!r || r.bot) continue
     const name = String(r.name ?? '').trim()
     if (!name) continue
+    if (board?.game === 'ventline' && !isScore(r.score)) continue
 
     const row = rowFor(players, name)
     row.wins += r.won ? 1 : 0
@@ -180,6 +197,7 @@ export function merge(board, results, at) {
     row.deaths += Math.max(0, Math.trunc(r.deaths ?? 0))
     row.matches += 1
     row.last = at
+    if (board?.game === 'ventline') row.bestScore = Math.max(row.bestScore ?? 0, r.score)
 
     // Fastest clear time: only recorded on a win with a valid time.
     if (r.won && typeof r.time === 'number' && Number.isFinite(r.time) && r.time > 0) {
@@ -200,7 +218,7 @@ export function merge(board, results, at) {
 
   // Ranked before the cap, so what falls off the end is the bottom of the
   // board and not whoever happened to arrive last.
-  return { ...board, updated: at, players: rank(players).slice(0, MAX_NAMES) }
+  return { ...board, updated: at, players: rankForBoard(board, players).slice(0, MAX_NAMES) }
 }
 
 /** Every board added together, one row per name. This is the cross-game table. */

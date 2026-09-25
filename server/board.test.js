@@ -68,6 +68,54 @@ test('voiddrillers has a board file of its own, with exactly one writer', () => 
   assert.equal(new Set(files).size, files.length, 'no two servers share a file')
 })
 
+test('ventline has its own score board file', () => {
+  const spec = boardFor('ventline')
+  assert.equal(spec.file, 'board-ventline.json')
+  assert.equal(spec.fights, false)
+  assert.deepEqual(spec.bests, [{ key: 'bestScore', label: 'Best score', short: 'Best' }])
+})
+
+test('ventline keeps the highest score and ranks score before wins', () => {
+  let board = merge(emptyBoard('ventline'), [person('Ada', { score: 12 }), person('Bea', { score: 20 })], at)
+  board = merge(board, [person('Ada', { score: 0 }), person('Ada', { score: 8 })], at + 1)
+  board = merge(board, [person('Ada', { score: 7, won: true })], at + 2)
+  assert.deepEqual(top(board).map((p) => p.name), ['Bea', 'Ada'])
+  assert.equal(board.players.find((p) => p.name === 'Ada').bestScore, 12)
+  assert.equal(board.players.find((p) => p.name === 'Ada').matches, 4)
+  assert.equal(combine([board]).find((p) => p.name === 'Ada').bests['board-ventline.json'].bestScore, 12)
+  assert.deepEqual(combine([board]).map((p) => p.name), ['Ada', 'Bea'], 'cross-title ranking remains wins first')
+})
+
+test('ventline drops invalid score results before making a player row', () => {
+  const invalid = [undefined, -1, 1.5, Infinity, NaN, Number.MAX_SAFE_INTEGER + 1, '12']
+  const board = merge(emptyBoard('ventline'), [
+    ...invalid.map((score, i) => person(`bad${i}`, { score, won: true })),
+    person('Zero', { score: 0 }),
+  ], at)
+  assert.deepEqual(board.players.map((p) => p.name), ['Zero'])
+  assert.equal(board.players[0].bestScore, 0)
+  assert.equal(board.players[0].wins, 0)
+})
+
+test('ventline requires a valid bestScore in persisted rows', () => {
+  const valid = merge(emptyBoard('ventline'), [person('Ada', { score: 0 })], at)
+  assert.equal(isBoard(valid), true)
+  for (const bestScore of [undefined, null, -1, 1.5, Infinity, Number.MAX_SAFE_INTEGER + 1, '12']) {
+    const row = { ...valid.players[0], bestScore }
+    assert.equal(isBoard({ ...valid, players: [row] }), false, String(bestScore))
+  }
+  assert.equal(isBoard({ ...valid, players: [{ ...valid.players[0], bestScore: 12 }] }), true)
+  assert.equal(isBoard({ ...valid, players: [{ ...valid.players[0], bestScore: 0 }] }), true)
+})
+
+test('ventline caps names after sorting by score', () => {
+  const results = Array.from({ length: MAX_NAMES + 1 }, (_, i) => person(`p${i}`, { score: i }))
+  const board = merge(emptyBoard('ventline'), results, at)
+  assert.equal(board.players.length, MAX_NAMES)
+  assert.equal(board.players[0].name, `p${MAX_NAMES}`)
+  assert.equal(board.players.some((p) => p.name === 'p0'), false)
+})
+
 // --- merging -------------------------------------------------------------
 
 test('a first match puts everyone who played on the board', () => {

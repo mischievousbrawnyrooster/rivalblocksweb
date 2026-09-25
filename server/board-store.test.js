@@ -4,7 +4,7 @@ import { mkdtempSync, readdirSync, readFileSync, writeFileSync, rmSync } from 'n
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { boardFor, emptyBoard, merge } from './board.js'
-import { load, save, boardDir, keeper } from './board-store.js'
+import { load, save, boardDir, keeper, runKeeper } from './board-store.js'
 
 const spec = boardFor('fracture')
 const dir = () => mkdtempSync(join(tmpdir(), 'rivalblocks-board-'))
@@ -143,4 +143,38 @@ test('a match with nobody in it leaves the file alone', () => {
   assert.equal(keep.bank(true, () => []), false, 'banked a match with no people in it')
   assert.equal(readFileSync(join(d, spec.file), 'utf8'), before, 'the board was rewritten anyway')
   assert.equal(keep.top()[0].matches, 1)
+})
+
+test('ventline banks distinct runs once each and persists the best score', () => {
+  const d = fresh()
+  const keep = runKeeper(boardFor('ventline'), d)
+  const a = { banked: false }, b = { banked: false }
+  assert.equal(keep.bank(a, [{ name: 'Ada', score: 7, won: false }]), true)
+  assert.equal(keep.bank(b, [{ name: 'Ada', score: 11, won: false }]), true)
+  assert.equal(keep.bank(a, [{ name: 'Ada', score: 99, won: false }]), false)
+  assert.equal(keep.top()[0].bestScore, 11)
+  assert.equal(keep.top()[0].matches, 2)
+  assert.equal(keep.top()[0].wins, 0)
+  assert.equal(keep.best('Ada'), 11)
+  assert.equal(keep.best('Unknown'), 0)
+  assert.equal(runKeeper(boardFor('ventline'), d).best('Ada'), 11)
+})
+
+test('ventline can find a name outside the top five', () => {
+  const keep = runKeeper(boardFor('ventline'), fresh())
+  const rows = Array.from({ length: 6 }, (_, i) => ({ name: `p${i}`, score: i, won: false }))
+  keep.bank({ banked: false }, rows)
+  assert.equal(keep.top().length, 5)
+  assert.equal(keep.best('p0'), 0)
+  assert.equal(keep.best('p1'), 1)
+})
+
+test('ventline leaves empty runs unbanked', () => {
+  const d = fresh()
+  const keep = runKeeper(boardFor('ventline'), d)
+  const run = { banked: false }
+  assert.equal(keep.bank(run, []), false)
+  assert.equal(run.banked, false)
+  assert.deepEqual(readdirSync(d), [])
+  assert.equal(keep.bank(run, [{ name: 'Ada', score: 0, won: false }]), true)
 })

@@ -93,3 +93,19 @@ export function keeper(spec, dir = boardDir()) {
     },
   }
 }
+
+/** Banks each run object once while keeping one board in memory. */
+export function runKeeper(spec, dir = boardDir()) {
+  let board = load(dir, spec)
+  return {
+    top: () => top(board),
+    best: (name) => board.players.find((p) => p.name === name)?.bestScore ?? 0,
+    bank(run, results) {
+      if (run.banked || !results?.length) return false
+      run.banked = true
+      board = merge(board, results, Date.now())
+      save(dir, spec, board)
+      return true
+    },
+  }
+}
