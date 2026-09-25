@@ -2280,7 +2280,7 @@ test('the snapshot tells the page a car is airborne', () => {
 
   match.now += AIR_MS + 1
   const after = snapshot(match).cars.find((c) => c.id === car.id)
-  assert.equal(after.airborne, false)
+  assert.ok(!after.airborne, 'a landed car is not airborne')
 })
 
 test('a carved circuit is one connected region at every width', () => {
@@ -3709,4 +3709,48 @@ test('a new race starts every car with no drift and no drift points', () => {
     assert.equal(car.driftScore, 0)
     assert.equal(car.driftEnd, null)
   }
+})
+
+test('drift fields and status flags ride the snapshot only while they apply', () => {
+  const match = racing(2)
+  const [car] = [...match.cars.values()]
+  const mine = () => snapshot(match).cars.find((c) => c.id === car.id)
+
+  const idle = mine()
+  for (const k of ['drift', 'driftChain', 'driftScore', 'driftEnd', 'drafting', 'boosting', 'sliding', 'spinning', 'airborne', 'airT']) {
+    assert.equal(k in idle, false, `${k} must be absent on a car doing nothing`)
+  }
+
+  Object.assign(car, { driftDir: -1, driftChain: 123.6, driftScore: 400 })
+  const on = mine()
+  assert.equal(on.drift, -1)
+  assert.equal(on.driftChain, 124)
+  assert.equal(on.driftScore, 400)
+
+  car.driftEnd = { pts: 124, lost: true, at: match.now }
+  assert.deepEqual(mine().driftEnd, { pts: 124, lost: true })
+  match.now += hd.DRIFT_SHOW_MS
+  assert.equal('driftEnd' in mine(), false, 'an ended chain is shown for DRIFT_SHOW_MS, then dropped')
+})
+
+test('eight cars drifting, boosting and drafting, with chains ending, fit the 4 KB frame', () => {
+  const match = racing(MAX_PLAYERS)
+  for (let i = 0; i < MAX_HAZARDS; i++) {
+    match.hazards.push({ kind: 'slick', x: 40, y: 40, until: 9e9, by: 'p-1' })
+  }
+  for (const car of match.cars.values()) {
+    Object.assign(car, {
+      driftDir: 1,
+      driftChain: 99999,
+      driftScore: 99999,
+      driftEnd: { pts: 99999, lost: false, at: match.now },
+      boostUntil: match.now + 1000,
+      drafting: true,
+      steerNow: -0.85,
+      vx: hd.TOP_SPEED * hd.BOOST_MULT * hd.SLIP_BOOST,
+      vy: 0,
+    })
+  }
+  const bytes = JSON.stringify(snapshot(match)).length
+  assert.ok(bytes < 4096, `a full drifting frame is ${bytes} bytes, over maxPayload`)
 })

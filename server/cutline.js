@@ -2552,18 +2552,21 @@ export function snapshot(match) {
       alive: car.alive,
       item: car.item,
       place: place.get(car.id) ?? null,
-      drafting: Boolean(car.drafting),
-      boosting: match.now < car.boostUntil,
-      sliding: Boolean(car.onSlick),
-      spinning: match.now < (car.spinUntil ?? 0),
-      airborne: match.now < (car.airUntil ?? 0),
+      // Status flags are sent only while true, like the rare ones below: sent as
+      // false on every car every tick they cost 670 bytes a frame, and the frame
+      // needed that room for drift. The page reads a missing flag as false.
+      ...(car.drafting && { drafting: true }),
+      ...(match.now < car.boostUntil && { boosting: true }),
+      ...(car.onSlick && { sliding: true }),
+      ...(match.now < (car.spinUntil ?? 0) && { spinning: true }),
+      ...(match.now < (car.airUntil ?? 0) && { airborne: true }),
       // Normalised height along the arc, for the page to draw a hop and a
       // shadow with. Render only: no rule reads it back.
       // Measured over the flight from the lip: AIR_MS for a ramp, distance /
       // speed for a pad. Clamped, as a car still on a pad is renewed each tick.
-      airT: match.now < (car.airUntil ?? 0)
-        ? Math.max(0, Math.min(1, Math.round((1 - (car.airUntil - match.now) / (car.airMs ?? AIR_MS)) * 100) / 100))
-        : 0,
+      ...(match.now < (car.airUntil ?? 0) && {
+        airT: Math.max(0, Math.min(1, Math.round((1 - (car.airUntil - match.now) / (car.airMs ?? AIR_MS)) * 100) / 100)),
+      }),
       // On a pad's jump: the way the car will face on touchdown, for the page to
       // turn it toward through the air rather than all at once on landing.
       ...(car.guided && match.now < (car.airUntil ?? 0) && { land: Math.round(car.guided.land.heading * 1000) / 1000 }),
@@ -2580,6 +2583,12 @@ export function snapshot(match) {
       ...(match.now < (car.shieldUntil ?? 0) && { shield: true }),
       ...(match.now < (car.ghostUntil ?? 0) && { ghost: true }),
       ...(match.now < (car.shockedUntil ?? 0) && { shocked: true }),
+      // Drift: the side and chain while drifting, the race total once there is
+      // one, and how the last chain ended for DRIFT_SHOW_MS. The page draws the
+      // end the rules decided; it never compares frames to guess it.
+      ...(car.driftDir && { drift: car.driftDir, driftChain: Math.round(car.driftChain) }),
+      ...(car.driftScore > 0 && { driftScore: car.driftScore }),
+      ...(car.driftEnd && match.now - car.driftEnd.at < DRIFT_SHOW_MS && { driftEnd: { pts: car.driftEnd.pts, lost: car.driftEnd.lost } }),
       // A hop from a spring starts on the ground, a launch from a ramp at its
       // lip; the page draws the arc from the right height.
       ...(match.now < (car.airUntil ?? 0) && car.hop && { hop: true }),
