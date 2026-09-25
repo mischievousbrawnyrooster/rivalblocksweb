@@ -21,6 +21,7 @@ npm run drillers # Void Drillers                   :8086  ← /voiddrillers-ws
 npm run cipher   # Cipher Run                      :8087  ← /cipherrun-ws
 npm run cutline  # Cutline                        :8088  ← /cutline-ws
 node server/cutline-select.mjs   # regenerate CIRCUITS by measured difference
+node server/cutline-laps.mjs     # median bot lap per circuit, for tuning handling
 npm test         # node --test over src/lib and server/*.test.js
 npm run build    # static output to dist/
 npm run check:bundle   # after build: fails if three.js reaches the main chunk
@@ -382,10 +383,12 @@ is nothing to lock. `BOARD_DIR` says where they live (`./data` in dev,
   homes in close), ghost (3 s through cars and dropped hazards) and decoy (a
   fake box, stood on its corner so it can be told apart). A ghost is never hit
   and a shield takes the hit instead, in one place.
-- **Cutline: rare snapshot flags are sent only while true.** `shield`, `ghost`,
-  `shocked`, `hop`, `wrongWay`, `falling` and `land` would push a full frame of
-  eight cars past its 4 KB budget if every car always carried them; the page
-  reads a missing flag as false.
+- **Cutline: status flags are sent only while true.** `drafting`, `boosting`,
+  `sliding`, `spinning`, `airborne`, `airT`, `shield`, `ghost`, `shocked`, `hop`,
+  `wrongWay`, `falling`, `land`, `drift`, `driftChain`, `driftScore` and
+  `driftEnd` would push a frame of eight cars past its 4 KB budget if every car
+  always carried them; the page reads a missing flag as false. The first five,
+  and `airT`, were sent on every car until drift needed the room.
 - **Cutline: a jump holds its speed.** In the air there is no brake, no drag
   and no off-road cap from a wall below. Every ramp's landing checks, in
   `rampLandsClear` and the tests, sample every half tile of landing distance
@@ -460,6 +463,32 @@ is nothing to lock. `BOARD_DIR` says where they live (`./data` in dev,
   `CAR_RADIUS` derives from `CAR_WIDTH`. They drifted once: the page drew a body
   1.45 by 0.82 while walls were tested at a single point at the car's centre, so
   a nose could sit most of a tile inside a wall with nothing registering.
+- **Cutline: handling changes never touch the speed envelope.** `TOP_SPEED`,
+  `BOOST_MULT`, `SLIP_BOOST`, `RAMP_MIN_SPEED` and `AIR_MS` are what every ramp
+  landing, pad flight, hole and the eight selected circuits were checked
+  against. Weight, grip fade and drift change how a car reaches those speeds,
+  never the speeds.
+- **Cutline: `steerNow` eases the wheel, not the heading.** The held key moves
+  `steerNow` over `STEER_IN` / `STEER_OUT` and the heading still turns at a
+  rate. A test that sets `car.steer` and expects full lock on the next step
+  must set `steerNow` too, or the wheel carries over from its last setup.
+- **Cutline: brake cuts thrust.** With `BRAKE` soft enough for a one second
+  stop, a car holding both accelerated below about 7 tiles/s, and every bot
+  holds both.
+- **Cutline: a drift keeps its speed; `DRIFT_GRIP` only sets the slip angle.**
+  Sideways speed is turned forward, not scrubbed. Scrubbed, the turn rate a
+  hairpin needs bled speed faster than any throttle could replace.
+- **Cutline: a drift chain's end is a rule.** `endDrift` decides banked or
+  lost, and the snapshot carries `driftEnd` for `DRIFT_SHOW_MS`; the page never
+  compares frames to guess it. Starting a drift clears the last one's end, so
+  the page times its popup from the frame the drift flag drops and never shows
+  a stale end. Drift points are never banked on the board.
+- **Cutline: a glancing wall hit turns the nose by `WALL_ALIGN * impact`.** A
+  graze nudges the heading and a firmer hit straightens the car along the wall;
+  above `WALL_GLANCE` a hit is square on and turns nothing. Unscaled, a sliding
+  car that barely touched a wall snapped round by up to 45 degrees in one tick.
+- **Cutline: `carPose` reads only received snapshots.** Lean, pitch and bounce
+  come from interpolated heading and speed, render only, like `carLift`.
 - **Cutline: `MAX_CORNER_RAD` is the tightest entry in `CORNERS`, not a ceiling
   every circuit hugs.** Corner speeds are derived from the handling model:
   `v = TURN_RATE / (k + TURN_RATE * TURN_FALLOFF / TOP_SPEED)`. The vocabulary

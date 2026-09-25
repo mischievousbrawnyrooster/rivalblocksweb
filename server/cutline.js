@@ -1322,12 +1322,10 @@ export function leave(match, id) {
 }
 
 // --- Handling -------------------------------------------------------------
-// Measured lap time (Task 7, after the driveBots aim-anchor fix): 4 bots,
-// fixed rng, 90s runs across all 8 circuits. All 8 now drive cleanly and
-// consistently: median lap 11.87s, range 11.14 to 13.04s. That is well
-// under the spec's 18s estimate, not tuned toward it; TOP_SPEED was left
-// alone. See task-7-report.md for the prior, bug-confounded measurement and
-// the fix.
+// Measured lap time (server/cutline-laps.mjs: 4 bots, rng 0.5, 90 s a
+// circuit). Before the weight, grip-fade and drift handling: median 25.14 s
+// over 66 laps. After: median 25.38s over 65 laps, every circuit
+// lapping. The old note here (11.87 s) predated the current track generator.
 export const TOP_SPEED = 14.0        // tiles per second
 export const ACCEL = 17.0            // thrust from a standstill
 export const ACCEL_FADE = 0.56       // fraction of that thrust gone at the speed cap
