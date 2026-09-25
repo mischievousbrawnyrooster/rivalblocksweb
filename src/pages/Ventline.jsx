@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { useTitle } from '../lib/useTitle.js'
-import { projectWorld } from '../lib/ventlineView.js'
+import { projectWorld, projectMap } from '../lib/ventlineView.js'
 
 const W = 960
 const H = 600
@@ -60,13 +60,13 @@ function drawGate(ctx, gate, cameraX, c) {
   }
 }
 
-function drawDrone(ctx, player, cameraX, c, flash) {
+function drawDrone(ctx, player, cameraX, c, flash, alpha = 1, label = '') {
   if (!Number.isFinite(player?.x) || !Number.isFinite(player?.y)) return
   const { x, y } = projectWorld(player.x, player.y, cameraX, 1)
   if (flash) polygon(ctx, [[x - 15, y - 5], [x - 38, y], [x - 15, y + 5]], c.flare)
   ctx.save()
   ctx.translate(x, y)
-  ctx.globalAlpha = player.alive ? 1 : 0.48
+  ctx.globalAlpha = alpha * (player.alive ? 1 : 0.48)
   polygon(ctx, [[-18, 0], [-6, -11], [13, -10], [21, 0], [13, 10], [-6, 11]], c['player-1'])
   polygon(ctx, [[-3, -9], [14, -8], [18, 0], [14, 8], [-3, 9]], c.fg)
   ctx.fillStyle = c.bg
@@ -87,10 +87,68 @@ function drawDrone(ctx, player, cameraX, c, flash) {
     ctx.font = 'bold 16px ui-sans-serif, sans-serif'
     ctx.fillText('↯', -4, -24)
   }
+  if (label) {
+    if (alpha < 1) ctx.globalAlpha = player.alive ? 0.8 : 0.4
+    ctx.fillStyle = c.fg
+    ctx.textAlign = 'center'
+    ctx.font = 'bold 11px ui-monospace, monospace'
+    ctx.fillText(label, 0, -31)
+  }
   ctx.restore()
 }
 
-function draw(ctx, snap, now, cueUntil, reduced) {
+function drawMap(ctx, snap, c, now, crashUntil) {
+  ctx.clearRect(0, 0, 176, 128)
+  if (!snap?.viewedId) return
+  const x = 8, y = 22, w = 160, h = 100
+  const map = projectMap(snap, w, h)
+  ctx.save()
+  ctx.translate(x, y)
+  ctx.fillStyle = c.surface
+  ctx.fillRect(-8, -22, w + 16, h + 30)
+  ctx.strokeStyle = c.line
+  ctx.strokeRect(-8.5, -22.5, w + 17, h + 31)
+  ctx.fillStyle = c.fg
+  ctx.font = 'bold 11px ui-monospace, monospace'
+  ctx.textAlign = 'left'
+  ctx.fillText('ROUTE', 0, -7)
+  ctx.fillStyle = c.hole
+  ctx.fillRect(0, 0, w, h)
+  for (const gate of map.gates) {
+    const gaps = [gate.service, gate.charged].sort((a, b) => a.lo - b.lo)
+    ctx.fillStyle = c.tile
+    for (const [top, bottom] of [[0, gaps[0].lo], [gaps[0].hi, gaps[1].lo], [gaps[1].hi, h]]) {
+      ctx.fillRect(gate.x, top, Math.max(3, gate.w), bottom - top)
+    }
+    ctx.fillStyle = c.live
+    ctx.fillRect(gate.x - 1, gate.service.lo, Math.max(5, gate.w + 2), 2)
+    ctx.fillStyle = c.warn
+    ctx.fillRect(gate.x - 1, gate.charged.lo, Math.max(5, gate.w + 2), 2)
+    if (gate.pickup) {
+      ctx.font = 'bold 10px ui-sans-serif, sans-serif'
+      ctx.fillStyle = c.live
+      ctx.fillText('◇', gate.x + 4, (gate.service.lo + gate.service.hi) / 2 + 3)
+      ctx.fillStyle = c.warn
+      ctx.fillText('↯', gate.x + 4, (gate.charged.lo + gate.charged.hi) / 2 + 3)
+    }
+  }
+  for (const player of map.players) {
+    if (!player.alive && now > (crashUntil.get(player.id) ?? 0)) continue
+    if (player.x < 0 || player.x > w || player.y < 0 || player.y > h) continue
+    ctx.strokeStyle = player.solid ? c.flare : c.fg
+    ctx.fillStyle = player.solid ? c.flare : c.hole
+    ctx.lineWidth = 1.5
+    ctx.beginPath(); ctx.arc(player.x, player.y, 4, 0, Math.PI * 2)
+    ctx.fill(); ctx.stroke()
+    ctx.fillStyle = c.fg
+    ctx.font = 'bold 10px ui-monospace, monospace'
+    ctx.textAlign = 'center'
+    ctx.fillText(player.alive ? player.label : '×', player.labelX, player.labelY)
+  }
+  ctx.restore()
+}
+
+function draw(ctx, snap, previous, receivedAt, interval, ownId, now, cueUntil, reduced) {
   const c = palette()
   ctx.clearRect(0, 0, W, H)
   ctx.fillStyle = c.hole
@@ -115,7 +173,18 @@ function draw(ctx, snap, now, cueUntil, reduced) {
   const viewed = snap?.players?.find(p => p.id === snap.viewedId)
   const cameraX = Number.isFinite(viewed?.x) ? viewed.x - 180 : -180
   for (const gate of snap?.gates ?? []) drawGate(ctx, gate, cameraX, c)
-  if (viewed) drawDrone(ctx, viewed, cameraX, c, !reduced && now < cueUntil)
+  for (const rival of snap?.players ?? []) {
+    if (rival.id === snap.viewedId || rival.spectating) continue
+    const before = previous?.players?.find(player => player.id === rival.id)
+    const t = reduced || !before?.alive || !rival.alive || !Number.isFinite(before.x) ||
+      !Number.isFinite(before.y) ? 1 : Math.min(1, Math.max(0, (now - receivedAt) / interval))
+    const pose = before && t < 1 ? { ...rival,
+      x: before.x + (rival.x - before.x) * t,
+      y: before.y + (rival.y - before.y) * t } : rival
+    drawDrone(ctx, pose, cameraX, c, false, 0.25, `${rival.slot + 1} ${rival.name?.slice(0, 9) ?? ''}`)
+  }
+  if (viewed) drawDrone(ctx, viewed, cameraX, c, !reduced && now < cueUntil, 1,
+    ownId && viewed.id !== ownId ? 'VIEW' : '')
   else {
     ctx.fillStyle = c.muted
     ctx.font = '18px ui-sans-serif, sans-serif'
@@ -136,7 +205,13 @@ export default function Ventline() {
   const [cue, setCue] = useState('')
   const socketRef = useRef(null)
   const canvasRef = useRef(null)
+  const mapCanvasRef = useRef(null)
   const snapRef = useRef(null)
+  const previousRef = useRef(null)
+  const receivedAtRef = useRef(0)
+  const intervalRef = useRef(50)
+  const finalMapRef = useRef(null)
+  const crashUntilRef = useRef(new Map())
   const idRef = useRef(null)
   const audioRef = useRef(null)
   const mutedRef = useRef(false)
@@ -179,6 +254,9 @@ export default function Ventline() {
     const socket = new WebSocket(`${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ventline-ws`, 'ventline.v1')
     socketRef.current = socket
     snapRef.current = null
+    previousRef.current = null
+    finalMapRef.current = null
+    crashUntilRef.current.clear()
     idRef.current = null
     eventSeqRef.current = 0
     setSnap(null); setMyId(null); setReady(false); setCue('')
@@ -199,7 +277,18 @@ export default function Ventline() {
       }
       if (message.t !== 'snap') return
       const previousPhase = snapRef.current?.phase
+      for (const player of message.players ?? []) {
+        if (!player.alive && snapRef.current?.players?.find(before => before.id === player.id)?.alive) {
+          crashUntilRef.current.set(player.id, performance.now() + 900)
+        }
+      }
+      previousRef.current = snapRef.current
+      const receivedAt = performance.now()
+      if (receivedAtRef.current) intervalRef.current = Math.max(16, receivedAt - receivedAtRef.current)
+      receivedAtRef.current = receivedAt
       snapRef.current = message
+      if (message.phase === 'over') finalMapRef.current ??= message
+      else finalMapRef.current = null
       setSnap(message)
       if (previousPhase && previousPhase !== 'lobby' && message.phase === 'lobby') {
         setReady(false)
@@ -224,15 +313,21 @@ export default function Ventline() {
   useEffect(() => {
     const canvas = canvasRef.current
     const ctx = canvas.getContext('2d')
+    const mapCanvas = mapCanvasRef.current
+    const mapCtx = mapCanvas.getContext('2d')
     const ratio = Math.min(window.devicePixelRatio || 1, 2)
     canvas.width = W * ratio; canvas.height = H * ratio
+    mapCanvas.width = 176 * ratio; mapCanvas.height = 128 * ratio
     ctx.setTransform(ratio, 0, 0, ratio, 0, 0)
+    mapCtx.setTransform(ratio, 0, 0, ratio, 0, 0)
     const media = window.matchMedia('(prefers-reduced-motion: reduce)')
     const updateMotion = () => { reducedRef.current = media.matches }
     updateMotion(); media.addEventListener('change', updateMotion)
     let frame
     const render = now => {
-      draw(ctx, snapRef.current, now, cueUntilRef.current, reducedRef.current)
+      draw(ctx, snapRef.current, previousRef.current, receivedAtRef.current, intervalRef.current,
+        idRef.current, now, cueUntilRef.current, reducedRef.current)
+      drawMap(mapCtx, finalMapRef.current ?? snapRef.current, palette(), now, crashUntilRef.current)
       frame = requestAnimationFrame(render)
     }
     frame = requestAnimationFrame(render)
@@ -289,9 +384,12 @@ export default function Ventline() {
         <span>Shield <strong>{own?.shield ? '◇ held' : 'empty'}</strong></span>
         <span>Charge <strong>{own?.charge ? '↯ held' : 'empty'}</strong></span>
       </div>
-      <div onPointerDown={event => { if (event.button === 0 || event.pointerType === 'touch') press() }}
+      <div onPointerDown={event => { if (event.target === canvasRef.current && (event.button === 0 || event.pointerType === 'touch')) press() }}
         className="relative cursor-pointer overflow-hidden border-x border-b border-line bg-bg"
         style={{ touchAction: 'none' }} aria-label="Ventline flight area. Tap or click to flap">
+        <div className="relative h-32 border-b border-line bg-surface">
+          <canvas ref={mapCanvasRef} className="pointer-events-none absolute right-1 top-0 h-32 w-44" aria-hidden="true" />
+        </div>
         <canvas ref={canvasRef} className="block h-auto w-full" style={{ aspectRatio: '8 / 5' }} aria-hidden="true" />
       </div>
       <div className="mt-4 flex flex-wrap items-start justify-between gap-4">
