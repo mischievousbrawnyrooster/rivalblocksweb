@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { projectWorld, projectMap, mapMarkers } from './ventlineView.js'
+import { projectWorld, projectMap, mapMarkers, mapLabelX } from './ventlineView.js'
 import { gateAt } from '../../server/ventline.js'
 
 test('camera movement shifts a shutter while world height stays scaled', () => {
@@ -76,4 +76,13 @@ test('result markers retain only crash Xs visible at freeze time', () => {
   const frozen = new Set(['p2'])
   assert.deepEqual(mapMarkers(players, 1000, crashUntil, frozen), mapMarkers(players, 2500, crashUntil, frozen))
   assert.deepEqual(mapMarkers(players, 2500, crashUntil, frozen).map(marker => marker.labels), [['1'], ['×2']])
+})
+
+test('eight-slot label at either edge remains wholly inside the map', () => {
+  const label = '1 2 3 4 5 6 7 8'
+  const measuredWidth = label.length * 6 // 10px monospace canvas text is about 6px per glyph.
+  const left = mapLabelX(0, 160, measuredWidth)
+  const right = mapLabelX(160, 160, measuredWidth)
+  assert.ok(left - measuredWidth / 2 >= 2)
+  assert.ok(right + measuredWidth / 2 <= 158)
 })

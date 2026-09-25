@@ -48,3 +48,6 @@ export function mapMarkers(players, now, crashUntil, frozenCrashes = null) {
     labels: marker.labels.sort((a, b) => a.slot - b.slot).map(label => label.text),
   }))
 }
+
+export const mapLabelX = (x, mapWidth, labelWidth) =>
+  Math.max(labelWidth / 2 + 2, Math.min(mapWidth - labelWidth / 2 - 2, x))

@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { useTitle } from '../lib/useTitle.js'
-import { projectWorld, projectMap, mapMarkers } from '../lib/ventlineView.js'
+import { projectWorld, projectMap, mapMarkers, mapLabelX } from '../lib/ventlineView.js'
 
 const W = 960
 const H = 600
@@ -142,7 +142,8 @@ function drawMap(ctx, snap, c, now, crashUntil, frozenCrashes) {
     ctx.fillStyle = document.documentElement.dataset.theme === 'light' ? c.surface : c.fg
     ctx.font = 'bold 10px ui-monospace, monospace'
     ctx.textAlign = 'center'
-    ctx.fillText(marker.labels.join(' '), Math.max(14, Math.min(w - 14, marker.x)),
+    const label = marker.labels.join(' ')
+    ctx.fillText(label, mapLabelX(marker.x, w, ctx.measureText(label).width),
       marker.y < 12 ? marker.y + 16 : marker.y - 7)
   }
   ctx.restore()
