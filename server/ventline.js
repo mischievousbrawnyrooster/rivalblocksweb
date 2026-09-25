@@ -103,3 +103,101 @@ export const stepRun = (run) => {
   }
   return run
 }
+
+export const makeMatch = (seed) => ({ seed, phase: 'lobby', countdown: 0,
+  players: new Map(), winners: [], lastViewedId: null })
+
+export const joinMatch = (match, { id, name, slot }) => {
+  const spectating = match.phase !== 'lobby' ||
+    [...match.players.values()].filter((p) => !p.spectating && p.connected).length >= 8
+  const player = { id, name, slot, spectating, connected: true, ready: false, run: null }
+  match.players.set(id, player)
+  return player
+}
+
+export const setReady = (match, id) => {
+  const player = match.players.get(id)
+  if (!['lobby', 'countdown'].includes(match.phase) || !player?.connected || player.spectating) return
+  player.ready = true
+  if (match.phase === 'lobby' &&
+    [...match.players.values()].filter((p) => p.connected && p.ready && !p.spectating).length >= 2) {
+    match.phase = 'countdown'
+    match.countdown = 125
+  }
+}
+
+export const disconnectMatch = (match, id) => {
+  const player = match.players.get(id)
+  if (!player) return
+  player.connected = false
+  if (player.run) player.run.alive = false
+  if (match.phase === 'countdown' &&
+    [...match.players.values()].filter((p) => p.connected && p.ready && !p.spectating).length < 2) {
+    match.phase = 'lobby'
+    match.countdown = 0
+  }
+}
+
+const alivePlayers = (match) => [...match.players.values()].filter((p) => p.connected && p.run?.alive)
+const spectatorTarget = (match) => alivePlayers(match).sort((a, b) =>
+  b.run.score - a.run.score || b.run.x - a.run.x || String(a.id).localeCompare(String(b.id)))[0]
+
+export const stepMatch = (match) => {
+  if (match.phase === 'countdown' && --match.countdown === 0) {
+    for (const player of match.players.values()) {
+      if (player.ready && player.connected && !player.spectating) {
+        player.run = makeRun({ seed: match.seed, id: player.id, name: player.name, slot: player.slot })
+      } else player.spectating = true
+    }
+    match.phase = 'playing'
+  } else if (match.phase === 'playing') {
+    match.lastViewedId = spectatorTarget(match)?.id ?? match.lastViewedId
+    for (const player of alivePlayers(match)) stepRun(player.run)
+    if (!alivePlayers(match).length) {
+      match.phase = 'over'
+      const ranked = [...match.players.values()].filter((p) => p.connected && p.run)
+        .sort((a, b) => b.run.score - a.run.score || b.run.clean - a.run.clean || b.run.x - a.run.x)
+      const first = ranked[0]?.run
+      match.winners = first ? ranked.filter((p) => p.run.score === first.score &&
+        p.run.clean === first.clean && p.run.x === first.x).map((p) => p.id) : []
+    }
+  }
+  return match
+}
+
+export const matchResults = (match) => [...match.players.values()]
+  .filter((p) => !p.spectating && p.run)
+  .map((p) => ({ name: p.name, score: p.run.score,
+    won: p.connected && match.winners.includes(p.id), kills: 0, deaths: 0 }))
+
+const playerView = (player) => ({
+  id: player.id, name: player.name, slot: player.slot,
+  x: player.run?.x ?? null, y: player.run?.y ?? null,
+  alive: player.run?.alive ?? false, spectating: player.spectating,
+  connected: player.connected, score: player.run?.score ?? 0,
+  clean: player.run?.clean ?? 0, shield: player.run?.shield ?? false,
+  charge: player.run?.charge ?? false,
+  event: player.run?.event ?? { seq: 0, type: null },
+})
+
+const gateWindow = (seed, x) => {
+  const current = Math.max(1, Math.floor((x - 480) / 360) + 1)
+  return Array.from({ length: current === 1 ? 4 : 5 }, (_, i) =>
+    gateAt(seed, current === 1 ? i + 1 : current + i - 1))
+}
+
+export const snapshot = (match, viewerId, board, personalBest) => {
+  const viewer = match.players.get(viewerId)
+  const viewed = viewer?.connected && viewer.run?.alive ? viewer : spectatorTarget(match)
+  const viewedId = viewed?.id ?? match.lastViewedId
+  const run = viewed?.run ?? match.players.get(viewedId)?.run
+  return { t: 'snap', phase: match.phase, viewedId: viewedId ?? null, personalBest,
+    players: [...match.players.values()].map(playerView),
+    gates: gateWindow(match.seed, run?.x ?? 0), board }
+}
+
+export const soloSnapshot = (run, board, personalBest) => ({
+  t: 'snap', phase: run.alive ? 'playing' : 'over', viewedId: run.id,
+  personalBest, players: [playerView({ ...run, run, spectating: false, connected: true })],
+  gates: gateWindow(run.seed, run.x), board,
+})

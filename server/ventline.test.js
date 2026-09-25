@@ -1,6 +1,8 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { gateAt, makeRun, flap, stepRun, TICK_MS, speedFor } from './ventline.js'
+import { gateAt, makeRun, flap, stepRun, TICK_MS, speedFor,
+  makeMatch, joinMatch, setReady, disconnectMatch, stepMatch, matchResults,
+  snapshot, soloSnapshot } from './ventline.js'
 
 test('a seed and index reproduce bounded, separate openings and fixed pickups', () => {
   assert.deepEqual(gateAt(42, 5), gateAt(42, 5))
@@ -172,4 +174,165 @@ test('a shield absorbs one shutter, blocks repeat hits, and keeps a score charge
   assert.equal(run.charge, true)
   assert.equal(run.shield, false)
   assert.equal(run.event.seq, 1)
+})
+
+test('two ready players share a 125 tick countdown and independent runs', () => {
+  const match = makeMatch(42)
+  joinMatch(match, { id: 'a', name: 'Ada', slot: 0 })
+  joinMatch(match, { id: 'b', name: 'Bob', slot: 1 })
+  setReady(match, 'a')
+  for (let i = 0; i < 125; i++) stepMatch(match)
+  assert.equal(match.phase, 'lobby')
+  setReady(match, 'b')
+  assert.equal(match.phase, 'countdown')
+  for (let i = 0; i < 124; i++) stepMatch(match)
+  assert.equal(match.phase, 'countdown')
+  stepMatch(match)
+  assert.equal(match.phase, 'playing')
+  const a = match.players.get('a').run
+  const b = match.players.get('b').run
+  assert.notEqual(a, b)
+  assert.deepEqual(gateAt(a.seed, 5), gateAt(b.seed, 5))
+  a.shield = true
+  a.charge = true
+  assert.equal(b.shield, false)
+  assert.equal(b.charge, false)
+  flap(a)
+  stepMatch(match)
+  assert.notEqual(a.y, b.y)
+  assert.equal(a.alive, true)
+  assert.equal(b.alive, true)
+})
+
+test('eight active slots cap a round and later arrivals spectate', () => {
+  const match = makeMatch(42)
+  for (let i = 0; i < 9; i++) joinMatch(match, { id: `p${i}`, name: `P${i}`, slot: i })
+  assert.equal([...match.players.values()].filter(p => !p.spectating).length, 8)
+  for (let i = 0; i < 8; i++) setReady(match, `p${i}`)
+  for (let i = 0; i < 125; i++) stepMatch(match)
+  joinMatch(match, { id: 'late', name: 'Late', slot: 9 })
+  assert.equal(match.players.get('late').spectating, true)
+  assert.equal(match.players.get('late').run, null)
+})
+
+test('a disconnected participant cannot win and round waits for all runs to end', () => {
+  const match = makeMatch(42)
+  for (const id of ['a', 'b']) {
+    joinMatch(match, { id, name: id, slot: id === 'a' ? 0 : 1 })
+    setReady(match, id)
+  }
+  for (let i = 0; i < 125; i++) stepMatch(match)
+  match.players.get('a').run.score = 99
+  disconnectMatch(match, 'a')
+  assert.equal(match.phase, 'playing')
+  match.players.get('b').run.alive = false
+  stepMatch(match)
+  assert.equal(match.phase, 'over')
+  assert.deepEqual(matchResults(match), [
+    { name: 'a', score: 99, won: false, kills: 0, deaths: 0 },
+    { name: 'b', score: 0, won: true, kills: 0, deaths: 0 },
+  ])
+  disconnectMatch(match, 'b')
+  assert.equal(matchResults(match).every(row => !row.won), true)
+  const abandoned = makeMatch(42)
+  for (const id of ['a', 'b']) joinMatch(abandoned, { id, name: id, slot: id === 'a' ? 0 : 1 })
+  for (const id of ['a', 'b']) setReady(abandoned, id)
+  for (let i = 0; i < 125; i++) stepMatch(abandoned)
+  disconnectMatch(abandoned, 'a')
+  disconnectMatch(abandoned, 'b')
+  stepMatch(abandoned)
+  assert.equal(abandoned.phase, 'over')
+  assert.deepEqual(abandoned.winners, [])
+})
+
+test('winner uses score, then clean clears, then distance; exact ties share a win', () => {
+  const match = makeMatch(42)
+  for (const id of ['a', 'b', 'c', 'd']) {
+    joinMatch(match, { id, name: id, slot: id.charCodeAt(0) - 97 })
+  }
+  for (const id of ['a', 'b', 'c', 'd']) setReady(match, id)
+  for (let i = 0; i < 125; i++) stepMatch(match)
+  const [a, b, c, d] = ['a', 'b', 'c', 'd'].map(id => match.players.get(id).run)
+  Object.assign(a, { score: 3, clean: 5, x: 200, alive: false })
+  Object.assign(b, { score: 4, clean: 4, x: 300, alive: false })
+  Object.assign(c, { score: 4, clean: 4, x: 310, alive: false })
+  Object.assign(d, { score: 4, clean: 4, x: 310, alive: false })
+  stepMatch(match)
+  assert.deepEqual(match.winners, ['c', 'd'])
+  assert.deepEqual(matchResults(match).map(row => row.won), [false, false, true, true])
+  const cleanMatch = makeMatch(42)
+  for (const id of ['a', 'b']) {
+    joinMatch(cleanMatch, { id, name: id, slot: id === 'a' ? 0 : 1 })
+    setReady(cleanMatch, id)
+  }
+  for (let i = 0; i < 125; i++) stepMatch(cleanMatch)
+  Object.assign(cleanMatch.players.get('a').run, { score: 4, clean: 5, x: 200, alive: false })
+  Object.assign(cleanMatch.players.get('b').run, { score: 4, clean: 4, x: 300, alive: false })
+  stepMatch(cleanMatch)
+  assert.deepEqual(cleanMatch.winners, ['a'])
+})
+
+test('solo snapshot carries one authoritative player and a finite course window', () => {
+  const run = makeRun({ seed: 42, id: 's', name: 'Solo', slot: 0 })
+  Object.assign(run, { x: gateAt(42, 5).x + 1, score: 7, shield: true,
+    event: { seq: 2, type: 'shield-pickup' } })
+  const view = soloSnapshot(run, [], 12)
+  assert.equal(view.t, 'snap')
+  assert.equal(view.phase, 'playing')
+  assert.equal(view.personalBest, 12)
+  assert.equal(view.viewedId, 's')
+  assert.deepEqual(view.players.map(p => [p.id, p.name, p.slot, p.score, p.shield, p.event.seq]),
+    [['s', 'Solo', 0, 7, true, 2]])
+  assert.deepEqual(view.gates.map(g => g.index), [4, 5, 6, 7, 8])
+  assert.deepEqual(view.gates[1], gateAt(42, 5))
+  run.alive = false
+  assert.equal(soloSnapshot(run, [], 12).phase, 'over')
+  assert.equal(soloSnapshot(run, [], 12).players[0].x, run.x)
+})
+
+test('spectator follows score, then distance, then stable ID and switches on crash', () => {
+  const match = makeMatch(42)
+  for (const id of ['b', 'a', 'c']) {
+    joinMatch(match, { id, name: id, slot: id.charCodeAt(0) - 97 })
+  }
+  for (const id of ['b', 'a', 'c']) setReady(match, id)
+  for (let i = 0; i < 125; i++) stepMatch(match)
+  const a = match.players.get('a').run
+  const b = match.players.get('b').run
+  const c = match.players.get('c').run
+  Object.assign(a, { score: 4, x: 600, y: 200, shield: true, event: { seq: 3, type: 'shield-use' } })
+  Object.assign(b, { score: 4, x: 600, y: 210, charge: true })
+  Object.assign(c, { score: 3, x: 700 })
+  assert.equal(snapshot(match, 'spectator', [], 0).viewedId, 'a')
+  b.x = 601
+  assert.equal(snapshot(match, 'spectator', [], 0).viewedId, 'b')
+  b.alive = false
+  assert.equal(snapshot(match, 'spectator', [], 0).viewedId, 'a')
+  assert.equal(snapshot(match, 'a', [], 0).viewedId, 'a')
+  a.alive = false
+  assert.equal(snapshot(match, 'a', [], 0).viewedId, 'c')
+})
+
+test('live snapshot carries server state and fits the WebSocket payload limit', () => {
+  const match = makeMatch(42)
+  for (let i = 0; i < 8; i++) {
+    joinMatch(match, { id: `p${i}`, name: `Player ${i}`, slot: i })
+  }
+  for (let i = 0; i < 8; i++) setReady(match, `p${i}`)
+  for (let i = 0; i < 125; i++) stepMatch(match)
+  const run = match.players.get('p0').run
+  Object.assign(run, { x: gateAt(42, 5).x + 1, y: 220, score: 6,
+    shield: true, charge: true, event: { seq: 4, type: 'charge-pickup' } })
+  match.players.get('p0').score = 9999 // untrusted fields never replace run state
+  const view = snapshot(match, 'p0', [], 11)
+  assert.equal(view.phase, 'playing')
+  assert.equal(view.viewedId, 'p0')
+  assert.equal(view.players.length, 8)
+  assert.deepEqual(view.gates.map(g => g.index), [4, 5, 6, 7, 8])
+  assert.deepEqual(view.players[0], {
+    id: 'p0', name: 'Player 0', slot: 0, x: gateAt(42, 5).x + 1, y: 220,
+    alive: true, spectating: false, connected: true, score: 6, clean: 0,
+    shield: true, charge: true, event: { seq: 4, type: 'charge-pickup' },
+  })
+  assert.ok(Buffer.byteLength(JSON.stringify(view), 'utf8') < 4096)
 })
