@@ -1,6 +1,6 @@
 # Ventline: Game Design
 
-*2026-09-25. Draft for player review before implementation planning.*
+*2026-09-25. Player-approved design for implementation planning.*
 
 ## 1. Purpose and pitch
 
