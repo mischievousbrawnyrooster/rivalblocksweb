@@ -3531,6 +3531,34 @@ test('a square wall hit nearly stops the car and leaves its heading alone', () =
   assert.equal(car.heading, before.heading, 'a square hit does not turn the car')
 })
 
+test('a glancing hit turns the nose by how hard it hit, not by a flat fraction', () => {
+  // The wall row runs along +x, so the gap between a shallow heading and the
+  // wall's tangent is exactly -heading (before contact, heading has not
+  // moved: no steering and nothing else touches it). Measuring turn/d in
+  // place of raw turn is what isolates the impact scaling: d itself already
+  // grows with heading, so two raw turns would order the same way whether or
+  // not WALL_ALIGN is scaled by impact. The fraction does not: flat
+  // WALL_ALIGN for both without the factor, WALL_ALIGN * impact (which rises
+  // with heading, since impact is sin(heading) here) with it.
+  const turnFraction = (heading) => {
+    const { match, car } = openGround()
+    const wy = GRID / 2 + 2
+    wallRow(match, wy)
+    placed(match, car, { x: 20, y: wy - 1.3, heading, speed: 10 })
+    const before = untilWall(match, car)
+    assert.ok(before, 'the car never reached the wall')
+    const turn = car.heading - before.heading
+    const d = -before.heading
+    return turn / d
+  }
+  const shallow = turnFraction(0.1)
+  const steep = turnFraction(0.4)
+  assert.ok(
+    steep > shallow + 0.01,
+    `a harder glancing hit must turn the nose by more of the gap to the wall line: shallow ${shallow.toFixed(3)}, steep ${steep.toFixed(3)}`,
+  )
+})
+
 test('a rear-end hit shoves the car ahead and costs the one behind, conserving momentum', () => {
   const match = racing(2)
   match.grid.fill(S_TARMAC)

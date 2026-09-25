@@ -1606,8 +1606,10 @@ export function stepCar(match, car, dt) {
 /**
  * A grid wall faces along x or y, so the blocked axis is its normal. The part
  * of the velocity into it bounces back at WALL_BOUNCE; the part along it is
- * scrubbed by how square the hit was. A glancing hit also turns the nose toward
- * the wall's line, so a car straightens out along it rather than grinding.
+ * scrubbed by how square the hit was. A glancing hit also turns the nose
+ * toward the wall's line, by WALL_ALIGN scaled by impact, so a bare graze
+ * only nudges the heading and a car straightens out along the wall rather
+ * than grinding.
  */
 function wallHit(match, car, hitX, hitY, vx, vy) {
   const speed = Math.hypot(vx, vy)
@@ -1622,7 +1624,7 @@ function wallHit(match, car, hitX, hitY, vx, vy) {
     const along = Math.atan2(ty, tx)
     const d = Math.atan2(Math.sin(along - car.heading), Math.cos(along - car.heading))
     // Not a car reversing along the wall: only a nose already pointing its way.
-    if (Math.abs(d) < Math.PI / 2) car.heading += d * WALL_ALIGN
+    if (Math.abs(d) < Math.PI / 2) car.heading += d * WALL_ALIGN * impact
   }
 }
 
