@@ -145,6 +145,23 @@ test('a match with nobody in it leaves the file alone', () => {
   assert.equal(keep.top()[0].matches, 1)
 })
 
+test('ventline rejects a board file with another or missing identity', () => {
+  const ventline = boardFor('ventline')
+  const d = fresh()
+  const row = { ...filled().players[0], bestScore: 12 }
+  for (const identity of [{ game: 'fracture', mode: null }, { mode: null }, { game: 'ventline', mode: 'other' }]) {
+    writeFileSync(join(d, ventline.file), JSON.stringify({ ...identity, players: [row] }))
+    const loaded = load(d, ventline)
+    assert.deepEqual(loaded.players, [], JSON.stringify(identity))
+    assert.equal(loaded.game, 'ventline')
+    assert.equal(loaded.mode, null)
+  }
+  writeFileSync(join(d, ventline.file), JSON.stringify({ game: 'fracture', mode: null, players: [filled().players[0]] }))
+  assert.deepEqual(load(d, ventline).players, [], 'a foreign row without bestScore was trusted')
+  writeFileSync(join(d, ventline.file), JSON.stringify({ game: 'ventline', mode: null, players: [filled().players[0]] }))
+  assert.deepEqual(load(d, ventline).players, [], 'a Ventline row without bestScore was trusted')
+})
+
 test('ventline banks distinct runs once each and persists the best score', () => {
   const d = fresh()
   const keep = runKeeper(boardFor('ventline'), d)

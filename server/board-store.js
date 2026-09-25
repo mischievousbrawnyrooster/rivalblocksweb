@@ -25,7 +25,9 @@ export const boardDir = (env = process.env) => env.BOARD_DIR || 'data'
 export function load(dir, spec) {
   try {
     const raw = JSON.parse(readFileSync(join(dir, spec.file), 'utf8'))
-    if (!isBoard(raw)) return emptyBoard(spec.game, spec.mode)
+    if (raw?.game !== spec.game || raw.mode !== spec.mode || !isBoard(raw)) {
+      return emptyBoard(spec.game, spec.mode)
+    }
     return { ...emptyBoard(spec.game, spec.mode), ...raw }
   } catch {
     return emptyBoard(spec.game, spec.mode)
