@@ -64,6 +64,7 @@ export default defineConfig({
       // Not '/ws…': proxy keys match by prefix, here and in nginx, so anything
       // starting '/ws' is swallowed by the Blockout rule above.
       '/cutline-ws': { target: 'ws://127.0.0.1:8088', ws: true },
+      '/ventline-ws': { target: 'ws://127.0.0.1:8089', ws: true },
     },
   },
 })

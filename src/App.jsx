@@ -21,6 +21,7 @@ import NotFound from './pages/NotFound.jsx'
 // `npm run check:bundle` fails if three.js ever reaches the main chunk.
 const Blockout3D = lazy(() => import('./pages/Blockout3D.jsx'))
 const Cutline = lazy(() => import('./pages/Cutline.jsx'))
+const Ventline = lazy(() => import('./pages/Ventline.jsx'))
 
 function LoadingRoute({ title, line }) {
   return (
@@ -76,6 +77,16 @@ export default function App() {
         <Route path="play/blastworks" element={<Blastworks />} />
         <Route path="play/void-drillers" element={<VoidDrillers />} />
         <Route path="play/cipher-run" element={<CipherRun />} />
+        <Route
+          path="play/ventline"
+          element={
+            <RouteLoadError title="Ventline" headline="The flight bay did not load">
+              <Suspense fallback={<LoadingRoute title="Ventline" line="Loading the flight bay…" />}>
+                <Ventline />
+              </Suspense>
+            </RouteLoadError>
+          }
+        />
         <Route
           path="play/cutline"
           element={
