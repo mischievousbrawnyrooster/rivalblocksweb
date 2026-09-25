@@ -3580,6 +3580,14 @@ test('a rear-end hit shoves the car ahead and costs the one behind, conserving m
   resolveContact(match)
   assert.equal(a.vx, 10)
   assert.equal(b.vx, 4)
+
+  // Nor is a car down a hole: falling is not there to be hit either.
+  line()
+  a.fellIn = { x: a.x, y: a.y, heading: 0, width: 3 }
+  a.fallUntil = match.now + hd.FALL_MS
+  resolveContact(match)
+  assert.equal(a.vx, 10)
+  assert.equal(b.vx, 4)
 })
 
 /** An open-ground car already drifting right at about 9 tiles/s. */
@@ -3748,7 +3756,7 @@ test('drift fields and status flags ride the snapshot only while they apply', ()
   assert.equal('driftEnd' in mine(), false, 'an ended chain is shown for DRIFT_SHOW_MS, then dropped')
 })
 
-test('eight cars drifting, boosting and drafting, with chains ending, fit the 4 KB frame', () => {
+test('eight short-named cars drifting, boosting and drafting, with chains ending, fit the 4 KB target', () => {
   const match = racing(MAX_PLAYERS)
   for (let i = 0; i < MAX_HAZARDS; i++) {
     match.hazards.push({ kind: 'slick', x: 40, y: 40, until: 9e9, by: 'p-1' })
@@ -3766,6 +3774,41 @@ test('eight cars drifting, boosting and drafting, with chains ending, fit the 4 
       vy: 0,
     })
   }
+  // 4 KB is a bandwidth target, not a limit anything enforces on outbound
+  // frames; long names (up to 16 characters) or every rare flag at once can
+  // push a real frame past it.
   const bytes = JSON.stringify(snapshot(match)).length
   assert.ok(bytes < 4096, `a full drifting frame is ${bytes} bytes, over maxPayload`)
+})
+
+test('a drift live when the race ends is banked, not left hanging', () => {
+  const match = racing(2)
+  match.grid.fill(S_TARMAC)
+  const [a, b] = [...match.cars.values()]
+  // The leader is about to complete the race.
+  a.lap = match.laps
+  // A moving drift, not a stationary one: at rest, updateDrift's own speed
+  // check would end it regardless of this fix, and the test would prove
+  // nothing. The one tick still to run before the phase flips grows the
+  // chain a little further, so 237.6 in lands on 238 out.
+  Object.assign(b, { drift: true, driftDir: 1, driftChain: 237.6, heading: 0, vx: 9, vy: 0 })
+
+  tick(match, TICK_MS, () => 0)
+
+  assert.equal(match.phase, 'over', 'the race must conclude this tick')
+  assert.equal(b.driftDir, 0, 'the flag must end a drift still live when the race ends')
+  assert.equal(b.driftScore, 238, 'a chain still going when the leader crosses is banked, not dropped')
+  const bs = snapshot(match).cars.find((c) => c.id === b.id)
+  assert.equal('drift' in bs, false, 'a parked car must not keep drawing skids and smoke')
+})
+
+test('drifting backwards along the nose does not engage a drift', () => {
+  const { match, car } = openGround()
+  placed(match, car, { x: GRID / 2, y: GRID / 2, heading: 0, speed: -(hd.DRIFT_MIN_SPEED + 2) })
+  applyInput(match, car.id, { drift: 1, steer: 1, brake: 1 })
+  // One tick is where the bug shows: the reverse speed cap (0.4 * top
+  // speed) drops a moving-backward car under DRIFT_MIN_SPEED by the next
+  // tick regardless of this fix, which would mask it if checked later.
+  stepCar(match, car, TICK_MS / 1000)
+  assert.equal(car.driftDir, 0, 'moving backwards along the nose must not count as a drift')
 })

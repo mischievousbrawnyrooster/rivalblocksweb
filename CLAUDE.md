@@ -386,9 +386,10 @@ is nothing to lock. `BOARD_DIR` says where they live (`./data` in dev,
 - **Cutline: status flags are sent only while true.** `drafting`, `boosting`,
   `sliding`, `spinning`, `airborne`, `airT`, `shield`, `ghost`, `shocked`, `hop`,
   `wrongWay`, `falling`, `land`, `drift`, `driftChain`, `driftScore` and
-  `driftEnd` would push a frame of eight cars past its 4 KB budget if every car
-  always carried them; the page reads a missing flag as false. The first five,
-  and `airT`, were sent on every car until drift needed the room.
+  `driftEnd` would push a frame of eight cars well past its 4 KB target if
+  every car always carried them (a target, measured with short names; nothing
+  enforces it on outbound frames); the page reads a missing flag as false. The
+  first five, and `airT`, were sent on every car until drift needed the room.
 - **Cutline: a jump holds its speed.** In the air there is no brake, no drag
   and no off-road cap from a wall below. Every ramp's landing checks, in
   `rampLandsClear` and the tests, sample every half tile of landing distance

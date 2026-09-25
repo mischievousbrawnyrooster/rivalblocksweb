@@ -1323,7 +1323,7 @@ export function leave(match, id) {
 
 // --- Handling -------------------------------------------------------------
 // Measured lap time (server/cutline-laps.mjs: 4 bots, rng 0.5, 90 s a
-// circuit). Before the weight, grip-fade and drift handling: median 25.14 s
+// circuit). Before the weight, grip-fade and drift handling: median 25.14s
 // over 66 laps. After: median 25.38s over 65 laps, every circuit
 // lapping. The old note here (11.87 s) predated the current track generator.
 export const TOP_SPEED = 14.0        // tiles per second
@@ -1493,7 +1493,14 @@ function steerToward(car, dt) {
 function updateDrift(match, car, speed, airborne, spinning) {
   if (car.driftDir) {
     if (!car.drift || speed < DRIFT_MIN_SPEED) endDrift(match, car, false)
-  } else if (car.drift && !airborne && !spinning && speed >= DRIFT_MIN_SPEED && car.steerNow !== 0) {
+  } else if (
+    car.drift &&
+    !airborne &&
+    !spinning &&
+    speed >= DRIFT_MIN_SPEED &&
+    car.steerNow !== 0 &&
+    car.vx * Math.cos(car.heading) + car.vy * Math.sin(car.heading) > 0
+  ) {
     // Locked to the side it was turned into until it ends.
     car.driftDir = Math.sign(car.steerNow)
     car.driftChain = 0
@@ -2522,6 +2529,9 @@ export function tick(match, dtMs = TICK_MS, rng = Math.random) {
     match.phase = 'over'
     match.final = true
     match.overSince = match.now
+    // The flag ends every drift: a chain still going banks, rather than
+    // hanging on the wire through the results with a parked car smoking.
+    for (const c of match.cars.values()) if (c.driftDir) endDrift(match, c, false)
   }
 }
 
