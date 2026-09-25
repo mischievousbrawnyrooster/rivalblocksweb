@@ -3450,3 +3450,47 @@ test('steering builds to full lock over STEER_IN and lets go over STEER_OUT', ()
   assert.equal(car.steerNow, 0, 'released for STEER_OUT, the wheel is back at centre')
   assert.ok(hd.STEER_OUT < hd.STEER_IN, 'letting go is quicker than turning in')
 })
+
+// The spec's feel targets, as measured on the prototype: 0 to top in about 3 s
+// (the old handling took 2.3) and top to a stop in about 1 s (it took 0.4).
+const FEEL_TO_TOP_S = [2.5, 3.5]
+const FEEL_TO_STOP_S = [0.8, 1.2]
+
+test('full throttle still reaches TOP_SPEED, and takes its time doing it', () => {
+  assert.ok(hd.ACCEL * (1 - hd.ACCEL_FADE) > hd.DRAG * TOP_SPEED, 'thrust at the cap must beat drag, or top speed is unreachable')
+  const { match, car } = openGround()
+  applyInput(match, car.id, { throttle: 1 })
+  let t = 0
+  while (speedOf(car) < TOP_SPEED * 0.99 && t < 10) {
+    stepCar(match, car, TICK_MS / 1000)
+    t += TICK_MS / 1000
+    if (car.x > GRID - 5) car.x = 5
+  }
+  assert.ok(t > FEEL_TO_TOP_S[0] && t < FEEL_TO_TOP_S[1], `0 to top took ${t.toFixed(2)} s`)
+})
+
+test('braking from top speed stops the car in about a second, even on the throttle', () => {
+  const { match, car } = openGround()
+  placed(match, car, { x: 5, y: GRID / 2, heading: 0, speed: TOP_SPEED })
+  // Throttle held too: every bot brakes like this, and the brake must win.
+  applyInput(match, car.id, { brake: 1, throttle: 1 })
+  let t = 0
+  while (car.vx > 0 && t < 5) {
+    stepCar(match, car, TICK_MS / 1000)
+    t += TICK_MS / 1000
+  }
+  assert.ok(t > FEEL_TO_STOP_S[0] && t < FEEL_TO_STOP_S[1], `top to a stop took ${t.toFixed(2)} s`)
+})
+
+test('a fast car holds less sideways grip than a slow one, and more off the throttle', () => {
+  // The same sideways slide in three situations: how much survives one step.
+  const kept = (speed, throttle) => {
+    const { match, car } = openGround()
+    placed(match, car, { x: 20, y: GRID / 2, heading: 0, speed, lateral: 3 })
+    applyInput(match, car.id, { throttle: throttle ? 1 : 0 })
+    stepCar(match, car, 0.05)
+    return Math.abs(car.vy) // heading 0, so lateral is vy
+  }
+  assert.ok(kept(TOP_SPEED, true) > kept(2, true), 'grip must fade with speed')
+  assert.ok(kept(TOP_SPEED, true) > kept(TOP_SPEED, false), 'lifting must give some grip back')
+})

@@ -1324,13 +1324,18 @@ export function leave(match, id) {
 // alone. See task-7-report.md for the prior, bug-confounded measurement and
 // the fix.
 export const TOP_SPEED = 14.0        // tiles per second
-export const ACCEL = 18.0
-export const BRAKE = 26.0
-export const DRAG = 1.2
+export const ACCEL = 17.0            // thrust from a standstill
+export const ACCEL_FADE = 0.56       // fraction of that thrust gone at the speed cap
+export const BRAKE = 11.0            // top speed to a stop in about a second
+export const DRAG = 0.5              // low, so a lifted car rolls on
 export const TURN_RATE = 3.2         // rad/s at low speed
 export const TURN_FALLOFF = 0.45     // fraction of turn rate lost at top speed
 export const STEER_IN = 0.15         // seconds from centre to full lock
 export const STEER_OUT = 0.08        // seconds from full lock back to centre
+
+// Grip fades with speed, so a fast corner pushes wide unless the driver lifts.
+export const GRIP_FALLOFF = 0.35     // fraction of lateral grip gone at top speed, on the throttle
+export const LIFT_GRIP = 0.4         // fraction of that loss still felt off the throttle
 
 export const OFFTRACK_CAP = 6.5
 export const OFFTRACK_DRAG = 6.0
@@ -1530,7 +1535,13 @@ export function stepCar(match, car, dt) {
 
   // 3. Thrust, braking and drag act on the forward component only.
   const drive = spinning ? SPIN_THRUST : car.onSlick ? SLICK_THRUST : 1
-  if (car.throttle) fwd += ACCEL * (match.now < car.boostUntil ? BOOST_MULT : 1) * drive * dt
+  // Thrust is strong from a standstill and fades toward the cap, so the last
+  // few km/h take their time. Braking cuts it: with a brake this soft, a car
+  // holding both (as every bot does) sped up below about 7 tiles/s.
+  if (car.throttle && !car.brake) {
+    const fade = 1 - ACCEL_FADE * Math.min(1, Math.max(0, fwd) / cap)
+    fwd += ACCEL * (match.now < car.boostUntil ? BOOST_MULT : 1) * drive * fade * dt
+  }
   // In the air a jump holds its speed: no brakes to bite, no road to drag. The
   // landing checks assume every jump covers the distance its launch speed gives.
   if (!airborne) {
@@ -1543,7 +1554,10 @@ export function stepCar(match, car, dt) {
   const base = offTrack ? GRIP[S_TARMAC] : (GRIP[surface] ?? GRIP[S_TARMAC])
   // A dropped slick is oil that happens to be a hazard rather than a tile, so
   // it resolves to the same grip and needs no second physics path.
-  const grip = car.onSlick ? Math.min(base, GRIP[S_OIL]) : base
+  let grip = car.onSlick ? Math.min(base, GRIP[S_OIL]) : base
+  // Less of it at speed, and less still on the throttle.
+  const load = Math.min(1, speed / TOP_SPEED)
+  grip *= 1 - GRIP_FALLOFF * load * load * (car.throttle ? 1 : LIFT_GRIP)
   lat *= Math.max(0, 1 - grip * dt)
 
   // 5. Clamp and recompose.
