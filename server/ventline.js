@@ -23,8 +23,8 @@ export const gateAt = (seed, index) => {
     charged: gap(chargedY, chargedWidth(index)), pickup: pickupAt(index) }
 }
 
-export const makeRun = (seed) => ({
-  seed, x: 0, y: 300, vy: 0, alive: true, score: 0, clean: 0,
+export const makeRun = ({ seed, id, name, slot }) => ({
+  seed, id, name, slot, x: 0, y: 300, vy: 0, alive: true, score: 0, clean: 0,
   shield: false, charge: false, nextGate: 1, protectedGate: null,
   elapsedMs: 0, lastFlapMs: -Infinity, event: { seq: 0, type: null }, banked: false,
   route: null,
@@ -71,7 +71,7 @@ export const stepRun = (run) => {
       }
       run.shield = false
       run.protectedGate = gate.index
-      effect(run, 'shield-used')
+      effect(run, 'shield-use')
     }
     if (!run.route && run.protectedGate !== gate.index) {
       if (run.y >= gate.service.lo && run.y <= gate.service.hi) run.route = 'service'
@@ -85,15 +85,15 @@ export const stepRun = (run) => {
       if (run.charge) {
         run.score += 2
         run.charge = false
-        effect(run, 'charge-used')
+        effect(run, 'charge-use')
       }
       if (gate.pickup) {
         if (run.route === 'service' && !run.shield) {
           run.shield = true
-          effect(run, 'shield-gained')
+          effect(run, 'shield-pickup')
         } else if (run.route === 'charged' && !run.charge) {
           run.charge = true
-          effect(run, 'charge-gained')
+          effect(run, 'charge-pickup')
         }
       }
     }

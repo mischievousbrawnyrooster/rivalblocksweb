@@ -31,7 +31,7 @@ test('each sampled service opening is reachable without a shield from either pre
     for (const opening of [previous.service, previous.charged]) {
       for (const y of [opening.lo + 14, (opening.lo + opening.hi) / 2, opening.hi - 14]) {
         for (const vy of [-160, 0, 160]) {
-          const start = makeRun(seed)
+          const start = makeRun({ seed })
           Object.assign(start, { x: previous.x + previous.w + 12, y, vy, nextGate: index, lastFlapMs: -Infinity })
           let found = false
           for (const horizon of [0.05, 0.1, 0.15, 0.2, 0.3, 0.4, 0.5, 0.6]) {
@@ -57,7 +57,7 @@ test('each sampled service opening is reachable without a shield from either pre
 
 const approach = (seed, index, route, extras = {}) => {
   const gate = gateAt(seed, index)
-  const run = makeRun(seed)
+  const run = makeRun({ seed })
   Object.assign(run, { nextGate: index, x: gate.x + gate.w - 2, y: (gate[route].lo + gate[route].hi) / 2,
     vy: -12, ...extras })
   return run
@@ -67,8 +67,17 @@ const clear = (run, index = run.nextGate) => {
   return run
 }
 
+test('a run retains its player descriptor for downstream snapshots', () => {
+  const run = makeRun({ seed: 42, id: 'p7', name: 'Ada', slot: 2 })
+  assert.equal(run.seed, 42)
+  assert.equal(run.id, 'p7')
+  assert.equal(run.name, 'Ada')
+  assert.equal(run.slot, 2)
+  assert.deepEqual(gateAt(run.seed, 1), gateAt(42, 1))
+})
+
 test('flap sets one upward impulse subject to an edge cooldown', () => {
-  const run = makeRun(42)
+  const run = makeRun({ seed: 42 })
   assert.equal(flap(run), true)
   assert.equal(run.vy, -310)
   assert.equal(flap(run), false)
@@ -83,7 +92,7 @@ test('flap sets one upward impulse subject to an edge cooldown', () => {
 
 test('ceiling and floor kill even when holding a shield', () => {
   for (const [y, vy] of [[12, -310], [588, 100]]) {
-    const run = makeRun(42)
+    const run = makeRun({ seed: 42 })
     Object.assign(run, { y, vy, shield: true })
     stepRun(run)
     assert.equal(run.alive, false)
@@ -93,7 +102,7 @@ test('ceiling and floor kill even when holding a shield', () => {
 
 test('solid shutter contact kills a drone without a shield', () => {
   const gate = gateAt(42, 1)
-  const run = makeRun(42)
+  const run = makeRun({ seed: 42 })
   Object.assign(run, { x: gate.x - 13, y: 300, vy: 0 })
   stepRun(run)
   assert.equal(run.alive, false)
@@ -101,7 +110,7 @@ test('solid shutter contact kills a drone without a shield', () => {
 })
 
 test('full-body service and charged clears score once; distance alone does not', () => {
-  const far = makeRun(42)
+  const far = makeRun({ seed: 42 })
   for (let i = 0; i < 10; i++) stepRun(far)
   assert.equal(far.score, 0)
   for (const [route, points] of [['service', 1], ['charged', 2]]) {
@@ -122,11 +131,11 @@ test('pickup clear grants route effect after scoring and effects do not stack', 
   const service = clear(approach(42, 5, 'service'))
   assert.equal(service.score, 1)
   assert.equal(service.shield, true)
-  assert.equal(service.event.type, 'shield-gained')
+  assert.equal(service.event.type, 'shield-pickup')
   const charged = clear(approach(42, 5, 'charged'))
   assert.equal(charged.score, 2)
   assert.equal(charged.charge, true)
-  assert.equal(charged.event.type, 'charge-gained')
+  assert.equal(charged.event.type, 'charge-pickup')
   const held = clear(approach(42, 12, 'service', { shield: true, charge: true }))
   assert.equal(held.score, 3)
   assert.equal(held.charge, false)
@@ -139,22 +148,22 @@ test('charge scores once and a new charged pickup follows its consumption', () =
   assert.equal(run.score, 4)
   assert.equal(run.charge, true)
   assert.equal(run.event.seq, 2)
-  assert.equal(run.event.type, 'charge-gained')
+  assert.equal(run.event.type, 'charge-pickup')
   const next = clear(approach(42, 13, 'service', { charge: true }))
   assert.equal(next.score, 3)
   assert.equal(next.charge, false)
-  assert.equal(next.event.type, 'charge-used')
+  assert.equal(next.event.type, 'charge-use')
 })
 
 test('a shield absorbs one shutter, blocks repeat hits, and keeps a score charge', () => {
   const gate = gateAt(42, 5)
-  const run = makeRun(42)
+  const run = makeRun({ seed: 42 })
   Object.assign(run, { nextGate: 5, x: gate.x - 13, y: 300, vy: -12, shield: true, charge: true })
   stepRun(run)
   assert.equal(run.alive, true)
   assert.equal(run.shield, false)
   assert.equal(run.protectedGate, 5)
-  assert.equal(run.event.type, 'shield-used')
+  assert.equal(run.event.type, 'shield-use')
   clear(run, 5)
   assert.equal(run.alive, true)
   assert.equal(run.nextGate, 6)
