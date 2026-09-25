@@ -10,13 +10,14 @@ import { getGame } from '../data/games.js'
 import { useTitle } from '../lib/useTitle.js'
 import { useFavicon } from '../lib/useFavicon.js'
 import { useBoard, boardsOf } from '../lib/useBoard.js'
-import { rank } from '../../server/board.js'
+import { rankForBoard } from '../../server/board.js'
 
 /** Which mark belongs to which title. */
 const MARK_FOR = {
   'blockout-royale': 'blockout',
   'fracture-line': 'fracture',
   blastworks: 'blastworks',
+  ventline: 'ventline',
 }
 
 export default function GameDetail() {
@@ -175,7 +176,7 @@ export default function GameDetail() {
                   <p className="border-b border-line pb-3 text-sm">{spec.title}</p>
                   <div className="mt-4">
                     {ready ? (
-                      <Leaderboard entries={rank(spec.board?.players ?? [])} spec={spec} />
+                      <Leaderboard entries={rankForBoard(spec.board, spec.board?.players ?? [])} spec={spec} />
                     ) : (
                       <p className="text-sm text-muted">Reading the standings…</p>
                     )}

@@ -3,7 +3,7 @@ import Leaderboard from '../components/Leaderboard.jsx'
 import BannerAd from '../components/BannerAd.jsx'
 import { useTitle } from '../lib/useTitle.js'
 import { useBoard } from '../lib/useBoard.js'
-import { rank } from '../../server/board.js'
+import { rankForBoard } from '../../server/board.js'
 
 // Mapped explicitly rather than by substring match against games.js: `game`
 // here is a board key ('blockout', 'blockout3d', 'fracture', 'blastworks'),
@@ -18,6 +18,7 @@ const PLAY_PATH = {
   voiddrillers: '/play/void-drillers',
   cipherrun: '/play/cipher-run',
   cutline: '/play/cutline',
+  ventline: '/play/ventline',
 }
 
 /** The play route for a board, so a name on the table is one click from a match. */
@@ -36,7 +37,7 @@ export default function LeaderboardPage() {
           <p className="mt-5 max-w-xl leading-relaxed text-muted">
             Every round of Blockout Royale and Blockout Royale 3D, and every
             match of Fracture Line, Blastworks, Void Drillers, Cipher Run and
-            Cutline, on every server. A result goes on the board the moment it
+            Cutline and Ventline, on every server. A result goes on the board the moment it
             finishes and stays there. Nothing is cleared between sessions.
           </p>
         </div>
@@ -78,7 +79,7 @@ export default function LeaderboardPage() {
                 </div>
                 <div className="mt-3 border-t border-line pt-3">
                   {ready ? (
-                    <Leaderboard entries={rank(spec.board?.players ?? [])} spec={spec} />
+                    <Leaderboard entries={rankForBoard(spec.board, spec.board?.players ?? [])} spec={spec} />
                   ) : (
                     <p className="text-sm text-muted">Reading the standings…</p>
                   )}

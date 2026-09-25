@@ -25,7 +25,7 @@ function Ratio({ row }) {
   )
 }
 
-/** One best score in its cell: a clear time, or words per minute. */
+/** One best score in its cell: points, a clear time, or words per minute. */
 function Best({ col, row }) {
   const v = col.get(row)
   if (typeof v !== 'number') {
@@ -38,7 +38,7 @@ function Best({ col, row }) {
   }
   return (
     <>
-      {col.key === 'peakWpm' ? v.toFixed(1) : formatClearTime(v)}
+      {col.key === 'bestScore' ? String(v) : col.key === 'peakWpm' ? v.toFixed(1) : formatClearTime(v)}
       <span className="sr-only"> {col.label.toLowerCase()}</span>
     </>
   )
@@ -56,7 +56,7 @@ function Best({ col, row }) {
  * Without one the rows are the cross-title table from `combine`, where each
  * best score stays under the title it was set in and is headed with its name.
  *
- * The rows are already ranked — by `rank` in server/board.js, the same
+ * The rows are already ranked by `rankForBoard` in server/board.js, the same
  * function the match server sorted them with before writing the file. Nothing
  * here re-sorts, so a page can never disagree with the board it is showing.
  */

@@ -8,7 +8,7 @@
     "check:bundle": "node scripts/check-bundle.mjs",
     "build": "vite build",
     "preview": "vite preview",
-    "test": "node --test src/lib/lib.test.js src/lib/snapshotBuffer.test.js src/lib/followCamera.test.js src/lib/raceCamera.test.js src/lib/wallBlocks.test.js src/lib/carLift.test.js src/lib/cutlineScene.test.js src/lib/tileTint.test.js server/game.test.js server/fracture.test.js server/blastworks.test.js server/board.test.js server/board-store.test.js server/blockout3d.test.js server/voiddrillers.test.js server/cipherrun.test.js server/cutline.test.js",
+    "test": "node --test src/lib/lib.test.js src/lib/snapshotBuffer.test.js src/lib/followCamera.test.js src/lib/raceCamera.test.js src/lib/wallBlocks.test.js src/lib/carLift.test.js src/lib/cutlineScene.test.js src/lib/tileTint.test.js src/lib/ventlineView.test.js server/game.test.js server/fracture.test.js server/blastworks.test.js server/board.test.js server/board-store.test.js server/blockout3d.test.js server/voiddrillers.test.js server/cipherrun.test.js server/cutline.test.js server/ventline.test.js server/ventline-server.test.js",
     "game": "node server/server.js",
     "fracture": "node server/fracture-server.js",
     "blast": "node server/blastworks-server.js",
@@ -16,7 +16,8 @@
     "blockout3d": "node server/blockout3d-server.js",
     "drillers": "node server/voiddrillers-server.js",
     "cipher": "node server/cipherrun-server.js",
-    "cutline": "node server/cutline-server.js"
+    "cutline": "node server/cutline-server.js",
+    "ventline": "node server/ventline-server.js"
   },
   "dependencies": {
     "react": "^19.2.8",

@@ -1,4 +1,4 @@
-// All marketing copy for the four titles. This file is the CMS.
+// Marketing copy for the titles. This file is the CMS.
 
 export const games = [
   {
@@ -464,6 +464,50 @@ export const games = [
       { seed: 92, caption: 'Coolant Bend: a slick laid on the exit' },
       { seed: 103, caption: 'The Spindle: drafting out of the infield' },
       { seed: 114, caption: 'Tap Hole: two haulers left and one lap to run' },
+    ],
+  },
+  {
+    slug: 'ventline',
+    playPath: '/play/ventline',
+    playBlurb:
+      'Fly the factory vent on one button. Take the wide service gap or risk the ' +
+      'charged route for double points. Run solo or share the duct with live pilots.',
+    title: 'Ventline',
+    tagline: 'One tap between you and the shutters.',
+    genre: 'One-button factory flight',
+    status: 'Open Beta',
+    statusTone: 'beta',
+    flagship: false,
+    platforms: ['PC', 'iOS', 'Android'],
+    art: { variant: 'platforms', seed: 8089 },
+    blurb:
+      'The plant vent is open between shifts. Keep the drone aloft with a flap, ' +
+      'thread each shutter, and see how far the line lets you fly.',
+    features: [
+      {
+        title: 'One button to fly',
+        body: 'Tap, click, or press Space to flap. Release and gravity takes over.',
+      },
+      {
+        title: 'Two routes through every shutter',
+        body: 'The wide service gap scores one. The narrow charged gap scores two.',
+      },
+      {
+        title: 'Carry a spare chance',
+        body: 'Pick up a shield to absorb a shutter or a score charge to lift the next clear.',
+      },
+      {
+        title: 'Fly again or fly together',
+        body: 'Retry a solo run at once, or watch the other pilots as live silhouettes in the vent.',
+      },
+    ],
+    serverNote:
+      'The server calls every clear and keeps the score. The vent moves on its clock.',
+    shots: [
+      { seed: 9, caption: 'Launch bay: the first shutter ahead' },
+      { seed: 24, caption: 'Service gap: room to breathe' },
+      { seed: 39, caption: 'Charged gap: a narrow line for double points' },
+      { seed: 54, caption: 'Live flight: pilots sharing the vent' },
     ],
   },
 ]

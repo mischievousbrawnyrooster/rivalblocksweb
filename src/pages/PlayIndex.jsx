@@ -20,7 +20,7 @@ export default function PlayIndex() {
           <p className="rule-label">Play</p>
           <h1 className="display mt-2 text-4xl sm:text-5xl">Play now</h1>
           <p className="mt-5 max-w-xl leading-relaxed text-muted">
-            Six titles, running in the browser against the same servers
+            {playable.length} titles, running in the browser against the same servers
             everyone else is on. No account, no download. Pick one and drop in.
           </p>
         </div>
@@ -69,8 +69,8 @@ export default function PlayIndex() {
         </div>
 
         <p className="mt-10 border-l-2 border-line pl-4 text-sm leading-relaxed text-muted">
-          Every match needs at least two in the arena before it starts. Short of
-          that, the roster fills itself.
+          Fly Ventline solo or join a live roster. Other titles fill an empty
+          arena so you can start a match.
         </p>
 
         <section className="reveal mt-16 border-t border-line pt-10">

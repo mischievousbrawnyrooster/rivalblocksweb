@@ -78,6 +78,13 @@ export const MARKS = {
       `<rect x="5" y="20" width="22" height="6" fill="${FLARE}"/>` +
       `<line x1="16" y1="2" x2="16" y2="30" stroke="${PAPER}" stroke-width="3.5" stroke-dasharray="4 3"/>`,
   ),
+
+  // Ventline: a drone threading the gap between two shutters.
+  ventline: wrap(
+    `<rect x="4" y="4" width="5" height="24" fill="${FLARE}"/>` +
+      `<rect x="23" y="4" width="5" height="24" fill="${FLARE}"/>` +
+      `<path d="M13 16 L19 12 L19 20 Z" fill="${PAPER}"/>`,
+  ),
 }
 
 /**
