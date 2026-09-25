@@ -46,10 +46,16 @@ function drawGate(ctx, gate, cameraX, c) {
     ctx.font = 'bold 12px ui-monospace, monospace'
     ctx.textAlign = 'left'
     ctx.fillText(gap.label, x + gate.w + 11, gap.lo + 17)
+    if (gap.label === 'CHARGED') {
+      ctx.font = 'bold 17px ui-sans-serif, sans-serif'
+      ctx.textAlign = 'center'
+      ctx.fillText('↯', x + gate.w / 2, gap.lo + 21)
+    }
     if (gate.pickup) {
       const center = (gap.lo + gap.hi) / 2
-      ctx.font = 'bold 26px ui-sans-serif, sans-serif'
-      ctx.fillText(gap.symbol, x + gate.w + 13, center + 9)
+      ctx.font = 'bold 19px ui-sans-serif, sans-serif'
+      ctx.textAlign = 'center'
+      ctx.fillText(gap.symbol, x + gate.w / 2, center + 6)
     }
   }
 }
@@ -61,8 +67,8 @@ function drawDrone(ctx, player, cameraX, c, flash) {
   ctx.save()
   ctx.translate(x, y)
   ctx.globalAlpha = player.alive ? 1 : 0.48
-  polygon(ctx, [[-18, 0], [-6, -11], [13, -10], [21, 0], [13, 10], [-6, 11]], c.fg)
-  polygon(ctx, [[-3, -9], [14, -8], [18, 0], [14, 8], [-3, 9]], c.flare)
+  polygon(ctx, [[-18, 0], [-6, -11], [13, -10], [21, 0], [13, 10], [-6, 11]], c['player-1'])
+  polygon(ctx, [[-3, -9], [14, -8], [18, 0], [14, 8], [-3, 9]], c.fg)
   ctx.fillStyle = c.bg
   ctx.fillRect(2, -4, 8, 8)
   ctx.strokeStyle = c.fg
