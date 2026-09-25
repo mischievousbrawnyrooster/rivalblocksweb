@@ -6,7 +6,7 @@ import { boardFor } from '../../server/board.js'
 import { makeBuffer } from '../lib/snapshotBuffer.js'
 import { useTitle } from '../lib/useTitle.js'
 import { useFavicon } from '../lib/useFavicon.js'
-import { makeCutlineScene } from '../lib/cutlineScene.js'
+import { makeCutlineScene, SMOKE_MS, MAX_SMOKE } from '../lib/cutlineScene.js'
 import {
   makeRaceCamera,
   stepCamera,
@@ -650,6 +650,7 @@ export default function Cutline() {
   const keysRef = useRef(new Set())
   const wantsReadyRef = useRef(false)
   const skidsRef = useRef([])
+  const smokeRef = useRef([])
   const mmAlphaRef = useRef(0.95)
 
   // --- Connect and socket lifecycle -----------------------------------------
@@ -663,6 +664,7 @@ export default function Cutline() {
     bufRef.current = makeBuffer(DELAY_MS, 'cars')
     keysRef.current.clear()
     skidsRef.current = []
+    smokeRef.current = []
 
     const proto = location.protocol === 'https:' ? 'wss:' : 'ws:'
     const url = `${proto}//${location.host}/cutline-ws`
@@ -698,6 +700,7 @@ export default function Cutline() {
         // drop skid marks that belong to the old track.
         camRef.current = makeRaceCamera()
         skidsRef.current = []
+        smokeRef.current = []
         bufRef.current = makeBuffer(DELAY_MS, 'cars')
         setStatus('live')
 
@@ -913,7 +916,7 @@ export default function Cutline() {
 
       // --- 2. Skid marks. Kept here, drawn by the scene ----------------------
       for (const car of cars) {
-        if (car.alive && car.sliding) {
+        if (car.alive && (car.sliding || car.drift)) {
           const cos = Math.cos(car.heading)
           const sin = Math.sin(car.heading)
           const rlX = car.x - cos * 0.45 - sin * 0.25
@@ -923,11 +926,16 @@ export default function Cutline() {
           skidsRef.current.push({ x: rlX, y: rlY, at: now })
           skidsRef.current.push({ x: rrX, y: rrY, at: now })
         }
+        // A drift smokes from the tail.
+        if (car.alive && car.drift) {
+          smokeRef.current.push({ x: car.x - Math.cos(car.heading) * 0.6, y: car.y - Math.sin(car.heading) * 0.6, at: now })
+        }
       }
       if (skidsRef.current.length > 500) {
         skidsRef.current = skidsRef.current.slice(-400)
       }
       skidsRef.current = skidsRef.current.filter((s) => now - s.at < 3500)
+      smokeRef.current = smokeRef.current.filter((s) => now - s.at < SMOKE_MS).slice(-MAX_SMOKE)
 
       // --- 3. The 3D view ----------------------------------------------------
       // Frame time for smoothing. stepCamera clamps a long one, so a tab coming
@@ -943,6 +951,7 @@ export default function Cutline() {
         hazards: sampled.hazards ?? [],
         pickups: sampled.pickups ?? [],
         skids: skidsRef.current,
+        smoke: smokeRef.current,
         palette,
         now,
         pose,
