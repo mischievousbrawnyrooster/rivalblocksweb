@@ -1339,7 +1339,12 @@ export const LIFT_GRIP = 0.4         // fraction of that loss still felt off the
 
 export const OFFTRACK_CAP = 6.5
 export const OFFTRACK_DRAG = 6.0
-export const WALL_HIT_KEEP = 0.25
+// A wall hit splits velocity into the part into the wall and the part along it.
+export const WALL_BOUNCE = 0.15      // fraction of the into-wall speed that comes back out
+export const WALL_SCRUB = 0.25       // along-wall speed lost per unit of impact
+export const WALL_ALIGN = 0.5        // fraction of the gap to the wall's line a glancing hit turns the nose
+export const WALL_GLANCE = 0.7       // impact above which a hit is square on and turns nothing
+export const CAR_BOUNCE = 0.3        // restitution between two cars of equal mass
 
 // The car's collision shape is DERIVED from the car that is drawn, so the two
 // cannot drift apart. They drifted in the first place because the page invented
@@ -1567,19 +1572,24 @@ export function stepCar(match, car, dt) {
 
   // 6. Integrate, then resolve contact one axis at a time so a car sliding
   //    along a wall keeps the component that is not blocked.
+  const hitVx = car.vx
+  const hitVy = car.vy
+  let hitX = false
+  let hitY = false
   const nx = car.x + car.vx * dt
   if (cornersInWall(match, car, nx, car.y) > 0 && !offTrack && !airborne) {
-    car.vx *= -WALL_HIT_KEEP
+    hitX = true
   } else {
     car.x = nx
   }
 
   const ny = car.y + car.vy * dt
   if (cornersInWall(match, car, car.x, ny) > 0 && !offTrack && !airborne) {
-    car.vy *= -WALL_HIT_KEEP
+    hitY = true
   } else {
     car.y = ny
   }
+  if (hitX || hitY) wallHit(match, car, hitX, hitY, hitVx, hitVy)
 
   // A car that started off track is walked back rather than trapped: it is
   // allowed to move, capped and dragged, until it finds surface again.
@@ -1591,6 +1601,29 @@ export function stepCar(match, car, dt) {
   // The grid is the world. Nothing leaves it, whatever the physics says.
   car.x = Math.max(0, Math.min(GRID - 1, car.x))
   car.y = Math.max(0, Math.min(GRID - 1, car.y))
+}
+
+/**
+ * A grid wall faces along x or y, so the blocked axis is its normal. The part
+ * of the velocity into it bounces back at WALL_BOUNCE; the part along it is
+ * scrubbed by how square the hit was. A glancing hit also turns the nose toward
+ * the wall's line, so a car straightens out along it rather than grinding.
+ */
+function wallHit(match, car, hitX, hitY, vx, vy) {
+  const speed = Math.hypot(vx, vy)
+  if (speed === 0) return
+  const impact = Math.min(1, Math.hypot(hitX ? vx : 0, hitY ? vy : 0) / speed)
+  const keep = 1 - WALL_SCRUB * impact
+  car.vx = hitX ? -vx * WALL_BOUNCE : vx * keep
+  car.vy = hitY ? -vy * WALL_BOUNCE : vy * keep
+  const tx = hitX ? 0 : vx
+  const ty = hitY ? 0 : vy
+  if (impact < WALL_GLANCE && (tx !== 0 || ty !== 0)) {
+    const along = Math.atan2(ty, tx)
+    const d = Math.atan2(Math.sin(along - car.heading), Math.cos(along - car.heading))
+    // Not a car reversing along the wall: only a nose already pointing its way.
+    if (Math.abs(d) < Math.PI / 2) car.heading += d * WALL_ALIGN
+  }
 }
 
 /** The two circle centres that make up a car's capsule, fore and aft. */
@@ -1631,6 +1664,17 @@ export function resolveContact(match) {
       a.y -= uy * push
       b.x += ux * push
       b.y += uy * push
+
+      // Trade momentum along the contact, equal masses, a little bounce. Only
+      // when closing: two cars already parting keep their own speeds.
+      const closing = (b.vx - a.vx) * ux + (b.vy - a.vy) * uy
+      if (closing < 0) {
+        const j = (-(1 + CAR_BOUNCE) * closing) / 2
+        a.vx -= j * ux
+        a.vy -= j * uy
+        b.vx += j * ux
+        b.vy += j * uy
+      }
     }
   }
 }

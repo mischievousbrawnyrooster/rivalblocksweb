@@ -477,7 +477,6 @@ import {
   TOP_SPEED,
   TURN_RATE,
   OFFTRACK_CAP,
-  WALL_HIT_KEEP,
   GRIP,
   S_OIL,
   applyInput,
@@ -585,7 +584,7 @@ test('off the racing surface a car is capped and dragged', () => {
   assert.ok(speedOf(car) <= OFFTRACK_CAP + 0.001, `off track speed ${speedOf(car)} exceeds the cap`)
 })
 
-test('a car driven into a wall keeps only WALL_HIT_KEEP of its speed', () => {
+test('a car driven square into a wall bounces back only a little', () => {
   const match = racing(1)
   const [car] = [...match.cars.values()]
   const { centerline, grid } = match
@@ -656,10 +655,10 @@ test('a car driven into a wall keeps only WALL_HIT_KEEP of its speed', () => {
 
     if (before > 1 && after < 0) {
       bounced = true
-      // WALL_HIT_KEEP reflects velocity, it does not merely damp it: the
+      // WALL_BOUNCE reflects velocity, it does not merely damp it: the
       // component driving into the wall must reverse sign, and by enough
       // that this cannot be explained by ordinary drag alone. A fixed ratio
-      // is used here rather than one built from WALL_HIT_KEEP itself,
+      // is used here rather than one built from WALL_BOUNCE itself,
       // because the whole point is to catch a keep factor near 1 (an
       // elastic, unscrubbed bounce) or a neutralised branch, and a bound
       // derived from the same constant the bug would corrupt could never
@@ -2219,7 +2218,7 @@ test('an airborne car ignores hazards and walls, then lands', () => {
   assert.ok(car.vx > 0, 'airborne car must not bounce off wall')
   assert.ok(car.x > tx, 'airborne car must advance over the wall')
 
-  // Grounded car facing a wall rebounds with -WALL_HIT_KEEP.
+  // Grounded car facing a wall rebounds with -WALL_BOUNCE.
   car.x = tx
   car.y = ty
   car.heading = 0
@@ -3493,4 +3492,64 @@ test('a fast car holds less sideways grip than a slow one, and more off the thro
   }
   assert.ok(kept(TOP_SPEED, true) > kept(2, true), 'grip must fade with speed')
   assert.ok(kept(TOP_SPEED, true) > kept(TOP_SPEED, false), 'lifting must give some grip back')
+})
+
+/** Turn row `wy` of an open ground into wall, across the whole grid. */
+function wallRow(match, wy) {
+  for (let x = 0; x < GRID; x++) match.grid[wy * GRID + x] = S_WALL
+}
+
+/** Step until the car's +y velocity flips at the wall; returns speed and heading just before. */
+function untilWall(match, car) {
+  for (let i = 0; i < 120; i++) {
+    const before = { v: speedOf(car), heading: car.heading, vy: car.vy }
+    stepCar(match, car, TICK_MS / 1000)
+    if (before.vy > 0 && car.vy <= 0) return before
+  }
+  return null
+}
+
+test('a glancing wall hit keeps nearly all its speed and turns the car along the wall', () => {
+  const { match, car } = openGround()
+  const wy = GRID / 2 + 2
+  wallRow(match, wy)
+  placed(match, car, { x: 20, y: wy - 1.3, heading: 0.2, speed: 10 })
+  const before = untilWall(match, car)
+  assert.ok(before, 'the car never reached the wall')
+  assert.ok(speedOf(car) > before.v * 0.9, `a glancing hit must keep its speed: ${before.v} to ${speedOf(car)}`)
+  assert.ok(Math.abs(car.heading) < Math.abs(before.heading), 'a glancing hit turns the nose toward the wall line')
+})
+
+test('a square wall hit nearly stops the car and leaves its heading alone', () => {
+  const { match, car } = openGround()
+  const wy = GRID / 2 + 2
+  wallRow(match, wy)
+  placed(match, car, { x: 20, y: wy - 1.5, heading: Math.PI / 2, speed: 10 })
+  const before = untilWall(match, car)
+  assert.ok(before, 'the car never reached the wall')
+  assert.ok(speedOf(car) <= before.v * hd.WALL_BOUNCE + 0.001, `square on, only WALL_BOUNCE comes back: ${speedOf(car)}`)
+  assert.equal(car.heading, before.heading, 'a square hit does not turn the car')
+})
+
+test('a rear-end hit shoves the car ahead and costs the one behind, conserving momentum', () => {
+  const match = racing(2)
+  match.grid.fill(S_TARMAC)
+  const [a, b] = [...match.cars.values()]
+  const line = () => {
+    placed(match, a, { x: 40, y: 40, heading: 0, speed: 10 })
+    placed(match, b, { x: 40 + CAR_LENGTH * 0.9, y: 40, heading: 0, speed: 4 })
+  }
+  line()
+  const before = a.vx + b.vx
+  resolveContact(match)
+  assert.ok(b.vx > 4, 'the car ahead is shoved forward')
+  assert.ok(a.vx < 10, 'the car behind loses speed')
+  assert.ok(Math.abs(a.vx + b.vx - before) < 1e-9, 'equal masses: momentum is conserved')
+
+  // A ghost is not there to be hit: nothing changes hands.
+  line()
+  a.ghostUntil = match.now + 1000
+  resolveContact(match)
+  assert.equal(a.vx, 10)
+  assert.equal(b.vx, 4)
 })
