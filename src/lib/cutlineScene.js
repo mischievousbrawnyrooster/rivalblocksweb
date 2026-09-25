@@ -8,10 +8,13 @@ import * as THREE from 'three'
 import { GRID, CAR_LENGTH, CAR_WIDTH, MAX_PLAYERS } from '../../server/cutline.js'
 import { toWorld, yawFor, wheelYawFor, WALL_HEIGHT, CAR_ROOF } from './raceCamera.js'
 import { carLift, RAMP_HEIGHT, RAMP_LENGTH, PIT_DEPTH } from './carLift.js'
+import { makePose, stepPose } from './carPose.js'
 
 const MAX_PICKUPS = 64
 const MAX_HAZARDS = 32 // the server caps at 16; this is headroom, not a rule
 const MAX_SKIDS = 500 // the cap the 2D renderer used
+export const MAX_SMOKE = 256
+export const SMOKE_MS = 600 // how long a drift's tyre smoke hangs before it is gone
 
 /**
  * An instanced layer whose instances move or come and go: pickups, hazards,
@@ -61,11 +64,15 @@ function buildCar(shared) {
   const brake = new THREE.MeshBasicMaterial({ color: 0x3a0b0b })
   const group = new THREE.Group()
 
+  // The body, cabin and lamps lean, pitch and bounce as one; the wheels stay
+  // on the road. carPose.js decides how far.
+  const chassis = new THREE.Group()
+  group.add(chassis)
   const body = new THREE.Mesh(shared.body, paint)
   body.position.y = 0.2
   const cabin = new THREE.Mesh(shared.cabin, shared.glass)
   cabin.position.set(-CAR_LENGTH * 0.05, CAR_ROOF - 0.1, 0)
-  group.add(body, cabin)
+  chassis.add(body, cabin)
 
   const front = []
   for (const [fx, fz] of [
@@ -87,7 +94,7 @@ function buildCar(shared) {
     head.position.set(CAR_LENGTH / 2, 0.22, CAR_WIDTH * fz)
     const tail = new THREE.Mesh(shared.lamp, brake)
     tail.position.set(-CAR_LENGTH / 2, 0.22, CAR_WIDTH * fz)
-    group.add(head, tail)
+    chassis.add(head, tail)
   }
 
   // The shadow stays on the ground while the car rises, so it is a sibling of
@@ -101,7 +108,7 @@ function buildCar(shared) {
   bubble.visible = false
   group.add(bubble)
 
-  return { group, shadow, paint, brake, front, bubble, color: null }
+  return { group, chassis, shadow, paint, brake, front, bubble, color: null }
 }
 
 export function makeCutlineScene(canvas) {
@@ -179,6 +186,18 @@ export function makeCutlineScene(canvas) {
   const skidMat = new THREE.MeshBasicMaterial({ color: 0x0c0c10, transparent: true, opacity: 0.45 })
   const skids = dynamicLayer(skidGeo, skidMat, MAX_SKIDS)
   scene.add(skids)
+
+  // Tyre smoke from a drift: puffs that rise and swell as they age. One shade,
+  // like skids, since an InstancedMesh has no per-instance opacity.
+  const smokeGeo = new THREE.IcosahedronGeometry(0.22, 0)
+  const smokeMat = new THREE.MeshBasicMaterial({ color: 0xbfbfc4, transparent: true, opacity: 0.3, depthWrite: false })
+  const smoke = dynamicLayer(smokeGeo, smokeMat, MAX_SMOKE)
+  scene.add(smoke)
+
+  // Per car id, not per pool slot: the pool is indexed by join order, which a
+  // car leaving reshuffles.
+  const poses = new Map()
+  let lastNow = 0
 
   function place(mesh, i, x, y, h, yaw = 0) {
     scratch.position.set(...toWorld(x, y, h))
@@ -333,6 +352,8 @@ export function makeCutlineScene(canvas) {
       const now = frame?.now ?? 0
       const cars = frame?.cars ?? []
       const palette = frame?.palette ?? []
+      const dt = lastNow ? (now - lastNow) / 1000 : 0
+      lastNow = now
 
       for (let i = 0; i < pool.length; i++) {
         const c = pool[i]
@@ -355,9 +376,21 @@ export function makeCutlineScene(canvas) {
         const lift = carLift(car, trackRamps)
         c.group.position.set(...toWorld(car.x, car.y, lift))
         c.group.rotation.y = yawFor(car.heading)
+        let pose = poses.get(car.id)
+        if (!pose) poses.set(car.id, (pose = makePose()))
+        stepPose(pose, car, dt)
+        // The car's right is +z, so leaning left (positive roll) turns about x
+        // the negative way; nose up is positive about z.
+        c.chassis.rotation.set(-pose.roll, 0, pose.pitch)
+        c.chassis.position.y = pose.bounce
         for (const w of c.front) w.rotation.y = wheelYawFor(car.steer ?? 0)
         c.brake.color.set(car.brake ? 0xff3030 : 0x3a0b0b)
         c.shadow.position.set(...toWorld(car.x, car.y, 0.01))
+      }
+
+      if (poses.size > cars.length) {
+        const here = new Set(cars.map((car) => car.id))
+        for (const id of poses.keys()) if (!here.has(id)) poses.delete(id)
       }
 
       const ps = frame?.pickups ?? []
@@ -395,6 +428,19 @@ export function makeCutlineScene(canvas) {
       skids.count = Math.min(sk.length, MAX_SKIDS)
       for (let i = 0; i < skids.count; i++) place(skids, i, sk[i].x, sk[i].y, 0.005)
       skids.instanceMatrix.needsUpdate = true
+
+      const sm = frame?.smoke ?? []
+      smoke.count = Math.min(sm.length, MAX_SMOKE)
+      for (let i = 0; i < smoke.count; i++) {
+        const age = Math.min(1, (now - sm[i].at) / SMOKE_MS)
+        scratch.position.set(...toWorld(sm[i].x, sm[i].y, 0.15 + age * 0.6))
+        scratch.rotation.set(0, age * 2, 0)
+        scratch.scale.setScalar(0.6 + age * 1.6)
+        scratch.updateMatrix()
+        smoke.setMatrixAt(i, scratch.matrix)
+      }
+      scratch.scale.set(1, 1, 1)
+      smoke.instanceMatrix.needsUpdate = true
 
       const pose = frame?.pose
       if (pose) {
@@ -461,9 +507,9 @@ export function makeCutlineScene(canvas) {
       }
       for (const g of [shared.body, shared.cabin, shared.wheel, shared.lamp, shared.shadow, shared.bubble]) g.dispose()
       for (const m of [shared.glass, shared.tyre, shared.headlight, shared.shadowMat, shared.bubbleMat]) m.dispose()
-      for (const mesh of [pickups, slicks, peels, pucks, decoys, unknowns, skids]) mesh.dispose()
-      for (const g of [pickupGeo, slickGeo, peelGeo, puckGeo, decoyGeo, unknownGeo, skidGeo]) g.dispose()
-      for (const m of [pickupMat, slickMat, peelMat, puckMat, decoyMat, unknownMat, skidMat]) m.dispose()
+      for (const mesh of [pickups, slicks, peels, pucks, decoys, unknowns, skids, smoke]) mesh.dispose()
+      for (const g of [pickupGeo, slickGeo, peelGeo, puckGeo, decoyGeo, unknownGeo, skidGeo, smokeGeo]) g.dispose()
+      for (const m of [pickupMat, slickMat, peelMat, puckMat, decoyMat, unknownMat, skidMat, smokeMat]) m.dispose()
       renderer.dispose()
       renderer.forceContextLoss()
     },

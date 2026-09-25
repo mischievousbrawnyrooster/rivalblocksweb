@@ -1289,6 +1289,12 @@ export function join(match, info = {}, rng = Math.random) {
     heading: start.heading,
     vx: 0,
     vy: 0,
+    steerNow: 0,
+    drift: false,
+    driftDir: 0,
+    driftChain: 0,
+    driftScore: 0,
+    driftEnd: null,
     lap: 0,
     // A car sitting on the line has already taken checkpoint 0, so it waits
     // for 1. Starting at 0 would let a car count a lap without moving.
@@ -1316,22 +1322,45 @@ export function leave(match, id) {
 }
 
 // --- Handling -------------------------------------------------------------
-// Measured lap time (Task 7, after the driveBots aim-anchor fix): 4 bots,
-// fixed rng, 90s runs across all 8 circuits. All 8 now drive cleanly and
-// consistently: median lap 11.87s, range 11.14 to 13.04s. That is well
-// under the spec's 18s estimate, not tuned toward it; TOP_SPEED was left
-// alone. See task-7-report.md for the prior, bug-confounded measurement and
-// the fix.
+// Measured lap time (server/cutline-laps.mjs: 4 bots, rng 0.5, 90 s a
+// circuit). Before the weight, grip-fade and drift handling: median 25.14s
+// over 66 laps. After: median 25.38s over 65 laps, every circuit
+// lapping. The old note here (11.87 s) predated the current track generator.
 export const TOP_SPEED = 14.0        // tiles per second
-export const ACCEL = 18.0
-export const BRAKE = 26.0
-export const DRAG = 1.2
+export const ACCEL = 17.0            // thrust from a standstill
+export const ACCEL_FADE = 0.56       // fraction of that thrust gone at the speed cap
+export const BRAKE = 11.0            // top speed to a stop in about a second
+export const DRAG = 0.5              // low, so a lifted car rolls on
 export const TURN_RATE = 3.2         // rad/s at low speed
 export const TURN_FALLOFF = 0.45     // fraction of turn rate lost at top speed
+export const STEER_IN = 0.15         // seconds from centre to full lock
+export const STEER_OUT = 0.08        // seconds from full lock back to centre
+
+// Grip fades with speed, so a fast corner pushes wide unless the driver lifts.
+export const GRIP_FALLOFF = 0.35     // fraction of lateral grip gone at top speed, on the throttle
+export const LIFT_GRIP = 0.4         // fraction of that loss still felt off the throttle
 
 export const OFFTRACK_CAP = 6.5
 export const OFFTRACK_DRAG = 6.0
-export const WALL_HIT_KEEP = 0.25
+// A wall hit splits velocity into the part into the wall and the part along it.
+export const WALL_BOUNCE = 0.15      // fraction of the into-wall speed that comes back out
+export const WALL_SCRUB = 0.25       // along-wall speed lost per unit of impact
+export const WALL_ALIGN = 0.5        // fraction of the gap to the wall's line a glancing hit turns the nose
+export const WALL_GLANCE = 0.7       // impact above which a hit is square on and turns nothing
+export const CAR_BOUNCE = 0.3        // restitution between two cars of equal mass
+
+// --- Drift -----------------------------------------------------------------
+// Shift and a steer at speed lets the back step out: the car turns tighter than
+// grip allows and carries its speed round, at a cost in drag. Faster through a
+// hairpin, slower through a sweeper. The chain it builds is for fun and is never
+// banked on the board.
+export const DRIFT_MIN_SPEED = 6     // tiles per second, 60 km/h
+export const DRIFT_TURN = 1.8        // turn rate multiple while drifting
+export const DRIFT_FALLOFF = 0.3     // fraction of TURN_FALLOFF a drift still suffers
+export const DRIFT_GRIP = 6.0        // sets the slip angle only: speed is kept, not scrubbed
+export const DRIFT_DRAG = 1.0        // what a drift costs, per second, as a fraction of speed
+export const DRIFT_POINTS = 100      // per tile/s of speed per radian of slip per second
+export const DRIFT_SHOW_MS = 1200    // how long a banked or lost chain stays on the wire
 
 // The car's collision shape is DERIVED from the car that is drawn, so the two
 // cannot drift apart. They drifted in the first place because the page invented
@@ -1440,8 +1469,56 @@ export function applyInput(match, id, input) {
   car.steer = steer === 1 || steer === -1 ? steer : 0
   car.throttle = raw.throttle === 1 || raw.throttle === true
   car.brake = raw.brake === 1 || raw.brake === true
+  car.drift = raw.drift === 1 || raw.drift === true
   car.wantsUse = raw.use === 1 || raw.use === true
   return true
+}
+
+/**
+ * The wheel follows the held key rather than jumping to it: full lock after
+ * STEER_IN, back to centre after STEER_OUT. The heading still turns at a rate
+ * the server applies, so the no-prediction steering model is untouched; only
+ * how fast that rate arrives has changed.
+ */
+function steerToward(car, dt) {
+  const target = car.steer ?? 0
+  const now = car.steerNow ?? 0
+  // Toward centre (letting go, or crossing to the other lock) is the quicker move.
+  const outward = target !== 0 && Math.sign(target) === Math.sign(now || target)
+  const step = dt / (outward ? STEER_IN : STEER_OUT)
+  car.steerNow = Math.abs(target - now) <= step ? target : now + Math.sign(target - now) * step
+}
+
+/** Start a drift, or end one cleanly. The ways to lose one are checked at the top of stepCar. */
+function updateDrift(match, car, speed, airborne, spinning) {
+  if (car.driftDir) {
+    if (!car.drift || speed < DRIFT_MIN_SPEED) endDrift(match, car, false)
+  } else if (
+    car.drift &&
+    !airborne &&
+    !spinning &&
+    speed >= DRIFT_MIN_SPEED &&
+    car.steerNow !== 0 &&
+    car.vx * Math.cos(car.heading) + car.vy * Math.sin(car.heading) > 0
+  ) {
+    // Locked to the side it was turned into until it ends.
+    car.driftDir = Math.sign(car.steerNow)
+    car.driftChain = 0
+    // A new drift replaces the last one's end, so the page never shows a stale one.
+    car.driftEnd = null
+  }
+}
+
+/**
+ * Bank the chain, or lose it. Either way the outcome is recorded for the page,
+ * which draws what the rules decided and never works it out for itself.
+ */
+function endDrift(match, car, lost) {
+  const pts = Math.round(car.driftChain ?? 0)
+  if (!lost) car.driftScore = (car.driftScore ?? 0) + pts
+  if (pts > 0) car.driftEnd = { pts, lost, at: match.now }
+  car.driftDir = 0
+  car.driftChain = 0
 }
 
 /** The speed cap a car is currently allowed, including boost and slipstream. */
@@ -1465,6 +1542,11 @@ function surfaceUnder(match, car) {
  */
 export function stepCar(match, car, dt) {
   if (!car.alive || !Number.isFinite(dt) || dt <= 0) return
+  // A drift is lost by going down a hole, leaving the ground or being spun.
+  // Checked before the early returns below, which a falling or flying car takes.
+  if (car.driftDir && (isFalling(match, car) || match.now < (car.airUntil ?? 0) || match.now < (car.spinUntil ?? 0))) {
+    endDrift(match, car, true)
+  }
   // In a hole: going nowhere until it is set down past it.
   if (isFalling(match, car)) return
   // A pad's flight is exact: nothing the driver does changes where it lands.
@@ -1482,17 +1564,25 @@ export function stepCar(match, car, dt) {
   const cap = offTrack ? OFFTRACK_CAP : topSpeedOf(match, car)
 
   // 1. Steer. A rate, never a target: this is what makes the game playable
-  //    without client-side prediction.
+  //    without client-side prediction. steerNow eases toward the held key;
+  //    the heading still turns at a rate.
+  steerToward(car, dt)
   const speed = Math.hypot(car.vx, car.vy)
   const falloff = 1 - TURN_FALLOFF * Math.min(1, speed / TOP_SPEED)
   const spinning = match.now < (car.spinUntil ?? 0)
+  updateDrift(match, car, speed, airborne, spinning)
   if (spinning) {
     // The wheel is not yours. Input is ignored outright rather than scaled, so a
     // spin cannot be steered out of by holding the opposite lock.
     car.heading += SPIN_RATE * dt
+  } else if (car.driftDir) {
+    // Into the drift tightens it, centred holds it, counter-steer opens it.
+    const trim = 0.75 + 0.25 * car.steerNow * car.driftDir
+    const held = 1 - TURN_FALLOFF * DRIFT_FALLOFF * Math.min(1, speed / TOP_SPEED)
+    car.heading += car.driftDir * TURN_RATE * DRIFT_TURN * held * trim * dt
   } else {
     const steerAuthority = airborne ? AIR_STEER : car.onSlick ? SLICK_TURN : 1
-    car.heading += (car.steer ?? 0) * TURN_RATE * falloff * steerAuthority * dt
+    car.heading += car.steerNow * TURN_RATE * falloff * steerAuthority * dt
   }
 
   // The turn above is never tested against walls, and last tick's contact shove
@@ -1510,7 +1600,13 @@ export function stepCar(match, car, dt) {
 
   // 3. Thrust, braking and drag act on the forward component only.
   const drive = spinning ? SPIN_THRUST : car.onSlick ? SLICK_THRUST : 1
-  if (car.throttle) fwd += ACCEL * (match.now < car.boostUntil ? BOOST_MULT : 1) * drive * dt
+  // Thrust is strong from a standstill and fades toward the cap, so the last
+  // few km/h take their time. Braking cuts it: with a brake this soft, a car
+  // holding both (as every bot does) sped up below about 7 tiles/s.
+  if (car.throttle && !car.brake) {
+    const fade = 1 - ACCEL_FADE * Math.min(1, Math.max(0, fwd) / cap)
+    fwd += ACCEL * (match.now < car.boostUntil ? BOOST_MULT : 1) * drive * fade * dt
+  }
   // In the air a jump holds its speed: no brakes to bite, no road to drag. The
   // landing checks assume every jump covers the distance its launch speed gives.
   if (!airborne) {
@@ -1523,29 +1619,48 @@ export function stepCar(match, car, dt) {
   const base = offTrack ? GRIP[S_TARMAC] : (GRIP[surface] ?? GRIP[S_TARMAC])
   // A dropped slick is oil that happens to be a hazard rather than a tile, so
   // it resolves to the same grip and needs no second physics path.
-  const grip = car.onSlick ? Math.min(base, GRIP[S_OIL]) : base
+  let grip = car.onSlick ? Math.min(base, GRIP[S_OIL]) : base
+  if (car.driftDir) grip = Math.min(grip, DRIFT_GRIP)
+  // Less of it at speed, and less still on the throttle.
+  const load = Math.min(1, speed / TOP_SPEED)
+  grip *= 1 - GRIP_FALLOFF * load * load * (car.throttle ? 1 : LIFT_GRIP)
+  const latBefore = lat
   lat *= Math.max(0, 1 - grip * dt)
+  // A drift turns sideways speed into forward speed instead of scrubbing it.
+  // Scrubbed, the turn rate a hairpin needs bled speed faster than any throttle
+  // could replace; this is what lets a drift carry its speed round.
+  if (car.driftDir) {
+    fwd = Math.sign(fwd || 1) * Math.sqrt(Math.max(0, fwd * fwd + latBefore * latBefore - lat * lat))
+    fwd -= fwd * DRIFT_DRAG * dt
+  }
 
   // 5. Clamp and recompose.
   fwd = Math.max(-cap * 0.4, Math.min(cap, fwd))
   car.vx = fwd * cos - lat * sin
   car.vy = fwd * sin + lat * cos
+  // Points for style: faster and more sideways earns more.
+  if (car.driftDir) car.driftChain += Math.hypot(fwd, lat) * Math.abs(Math.atan2(lat, fwd)) * DRIFT_POINTS * dt
 
   // 6. Integrate, then resolve contact one axis at a time so a car sliding
   //    along a wall keeps the component that is not blocked.
+  const hitVx = car.vx
+  const hitVy = car.vy
+  let hitX = false
+  let hitY = false
   const nx = car.x + car.vx * dt
   if (cornersInWall(match, car, nx, car.y) > 0 && !offTrack && !airborne) {
-    car.vx *= -WALL_HIT_KEEP
+    hitX = true
   } else {
     car.x = nx
   }
 
   const ny = car.y + car.vy * dt
   if (cornersInWall(match, car, car.x, ny) > 0 && !offTrack && !airborne) {
-    car.vy *= -WALL_HIT_KEEP
+    hitY = true
   } else {
     car.y = ny
   }
+  if (hitX || hitY) wallHit(match, car, hitX, hitY, hitVx, hitVy)
 
   // A car that started off track is walked back rather than trapped: it is
   // allowed to move, capped and dragged, until it finds surface again.
@@ -1557,6 +1672,32 @@ export function stepCar(match, car, dt) {
   // The grid is the world. Nothing leaves it, whatever the physics says.
   car.x = Math.max(0, Math.min(GRID - 1, car.x))
   car.y = Math.max(0, Math.min(GRID - 1, car.y))
+}
+
+/**
+ * A grid wall faces along x or y, so the blocked axis is its normal. The part
+ * of the velocity into it bounces back at WALL_BOUNCE; the part along it is
+ * scrubbed by how square the hit was. A glancing hit also turns the nose
+ * toward the wall's line, by WALL_ALIGN scaled by impact, so a bare graze
+ * only nudges the heading and a car straightens out along the wall rather
+ * than grinding.
+ */
+function wallHit(match, car, hitX, hitY, vx, vy) {
+  if (car.driftDir) endDrift(match, car, true)
+  const speed = Math.hypot(vx, vy)
+  if (speed === 0) return
+  const impact = Math.min(1, Math.hypot(hitX ? vx : 0, hitY ? vy : 0) / speed)
+  const keep = 1 - WALL_SCRUB * impact
+  car.vx = hitX ? -vx * WALL_BOUNCE : vx * keep
+  car.vy = hitY ? -vy * WALL_BOUNCE : vy * keep
+  const tx = hitX ? 0 : vx
+  const ty = hitY ? 0 : vy
+  if (impact < WALL_GLANCE && (tx !== 0 || ty !== 0)) {
+    const along = Math.atan2(ty, tx)
+    const d = Math.atan2(Math.sin(along - car.heading), Math.cos(along - car.heading))
+    // Not a car reversing along the wall: only a nose already pointing its way.
+    if (Math.abs(d) < Math.PI / 2) car.heading += d * WALL_ALIGN * impact
+  }
 }
 
 /** The two circle centres that make up a car's capsule, fore and aft. */
@@ -1597,6 +1738,17 @@ export function resolveContact(match) {
       a.y -= uy * push
       b.x += ux * push
       b.y += uy * push
+
+      // Trade momentum along the contact, equal masses, a little bounce. Only
+      // when closing: two cars already parting keep their own speeds.
+      const closing = (b.vx - a.vx) * ux + (b.vy - a.vy) * uy
+      if (closing < 0) {
+        const j = (-(1 + CAR_BOUNCE) * closing) / 2
+        a.vx -= j * ux
+        a.vy -= j * uy
+        b.vx += j * ux
+        b.vy += j * uy
+      }
     }
   }
 }
@@ -2289,6 +2441,12 @@ export function startRace(match) {
     car.bestLapMs = null
     car.lapStartedAt = 0
     car.steer = 0
+    car.steerNow = 0
+    car.drift = false
+    car.driftDir = 0
+    car.driftChain = 0
+    car.driftScore = 0
+    car.driftEnd = null
     car.throttle = false
     car.brake = false
     car.wantsUse = false
@@ -2371,6 +2529,9 @@ export function tick(match, dtMs = TICK_MS, rng = Math.random) {
     match.phase = 'over'
     match.final = true
     match.overSince = match.now
+    // The flag ends every drift: a chain still going banks, rather than
+    // hanging on the wire through the results with a parked car smoking.
+    for (const c of match.cars.values()) if (c.driftDir) endDrift(match, c, false)
   }
 }
 
@@ -2401,26 +2562,29 @@ export function snapshot(match) {
       alive: car.alive,
       item: car.item,
       place: place.get(car.id) ?? null,
-      drafting: Boolean(car.drafting),
-      boosting: match.now < car.boostUntil,
-      sliding: Boolean(car.onSlick),
-      spinning: match.now < (car.spinUntil ?? 0),
-      airborne: match.now < (car.airUntil ?? 0),
+      // Status flags are sent only while true, like the rare ones below: sent as
+      // false on every car every tick they cost 670 bytes a frame, and the frame
+      // needed that room for drift. The page reads a missing flag as false.
+      ...(car.drafting && { drafting: true }),
+      ...(match.now < car.boostUntil && { boosting: true }),
+      ...(car.onSlick && { sliding: true }),
+      ...(match.now < (car.spinUntil ?? 0) && { spinning: true }),
+      ...(match.now < (car.airUntil ?? 0) && { airborne: true }),
       // Normalised height along the arc, for the page to draw a hop and a
       // shadow with. Render only: no rule reads it back.
       // Measured over the flight from the lip: AIR_MS for a ramp, distance /
       // speed for a pad. Clamped, as a car still on a pad is renewed each tick.
-      airT: match.now < (car.airUntil ?? 0)
-        ? Math.max(0, Math.min(1, Math.round((1 - (car.airUntil - match.now) / (car.airMs ?? AIR_MS)) * 100) / 100))
-        : 0,
+      ...(match.now < (car.airUntil ?? 0) && {
+        airT: Math.max(0, Math.min(1, Math.round((1 - (car.airUntil - match.now) / (car.airMs ?? AIR_MS)) * 100) / 100)),
+      }),
       // On a pad's jump: the way the car will face on touchdown, for the page to
       // turn it toward through the air rather than all at once on landing.
       ...(car.guided && match.now < (car.airUntil ?? 0) && { land: Math.round(car.guided.land.heading * 1000) / 1000 }),
       // The page turns the front wheels by `steer` and lights the brake lamps by
-      // `brake`. Both are held input the server already owns, and without them on
-      // the wire the page silently drew straight wheels and dark lamps forever,
-      // because an absent field reads as a falsy one.
-      steer: car.steer ?? 0,
+      // `brake`. Without them on the wire the page silently drew straight wheels
+      // and dark lamps forever, because an absent field reads as a falsy one.
+      // `steer` is the eased wheel, so the drawn wheels turn in as the car does.
+      steer: Math.round((car.steerNow ?? 0) * 100) / 100,
       brake: Boolean(car.brake),
       speed: Math.round(Math.hypot(car.vx, car.vy) * 10) / 10,
       // Rare states are sent only while true, which keeps a full frame of eight
@@ -2429,6 +2593,12 @@ export function snapshot(match) {
       ...(match.now < (car.shieldUntil ?? 0) && { shield: true }),
       ...(match.now < (car.ghostUntil ?? 0) && { ghost: true }),
       ...(match.now < (car.shockedUntil ?? 0) && { shocked: true }),
+      // Drift: the side and chain while drifting, the race total once there is
+      // one, and how the last chain ended for DRIFT_SHOW_MS. The page draws the
+      // end the rules decided; it never compares frames to guess it.
+      ...(car.driftDir && { drift: car.driftDir, driftChain: Math.round(car.driftChain) }),
+      ...(car.driftScore > 0 && { driftScore: car.driftScore }),
+      ...(car.driftEnd && match.now - car.driftEnd.at < DRIFT_SHOW_MS && { driftEnd: { pts: car.driftEnd.pts, lost: car.driftEnd.lost } }),
       // A hop from a spring starts on the ground, a launch from a ramp at its
       // lip; the page draws the arc from the right height.
       ...(match.now < (car.airUntil ?? 0) && car.hop && { hop: true }),

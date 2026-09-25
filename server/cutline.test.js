@@ -477,7 +477,6 @@ import {
   TOP_SPEED,
   TURN_RATE,
   OFFTRACK_CAP,
-  WALL_HIT_KEEP,
   GRIP,
   S_OIL,
   applyInput,
@@ -585,7 +584,7 @@ test('off the racing surface a car is capped and dragged', () => {
   assert.ok(speedOf(car) <= OFFTRACK_CAP + 0.001, `off track speed ${speedOf(car)} exceeds the cap`)
 })
 
-test('a car driven into a wall keeps only WALL_HIT_KEEP of its speed', () => {
+test('a car driven square into a wall bounces back only a little', () => {
   const match = racing(1)
   const [car] = [...match.cars.values()]
   const { centerline, grid } = match
@@ -656,10 +655,10 @@ test('a car driven into a wall keeps only WALL_HIT_KEEP of its speed', () => {
 
     if (before > 1 && after < 0) {
       bounced = true
-      // WALL_HIT_KEEP reflects velocity, it does not merely damp it: the
+      // WALL_BOUNCE reflects velocity, it does not merely damp it: the
       // component driving into the wall must reverse sign, and by enough
       // that this cannot be explained by ordinary drag alone. A fixed ratio
-      // is used here rather than one built from WALL_HIT_KEEP itself,
+      // is used here rather than one built from WALL_BOUNCE itself,
       // because the whole point is to catch a keep factor near 1 (an
       // elastic, unscrubbed bounce) or a neutralised branch, and a bound
       // derived from the same constant the bug would corrupt could never
@@ -1577,12 +1576,18 @@ test('the snapshot carries the held steer and brake the page draws with', () => 
   const match = racing(2)
   const [car] = [...match.cars.values()]
 
+  // Lock to lock is STEER_OUT to centre then STEER_IN out; twice that is slack.
+  const settle = () => {
+    for (let t = 0; t <= 2 * (hd.STEER_IN + hd.STEER_OUT) * 1000; t += TICK_MS) stepCar(match, car, TICK_MS / 1000)
+  }
   applyInput(match, car.id, { steer: -1, brake: 1, throttle: 1 })
+  settle()
   const left = snapshot(match).cars.find((c) => c.id === car.id)
   assert.equal(left.steer, -1, 'steer must reach the page')
   assert.equal(left.brake, true, 'brake must reach the page')
 
   applyInput(match, car.id, { steer: 1, brake: 0, throttle: 1 })
+  settle()
   const right = snapshot(match).cars.find((c) => c.id === car.id)
   assert.equal(right.steer, 1, 'steer must track the held input, not a constant')
   assert.equal(right.brake, false)
@@ -2213,7 +2218,7 @@ test('an airborne car ignores hazards and walls, then lands', () => {
   assert.ok(car.vx > 0, 'airborne car must not bounce off wall')
   assert.ok(car.x > tx, 'airborne car must advance over the wall')
 
-  // Grounded car facing a wall rebounds with -WALL_HIT_KEEP.
+  // Grounded car facing a wall rebounds with -WALL_BOUNCE.
   car.x = tx
   car.y = ty
   car.heading = 0
@@ -2231,6 +2236,7 @@ test('an airborne car ignores hazards and walls, then lands', () => {
   car.vx = RAMP_MIN_SPEED
   car.vy = 0
   car.steer = 1
+  car.steerNow = 1
   car.airUntil = match.now + AIR_MS
   stepCar(match, car, 0.05)
   const airTurn = car.heading
@@ -2241,6 +2247,7 @@ test('an airborne car ignores hazards and walls, then lands', () => {
   car.vx = RAMP_MIN_SPEED
   car.vy = 0
   car.steer = 1
+  car.steerNow = 1
   car.airUntil = 0
   stepCar(match, car, 0.05)
   const groundTurn = car.heading
@@ -2273,7 +2280,7 @@ test('the snapshot tells the page a car is airborne', () => {
 
   match.now += AIR_MS + 1
   const after = snapshot(match).cars.find((c) => c.id === car.id)
-  assert.equal(after.airborne, false)
+  assert.ok(!after.airborne, 'a landed car is not airborne')
 })
 
 test('a carved circuit is one connected region at every width', () => {
@@ -3405,4 +3412,403 @@ test('a car skimming along a pad sideways is not thrown over the wall', () => {
   jInput(match, car.id, { throttle: 0 })
   jTick(match, 16, () => 0.5)
   assert.ok(!car.guided, 'only a car driving at the pad is launched by it')
+})
+
+// --- Handling: steering builds, grip fades, weight, walls, contact, drift -----
+import * as hd from './cutline.js'
+
+/** A match whose whole grid is tarmac, with one car at rest facing +x. */
+function openGround() {
+  const match = racing(1)
+  match.grid.fill(S_TARMAC)
+  const [car] = [...match.cars.values()]
+  Object.assign(car, { x: 5, y: GRID / 2, heading: 0, vx: 0, vy: 0 })
+  return { match, car }
+}
+
+/** Step a car for `seconds` at the real tick, wrapping it back before the far edge. */
+function drive(match, car, seconds) {
+  for (let t = 0; t < seconds * 1000; t += TICK_MS) {
+    stepCar(match, car, TICK_MS / 1000)
+    if (car.x > GRID - 5) car.x = 5
+  }
+}
+
+test('steering builds to full lock over STEER_IN and lets go over STEER_OUT', () => {
+  const { match, car } = openGround()
+  applyInput(match, car.id, { steer: 1 })
+  stepCar(match, car, TICK_MS / 1000)
+  assert.ok(car.steerNow > 0 && car.steerNow < 1, `one tick must not reach full lock, got ${car.steerNow}`)
+
+  drive(match, car, hd.STEER_IN)
+  assert.equal(car.steerNow, 1, 'held for STEER_IN, the wheel reaches full lock')
+
+  applyInput(match, car.id, { steer: 0 })
+  // One extra tick: five steps of 0.2 from 1 land a hair above 0 in floating point.
+  drive(match, car, hd.STEER_OUT + TICK_MS / 1000)
+  assert.equal(car.steerNow, 0, 'released for STEER_OUT, the wheel is back at centre')
+  assert.ok(hd.STEER_OUT < hd.STEER_IN, 'letting go is quicker than turning in')
+})
+
+// The spec's feel targets, as measured on the prototype: 0 to top in about 3 s
+// (the old handling took 2.3) and top to a stop in about 1 s (it took 0.4).
+const FEEL_TO_TOP_S = [2.5, 3.5]
+const FEEL_TO_STOP_S = [0.8, 1.2]
+
+test('full throttle still reaches TOP_SPEED, and takes its time doing it', () => {
+  assert.ok(hd.ACCEL * (1 - hd.ACCEL_FADE) > hd.DRAG * TOP_SPEED, 'thrust at the cap must beat drag, or top speed is unreachable')
+  const { match, car } = openGround()
+  applyInput(match, car.id, { throttle: 1 })
+  let t = 0
+  while (speedOf(car) < TOP_SPEED * 0.99 && t < 10) {
+    stepCar(match, car, TICK_MS / 1000)
+    t += TICK_MS / 1000
+    if (car.x > GRID - 5) car.x = 5
+  }
+  assert.ok(t > FEEL_TO_TOP_S[0] && t < FEEL_TO_TOP_S[1], `0 to top took ${t.toFixed(2)} s`)
+})
+
+test('braking from top speed stops the car in about a second, even on the throttle', () => {
+  const { match, car } = openGround()
+  placed(match, car, { x: 5, y: GRID / 2, heading: 0, speed: TOP_SPEED })
+  // Throttle held too: every bot brakes like this, and the brake must win.
+  applyInput(match, car.id, { brake: 1, throttle: 1 })
+  let t = 0
+  while (car.vx > 0 && t < 5) {
+    stepCar(match, car, TICK_MS / 1000)
+    t += TICK_MS / 1000
+  }
+  assert.ok(t > FEEL_TO_STOP_S[0] && t < FEEL_TO_STOP_S[1], `top to a stop took ${t.toFixed(2)} s`)
+})
+
+test('a fast car holds less sideways grip than a slow one, and more off the throttle', () => {
+  // The same sideways slide in three situations: how much survives one step.
+  const kept = (speed, throttle) => {
+    const { match, car } = openGround()
+    placed(match, car, { x: 20, y: GRID / 2, heading: 0, speed, lateral: 3 })
+    applyInput(match, car.id, { throttle: throttle ? 1 : 0 })
+    stepCar(match, car, 0.05)
+    return Math.abs(car.vy) // heading 0, so lateral is vy
+  }
+  assert.ok(kept(TOP_SPEED, true) > kept(2, true), 'grip must fade with speed')
+  assert.ok(kept(TOP_SPEED, true) > kept(TOP_SPEED, false), 'lifting must give some grip back')
+})
+
+/** Turn row `wy` of an open ground into wall, across the whole grid. */
+function wallRow(match, wy) {
+  for (let x = 0; x < GRID; x++) match.grid[wy * GRID + x] = S_WALL
+}
+
+/** Step until the car's +y velocity flips at the wall; returns speed and heading just before. */
+function untilWall(match, car) {
+  for (let i = 0; i < 120; i++) {
+    const before = { v: speedOf(car), heading: car.heading, vy: car.vy }
+    stepCar(match, car, TICK_MS / 1000)
+    if (before.vy > 0 && car.vy <= 0) return before
+  }
+  return null
+}
+
+test('a glancing wall hit keeps nearly all its speed and turns the car along the wall', () => {
+  const { match, car } = openGround()
+  const wy = GRID / 2 + 2
+  wallRow(match, wy)
+  placed(match, car, { x: 20, y: wy - 1.3, heading: 0.2, speed: 10 })
+  const before = untilWall(match, car)
+  assert.ok(before, 'the car never reached the wall')
+  assert.ok(speedOf(car) > before.v * 0.9, `a glancing hit must keep its speed: ${before.v} to ${speedOf(car)}`)
+  assert.ok(Math.abs(car.heading) < Math.abs(before.heading), 'a glancing hit turns the nose toward the wall line')
+})
+
+test('a square wall hit nearly stops the car and leaves its heading alone', () => {
+  const { match, car } = openGround()
+  const wy = GRID / 2 + 2
+  wallRow(match, wy)
+  placed(match, car, { x: 20, y: wy - 1.5, heading: Math.PI / 2, speed: 10 })
+  const before = untilWall(match, car)
+  assert.ok(before, 'the car never reached the wall')
+  assert.ok(speedOf(car) <= before.v * hd.WALL_BOUNCE + 0.001, `square on, only WALL_BOUNCE comes back: ${speedOf(car)}`)
+  assert.equal(car.heading, before.heading, 'a square hit does not turn the car')
+})
+
+test('a glancing hit turns the nose by how hard it hit, not by a flat fraction', () => {
+  // The wall row runs along +x, so the gap between a shallow heading and the
+  // wall's tangent is exactly -heading (before contact, heading has not
+  // moved: no steering and nothing else touches it). Measuring turn/d in
+  // place of raw turn is what isolates the impact scaling: d itself already
+  // grows with heading, so two raw turns would order the same way whether or
+  // not WALL_ALIGN is scaled by impact. The fraction does not: flat
+  // WALL_ALIGN for both without the factor, WALL_ALIGN * impact (which rises
+  // with heading, since impact is sin(heading) here) with it.
+  const turnFraction = (heading) => {
+    const { match, car } = openGround()
+    const wy = GRID / 2 + 2
+    wallRow(match, wy)
+    placed(match, car, { x: 20, y: wy - 1.3, heading, speed: 10 })
+    const before = untilWall(match, car)
+    assert.ok(before, 'the car never reached the wall')
+    const turn = car.heading - before.heading
+    const d = -before.heading
+    return turn / d
+  }
+  const shallow = turnFraction(0.1)
+  const steep = turnFraction(0.4)
+  assert.ok(
+    steep > shallow + 0.01,
+    `a harder glancing hit must turn the nose by more of the gap to the wall line: shallow ${shallow.toFixed(3)}, steep ${steep.toFixed(3)}`,
+  )
+})
+
+test('a rear-end hit shoves the car ahead and costs the one behind, conserving momentum', () => {
+  const match = racing(2)
+  match.grid.fill(S_TARMAC)
+  const [a, b] = [...match.cars.values()]
+  const line = () => {
+    placed(match, a, { x: 40, y: 40, heading: 0, speed: 10 })
+    placed(match, b, { x: 40 + CAR_LENGTH * 0.9, y: 40, heading: 0, speed: 4 })
+  }
+  line()
+  const before = a.vx + b.vx
+  resolveContact(match)
+  assert.ok(b.vx > 4, 'the car ahead is shoved forward')
+  assert.ok(a.vx < 10, 'the car behind loses speed')
+  assert.ok(Math.abs(a.vx + b.vx - before) < 1e-9, 'equal masses: momentum is conserved')
+
+  // A ghost is not there to be hit: nothing changes hands.
+  line()
+  a.ghostUntil = match.now + 1000
+  resolveContact(match)
+  assert.equal(a.vx, 10)
+  assert.equal(b.vx, 4)
+
+  // Nor is a car down a hole: falling is not there to be hit either.
+  line()
+  a.fellIn = { x: a.x, y: a.y, heading: 0, width: 3 }
+  a.fallUntil = match.now + hd.FALL_MS
+  resolveContact(match)
+  assert.equal(a.vx, 10)
+  assert.equal(b.vx, 4)
+})
+
+/** An open-ground car already drifting right at about 9 tiles/s. */
+function drifting() {
+  const { match, car } = openGround()
+  placed(match, car, { x: GRID / 2, y: GRID / 2, heading: 0, speed: 9 })
+  applyInput(match, car.id, { throttle: 1, steer: 1, drift: 1 })
+  for (let i = 0; i < 20; i++) stepCar(match, car, TICK_MS / 1000)
+  assert.equal(car.driftDir, 1, 'the setup must be drifting')
+  assert.ok(car.driftChain > 0, 'the setup must have built a chain')
+  return { match, car }
+}
+
+const lostIt = (car, why) => {
+  assert.equal(car.driftDir, 0, `${why}: the drift must end`)
+  assert.equal(car.driftScore, 0, `${why}: nothing is banked`)
+  assert.equal(car.driftEnd?.lost, true, `${why}: the end is recorded as lost`)
+}
+
+test('drift input is clamped to a boolean', () => {
+  const { match, car } = openGround()
+  for (const drift of [NaN, 'yes', '1', {}, [], null, undefined, 2]) {
+    applyInput(match, car.id, { drift })
+    assert.equal(car.drift, false, `${JSON.stringify(drift)} must not hold a drift`)
+  }
+  applyInput(match, car.id, { drift: 1 })
+  assert.equal(car.drift, true)
+  applyInput(match, car.id, { drift: true })
+  assert.equal(car.drift, true)
+})
+
+test('a drift needs Shift, a steer and DRIFT_MIN_SPEED', () => {
+  const at = (speed, input) => {
+    const { match, car } = openGround()
+    placed(match, car, { x: 20, y: GRID / 2, heading: 0, speed })
+    applyInput(match, car.id, input)
+    stepCar(match, car, TICK_MS / 1000)
+    stepCar(match, car, TICK_MS / 1000)
+    return car.driftDir
+  }
+  const fast = hd.DRIFT_MIN_SPEED + 2
+  assert.equal(at(fast, { drift: 1, steer: 1, throttle: 1 }), 1, 'right steer drifts right')
+  assert.equal(at(fast, { drift: 1, steer: -1, throttle: 1 }), -1, 'left steer drifts left')
+  assert.equal(at(hd.DRIFT_MIN_SPEED - 1, { drift: 1, steer: 1, throttle: 1 }), 0, 'too slow')
+  assert.equal(at(fast, { drift: 1, steer: 0, throttle: 1 }), 0, 'no steer')
+  assert.equal(at(fast, { drift: 0, steer: 1, throttle: 1 }), 0, 'no Shift')
+})
+
+test('at the same speed a drift turns the path tighter than grip and keeps its speed', () => {
+  const turned = (drift) => {
+    const { match, car } = openGround()
+    placed(match, car, { x: GRID / 2, y: GRID / 2, heading: 0, speed: 9 })
+    applyInput(match, car.id, { throttle: 1, steer: 1, drift: drift ? 1 : 0 })
+    let path = 0
+    let last = 0
+    for (let t = 0; t < 500; t += TICK_MS) {
+      const h = car.heading
+      stepCar(match, car, TICK_MS / 1000)
+      assert.ok(car.heading - h <= TURN_RATE * hd.DRIFT_TURN * (TICK_MS / 1000) + 1e-9, 'a step never out-turns TURN_RATE * DRIFT_TURN')
+      const dir = Math.atan2(car.vy, car.vx)
+      path += Math.atan2(Math.sin(dir - last), Math.cos(dir - last))
+      last = dir
+    }
+    return { path, speed: speedOf(car) }
+  }
+  const grip = turned(false)
+  const drift = turned(true)
+  assert.ok(drift.path > grip.path * 1.5, `drift turned ${drift.path.toFixed(2)} rad, grip ${grip.path.toFixed(2)}`)
+  assert.ok(drift.speed > grip.speed * 0.9, `a drift carries its speed: ${drift.speed.toFixed(2)} vs ${grip.speed.toFixed(2)}`)
+})
+
+test('letting go of Shift banks the chain', () => {
+  const { match, car } = drifting()
+  const chain = car.driftChain
+  applyInput(match, car.id, { throttle: 1, steer: 1, drift: 0 })
+  stepCar(match, car, TICK_MS / 1000)
+  assert.equal(car.driftDir, 0)
+  assert.equal(car.driftScore, Math.round(chain))
+  assert.deepEqual({ pts: car.driftEnd.pts, lost: car.driftEnd.lost }, { pts: Math.round(chain), lost: false })
+})
+
+test('a spin, leaving the ground, a hole or a wall loses the chain', () => {
+  {
+    const { match, car } = drifting()
+    car.spinUntil = match.now + hd.SPIN_MS
+    stepCar(match, car, TICK_MS / 1000)
+    lostIt(car, 'spun')
+  }
+  {
+    const { match, car } = drifting()
+    car.airUntil = match.now + hd.AIR_MS
+    car.airMs = hd.AIR_MS
+    stepCar(match, car, TICK_MS / 1000)
+    lostIt(car, 'airborne')
+    for (let t = 0; t < hd.AIR_MS + 200; t += TICK_MS) {
+      match.now += TICK_MS
+      stepCar(match, car, TICK_MS / 1000)
+    }
+    assert.ok(Number.isFinite(car.x) && Number.isFinite(car.y), 'it lands in one piece')
+  }
+  {
+    const { match, car } = drifting()
+    car.fellIn = { x: car.x, y: car.y, heading: 0, width: 3 }
+    car.fallUntil = match.now + hd.FALL_MS
+    stepCar(match, car, TICK_MS / 1000)
+    lostIt(car, 'down a hole')
+  }
+  {
+    const { match, car } = drifting()
+    // One row ahead of a car already turned to face +y, so it cannot miss.
+    wallRow(match, Math.round(car.y) + 1)
+    for (let i = 0; i < 120 && car.driftDir; i++) stepCar(match, car, TICK_MS / 1000)
+    lostIt(car, 'into a wall')
+  }
+})
+
+test("starting a new drift clears the last drift's end", () => {
+  const { match, car } = drifting()
+  const chain = car.driftChain
+  applyInput(match, car.id, { throttle: 1, steer: 1, drift: 0 })
+  stepCar(match, car, TICK_MS / 1000)
+  assert.equal(car.driftDir, 0)
+  assert.deepEqual({ pts: car.driftEnd.pts, lost: car.driftEnd.lost }, { pts: Math.round(chain), lost: false })
+
+  applyInput(match, car.id, { throttle: 1, steer: 1, drift: 1 })
+  stepCar(match, car, TICK_MS / 1000)
+  stepCar(match, car, TICK_MS / 1000)
+  assert.notEqual(car.driftDir, 0, 'a new drift must engage')
+  assert.equal(car.driftEnd, null, "starting a new drift must clear the last one's end")
+})
+
+test('a new race starts every car with no drift and no drift points', () => {
+  const match = racing(2)
+  for (const car of match.cars.values()) {
+    Object.assign(car, { drift: true, driftDir: 1, driftChain: 500, driftScore: 9000, driftEnd: { pts: 500, lost: false, at: match.now } })
+  }
+  startRace(match)
+  for (const car of match.cars.values()) {
+    assert.equal(car.drift, false)
+    assert.equal(car.driftDir, 0)
+    assert.equal(car.driftChain, 0)
+    assert.equal(car.driftScore, 0)
+    assert.equal(car.driftEnd, null)
+  }
+})
+
+test('drift fields and status flags ride the snapshot only while they apply', () => {
+  const match = racing(2)
+  const [car] = [...match.cars.values()]
+  const mine = () => snapshot(match).cars.find((c) => c.id === car.id)
+
+  const idle = mine()
+  for (const k of ['drift', 'driftChain', 'driftScore', 'driftEnd', 'drafting', 'boosting', 'sliding', 'spinning', 'airborne', 'airT']) {
+    assert.equal(k in idle, false, `${k} must be absent on a car doing nothing`)
+  }
+
+  Object.assign(car, { driftDir: -1, driftChain: 123.6, driftScore: 400 })
+  const on = mine()
+  assert.equal(on.drift, -1)
+  assert.equal(on.driftChain, 124)
+  assert.equal(on.driftScore, 400)
+
+  car.driftEnd = { pts: 124, lost: true, at: match.now }
+  assert.deepEqual(mine().driftEnd, { pts: 124, lost: true })
+  match.now += hd.DRIFT_SHOW_MS
+  assert.equal('driftEnd' in mine(), false, 'an ended chain is shown for DRIFT_SHOW_MS, then dropped')
+})
+
+test('eight short-named cars drifting, boosting and drafting, with chains ending, fit the 4 KB target', () => {
+  const match = racing(MAX_PLAYERS)
+  for (let i = 0; i < MAX_HAZARDS; i++) {
+    match.hazards.push({ kind: 'slick', x: 40, y: 40, until: 9e9, by: 'p-1' })
+  }
+  for (const car of match.cars.values()) {
+    Object.assign(car, {
+      driftDir: 1,
+      driftChain: 99999,
+      driftScore: 99999,
+      driftEnd: { pts: 99999, lost: false, at: match.now },
+      boostUntil: match.now + 1000,
+      drafting: true,
+      steerNow: -0.85,
+      vx: hd.TOP_SPEED * hd.BOOST_MULT * hd.SLIP_BOOST,
+      vy: 0,
+    })
+  }
+  // 4 KB is a bandwidth target, not a limit anything enforces on outbound
+  // frames; long names (up to 16 characters) or every rare flag at once can
+  // push a real frame past it.
+  const bytes = JSON.stringify(snapshot(match)).length
+  assert.ok(bytes < 4096, `a full drifting frame is ${bytes} bytes, over maxPayload`)
+})
+
+test('a drift live when the race ends is banked, not left hanging', () => {
+  const match = racing(2)
+  match.grid.fill(S_TARMAC)
+  const [a, b] = [...match.cars.values()]
+  // The leader is about to complete the race.
+  a.lap = match.laps
+  // A moving drift, not a stationary one: at rest, updateDrift's own speed
+  // check would end it regardless of this fix, and the test would prove
+  // nothing. The one tick still to run before the phase flips grows the
+  // chain a little further, so 237.6 in lands on 238 out.
+  Object.assign(b, { drift: true, driftDir: 1, driftChain: 237.6, heading: 0, vx: 9, vy: 0 })
+
+  tick(match, TICK_MS, () => 0)
+
+  assert.equal(match.phase, 'over', 'the race must conclude this tick')
+  assert.equal(b.driftDir, 0, 'the flag must end a drift still live when the race ends')
+  assert.equal(b.driftScore, 238, 'a chain still going when the leader crosses is banked, not dropped')
+  const bs = snapshot(match).cars.find((c) => c.id === b.id)
+  assert.equal('drift' in bs, false, 'a parked car must not keep drawing skids and smoke')
+})
+
+test('drifting backwards along the nose does not engage a drift', () => {
+  const { match, car } = openGround()
+  placed(match, car, { x: GRID / 2, y: GRID / 2, heading: 0, speed: -(hd.DRIFT_MIN_SPEED + 2) })
+  applyInput(match, car.id, { drift: 1, steer: 1, brake: 1 })
+  // One tick is where the bug shows: the reverse speed cap (0.4 * top
+  // speed) drops a moving-backward car under DRIFT_MIN_SPEED by the next
+  // tick regardless of this fix, which would mask it if checked later.
+  stepCar(match, car, TICK_MS / 1000)
+  assert.equal(car.driftDir, 0, 'moving backwards along the nose must not count as a drift')
 })
