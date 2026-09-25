@@ -3696,6 +3696,21 @@ test('a spin, leaving the ground, a hole or a wall loses the chain', () => {
   }
 })
 
+test("starting a new drift clears the last drift's end", () => {
+  const { match, car } = drifting()
+  const chain = car.driftChain
+  applyInput(match, car.id, { throttle: 1, steer: 1, drift: 0 })
+  stepCar(match, car, TICK_MS / 1000)
+  assert.equal(car.driftDir, 0)
+  assert.deepEqual({ pts: car.driftEnd.pts, lost: car.driftEnd.lost }, { pts: Math.round(chain), lost: false })
+
+  applyInput(match, car.id, { throttle: 1, steer: 1, drift: 1 })
+  stepCar(match, car, TICK_MS / 1000)
+  stepCar(match, car, TICK_MS / 1000)
+  assert.notEqual(car.driftDir, 0, 'a new drift must engage')
+  assert.equal(car.driftEnd, null, "starting a new drift must clear the last one's end")
+})
+
 test('a new race starts every car with no drift and no drift points', () => {
   const match = racing(2)
   for (const car of match.cars.values()) {

@@ -1499,6 +1499,8 @@ function updateDrift(match, car, speed, airborne, spinning) {
     // Locked to the side it was turned into until it ends.
     car.driftDir = Math.sign(car.steerNow)
     car.driftChain = 0
+    // A new drift replaces the last one's end, so the page never shows a stale one.
+    car.driftEnd = null
   }
 }
 
