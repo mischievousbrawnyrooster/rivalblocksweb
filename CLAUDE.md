@@ -20,6 +20,7 @@ npm run blockout3d # Blockout Royale 3D            :8085  ← /blockout3d-ws
 npm run drillers # Void Drillers                   :8086  ← /voiddrillers-ws
 npm run cipher   # Cipher Run                      :8087  ← /cipherrun-ws
 npm run cutline  # Cutline                        :8088  ← /cutline-ws
+npm run ventline # Ventline, solo and live         :8089  ← /ventline-ws
 node server/cutline-select.mjs   # regenerate CIRCUITS by measured difference
 node server/cutline-laps.mjs     # median bot lap per circuit, for tuning handling
 npm test         # node --test over src/lib and server/*.test.js
@@ -64,6 +65,8 @@ Three layers with a deliberate, enforced split:
 | `server/cipherrun-server.js` | Connection lifecycle, parsing, broadcast | Any game decision |
 | `server/cutline.js` | Every rule and all match state | Sockets, Node APIs, *any* import |
 | `server/cutline-server.js` | Connection lifecycle, parsing, broadcast | Any game decision |
+| `server/ventline.js` | Every rule and all match state | Sockets, Node APIs, *any* import |
+| `server/ventline-server.js` | Connection lifecycle, parsing, tick pacing, banking | Any game decision |
 | `server/board.js` | Leaderboard merging and ranking | Node APIs, imports, I/O, a clock |
 | `server/board-store.js` | Reading and writing the board files | Any ranking decision |
 | `src/pages/Play.jsx` | Rendering and input | Simulation, prediction, rule checks |
@@ -71,10 +74,12 @@ Three layers with a deliberate, enforced split:
 | `src/pages/VoidDrillers.jsx` | Canvas, camera, particles, HUD | Simulation, prediction, rule checks |
 | `src/pages/CipherRun.jsx` | Canvas, chibi runners, input, HUD | Simulation, prediction, rule checks |
 | `src/pages/Cutline.jsx` | WebGL and overlay canvases, input, HUD | Simulation, prediction, rule checks |
+| `src/pages/Ventline.jsx` | Canvas, route map, input, HUD | Simulation, prediction, rule checks |
 | `src/lib/cutlineScene.js` | Cutline's three.js scene | Game rules, simulation, prediction |
 | `src/lib/raceCamera.js` | Game-to-three.js mapping, view poses, smoothing | three.js, the DOM, any import |
 | `src/lib/wallBlocks.js` | Which wall tiles are drawn in 3D | three.js, the DOM, any import |
 | `src/lib/carLift.js` | How high a car is drawn: ramp slope or jump arc | three.js, the DOM, any import |
+| `src/lib/ventlineView.js` | Ventline world and route-map projection, map markers | The DOM, any import |
 
 
 `game.js` has zero imports on purpose — that purity is why all ~60 tests live against it and why `server.js` and `Play.jsx` have none. Put new logic there, not in the socket wrapper.
@@ -113,7 +118,7 @@ turned up to three times the usual amount in one.
 
 ## The leaderboard
 
-Eight files, one per match server, each with **exactly one writer** (`board-blockout.json`, `board-blockout3d.json`, `board-fracture.json`, `board-blastworks-lastman.json`, `board-blastworks-deathmatch.json`, `board-voiddrillers.json`, `board-cipherrun.json`, `board-cutline.json`). That is the
+Nine files, one per match server, each with **exactly one writer** (`board-blockout.json`, `board-blockout3d.json`, `board-fracture.json`, `board-blastworks-lastman.json`, `board-blastworks-deathmatch.json`, `board-voiddrillers.json`, `board-cipherrun.json`, `board-cutline.json`, `board-ventline.json`). That is the
 whole concurrency design: no two processes ever write the same path, so there
 is nothing to lock. `BOARD_DIR` says where they live (`./data` in dev,
 `/var/lib/rivalblocks/board` deployed).
@@ -135,6 +140,13 @@ is nothing to lock. `BOARD_DIR` says where they live (`./data` in dev,
   victory screen, not the board. Blockout Royale 3D banks per round as well,
   for the same reason, and unlike flat Blockout it banks real kills and deaths
   — a stomp, a sinkhole and a landing all have an author.
+  Ventline banks every *run*: many solo runs end in one process at once, so
+  it uses `runKeeper`, which marks the run object `banked`, instead of the
+  phase-edge `keeper`. A live round banks its match object the same way.
+- **Ventline's board ranks by score, everyone else's by wins.** `rankForBoard`
+  sorts `board-ventline.json` by `bestScore`, then wins, then name. `combine`
+  still uses `rank`, so Ventline's live wins count in the cross-title table and
+  its best score stays filed under Ventline.
 - **What a title's board keeps is declared once, in `BOARDS`.** `fights` hides
   K/D where nobody is killed, and `bests` lists the best scores with their
   column headings. `combine` reads the same entries: kills and deaths add up
@@ -192,19 +204,21 @@ is nothing to lock. `BOARD_DIR` says where they live (`./data` in dev,
 
 - **Each game announces a WebSocket subprotocol, and the name is load-bearing.**
   `new WebSocket(url, 'blockout.v1' | 'fracture.v1' | 'blastworks.v1' |
-  'blockout3d.v1' | 'voiddrillers.v1' | 'cipherrun.v1')` in the six pages. Nothing in the app reads it back — no
-  server sets `handleProtocols`, so `ws` echoes the first name offered and the
-  handshake completes either way. It exists for the capture: Wireshark keys its
+  'blockout3d.v1' | 'voiddrillers.v1' | 'cipherrun.v1' | 'cutline.v1' |
+  'ventline.v1')` in the pages. Only Ventline reads it back: its server refuses
+  a handshake without `ventline.v1` on `/ventline-ws`. The others set no
+  `handleProtocols`, so `ws` echoes the first name offered and the handshake
+  completes either way. It exists for the capture: Wireshark keys its
   `ws.protocol` dissector table on the negotiated string, and
-  `deploy/rivalblocks.lua` registers against exactly these six. Rename one
+  `deploy/rivalblocks.lua` registers against exactly these names. Rename one
   without renaming it there and nothing errors anywhere; the game just stops
   being named. Both halves move together.
   The name is only ever stated in the handshake, so it cannot name a capture
   that missed it or one taken before this existed. Two fallbacks cover that,
   both heuristics: the path in the upgrade request (`/ws`, `/fracture-ws`,
   `/blast-ws`, `/blast-dm-ws`, `/blockout3d-ws`, `/voiddrillers-ws`,
-  `/cipherrun-ws`), remembered per TCP stream, and failing that our JSON shape
-  on ports 8081-8087. **The path is the only
+  `/cipherrun-ws`, `/cutline-ws`, `/ventline-ws`), remembered per TCP stream,
+  and failing that our JSON shape on ports 8081-8089. **The path is the only
   one of the three that survives a proxy** — captured at the browser every game
   shares one port, 5173 in dev and 80 deployed, so a capture taken there is
   named by its paths or not at all. Adding another proxy path means adding it
@@ -526,6 +540,15 @@ is nothing to lock. `BOARD_DIR` says where they live (`./data` in dev,
 - **Authoritative Pre-Round Voting**: 5-second pre-round voting phase (`VOTE_DURATION_MS = 5000`) before race countdown, with real-time consensus percentages, home-row hotkeys (`1`, `2`, `3`), random tie resolution, and a 2% Easter Egg roll.
 - **Chibi Cyber Sprinters**: Procedural anime runner with 6 sprinter variations, dynamic stride cadence scaling with WPM, word-dash impulse, stumble states, and celebratory cheer states.
 
+### Ventline (One-Button Score Chase)
+- **Every step is a fixed 16 ms, and the wrapper takes as many as real time owes.** The rules are fixed step (`DT` is a constant, and the reachability test depends on it), so the wrapper cannot pass a `dt` the way the other servers do. Stepping once per `setInterval` callback ran the game at 53% speed on Windows, where a 16 ms interval fires about 33 times a second. Snapshots go out once per callback, so the frame rate is lower than the step rate on Windows, and the results hold is 250 *steps*, not 250 frames.
+- **A drone dies when its body reaches y 0 or 600.** The ceiling and floor trims are drawn 4 px deep to match. A deeper band once showed drones flying inside the ceiling unharmed.
+- **While your drone flies, Space flaps wherever focus is.** The handler calls `preventDefault` and blurs the focused element. Pressing Solo leaves focus on it, and when the handler skipped focused buttons, every Space clicked Solo again and restarted the run.
+- **The effect cue counter resets when the phase leaves `over`, never on Retry.** Result frames still in flight after Retry carry the old run's `event.seq`; resetting on the click replayed the last cue and silenced the new run's first pickups.
+- **The page's Ready flag is cleared only by `welcome`.** The server sends `welcome` with every new round and keeps a player ready when a countdown is cancelled, so clearing it on any return to the lobby made the button disagree with the server.
+- **A live player with no run is deleted on disconnect.** The match is only rebuilt after a round, so a lobby nobody started kept every visitor forever.
+- **Only rivals are interpolated.** Your own drone is drawn at the newest snapshot, as the design specifies; rivals blend between the last two received.
+
 ### Void Drillers (Per-Player Shaft Race)
 - **Once the match clock runs, nobody new spawns.** A person arriving mid-round spectates it and is dealt into the next, and bots are only dealt in while `elapsed === 0`. The void passes the spawn row a few seconds in, so anything placed later is crushed on arrival.
 - **Only a vault touchdown is a clear time.** A win by outlasting a rival (`winReason: 'survival'`) banks a win with no time, or a rival walking out a second in would set the record.
@@ -554,7 +577,7 @@ These are non-negotiable and predate the game:
 
 ## Deployment
 
-Single node, two tiers: nginx serves `dist/` and proxies eight WebSocket paths to eight Node processes on loopback, all from one systemd template unit (`rivalblocks@<instance>`). nginx also serves `/board/` straight from `BOARD_DIR`. Full sequence in `deploy/DEPLOY.md`.
+Single node, two tiers: nginx serves `dist/` and proxies nine WebSocket paths to nine Node processes on loopback, all from one systemd template unit (`rivalblocks@<instance>`). nginx also serves `/board/` straight from `BOARD_DIR`. Full sequence in `deploy/DEPLOY.md`.
 
 **No proxy path but `/ws` itself may begin with `/ws`.** nginx and vite both match by prefix, so `/ws-fracture` is silently swallowed by the Blockout rule and connects the player to the wrong game.
 
