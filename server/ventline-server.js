@@ -101,24 +101,37 @@ wss.on('connection', ws => {
   ws.on('error', () => { drop(ws); ws.terminate() })
 })
 
+function step() {
+  for (const ws of wss.clients) {
+    const client = ws.client
+    if (client?.mode !== 'solo') continue
+    if (client.run.alive) stepRun(client.run)
+    if (!client.run.alive) bankSolo(client.run)
+  }
+  stepMatch(match)
+  if (match.phase === 'over') {
+    keep.bank(match, matchResults(match))
+    if (++overTicks > 250) restartMatch()
+  }
+}
+
+// Every step is a fixed 16 ms, so take as many as real time owes. setInterval
+// drifts: on Windows a 16 ms interval fires about 33 times a second, which ran
+// the whole game in slow motion. Clamped, so a stall cannot replay seconds at once.
+let last = Date.now()
+let owed = 0
 setInterval(() => {
   try {
-    for (const ws of wss.clients) {
-      const client = ws.client
-      if (client?.mode !== 'solo') continue
-      if (client.run.alive) stepRun(client.run)
-      if (!client.run.alive) bankSolo(client.run)
-    }
-    stepMatch(match)
-    if (match.phase === 'over') {
-      keep.bank(match, matchResults(match))
-      if (++overTicks > 250) restartMatch()
-    }
+    const now = Date.now()
+    owed = Math.min(owed + now - last, TICK_MS * 5)
+    last = now
+    if (owed < TICK_MS) return
+    for (; owed >= TICK_MS; owed -= TICK_MS) step()
     // Snapshot output may contain live references; serialize in this tick.
+    const board = keep.top()
     for (const ws of wss.clients) {
       const client = ws.client
       if (!client || ws.readyState !== WebSocket.OPEN) continue
-      const board = keep.top()
       const best = keep.best(client.name)
       send(ws, client.mode === 'solo'
         ? soloSnapshot(client.run, board, best)

@@ -479,6 +479,7 @@ export const games = [
     statusTone: 'beta',
     flagship: false,
     platforms: ['PC', 'iOS', 'Android'],
+    coverImage: '/art/ventline.jpg',
     art: { variant: 'platforms', seed: 8089 },
     blurb:
       'The plant vent is open between shifts. Keep the drone aloft with a flap, ' +

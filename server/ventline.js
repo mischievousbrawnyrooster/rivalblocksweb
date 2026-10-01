@@ -131,6 +131,8 @@ export const disconnectMatch = (match, id) => {
   if (!player) return
   player.connected = false
   if (player.run) player.run.alive = false
+  // Nothing to bank or show, and a lobby nobody starts would keep every visitor.
+  else match.players.delete(id)
   if (match.phase === 'countdown' &&
     [...match.players.values()].filter((p) => p.connected && p.ready && !p.spectating).length < 2) {
     match.phase = 'lobby'

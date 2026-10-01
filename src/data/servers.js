@@ -55,6 +55,7 @@ export const gameServers = [
   { slug: 'void-drillers', title: 'Void Drillers', port: 8086, path: '/voiddrillers-ws', status: 'operational' },
   { slug: 'cipher-run', title: 'Cipher Run', port: 8087, path: '/cipherrun-ws', status: 'operational' },
   { slug: 'cutline', title: 'Cutline', port: 8088, path: '/cutline-ws', status: 'operational' },
+  { slug: 'ventline', title: 'Ventline', port: 8089, path: '/ventline-ws', status: 'operational' },
 ]
 
 export const servers = gameServers

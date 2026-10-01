@@ -4,7 +4,8 @@ import { projectWorld, projectMap, mapMarkers, mapLabelX } from '../lib/ventline
 
 const W = 960
 const H = 600
-const vars = ['bg', 'surface', 'line', 'fg', 'muted', 'flare', 'live', 'warn', 'tile', 'hole', 'player-1']
+const vars = ['bg', 'surface', 'line', 'fg', 'muted', 'flare', 'live', 'warn', 'tile', 'hole',
+  ...Array.from({ length: 8 }, (_, i) => `player-${i + 1}`)]
 const palette = () => {
   const css = getComputedStyle(document.documentElement)
   return Object.fromEntries(vars.map(key => [key, css.getPropertyValue(`--${key}`).trim()]))
@@ -67,7 +68,7 @@ function drawDrone(ctx, player, cameraX, c, flash, alpha = 1, label = '') {
   ctx.save()
   ctx.translate(x, y)
   ctx.globalAlpha = alpha * (player.alive ? 1 : 0.48)
-  polygon(ctx, [[-18, 0], [-6, -11], [13, -10], [21, 0], [13, 10], [-6, 11]], c['player-1'])
+  polygon(ctx, [[-18, 0], [-6, -11], [13, -10], [21, 0], [13, 10], [-6, 11]], c[`player-${(player.slot ?? 0) + 1}`])
   polygon(ctx, [[-3, -9], [14, -8], [18, 0], [14, 8], [-3, 9]], c.fg)
   ctx.fillStyle = c.bg
   ctx.fillRect(2, -4, 8, 8)
@@ -158,19 +159,13 @@ function draw(ctx, snap, previous, receivedAt, interval, ownId, now, cueUntil, r
   ctx.strokeStyle = c.line
   ctx.lineWidth = 1
   for (let x = 0; x < W; x += 120) {
-    ctx.beginPath(); ctx.moveTo(x, 28); ctx.lineTo(x, H - 28); ctx.stroke()
+    ctx.beginPath(); ctx.moveTo(x, 6); ctx.lineTo(x, H - 6); ctx.stroke()
   }
-  ctx.fillStyle = c.surface
-  ctx.fillRect(0, 0, W, 28)
-  ctx.fillRect(0, H - 28, W, 28)
+  // A drone crashes when its body reaches y 0 or 600, so the trims stay thin: a
+  // deeper ceiling showed drones flying inside it unharmed.
   ctx.fillStyle = c.tile
-  ctx.fillRect(0, 24, W, 4)
-  ctx.fillRect(0, H - 28, W, 4)
-  for (let x = 18; x < W; x += 72) {
-    ctx.fillStyle = c.muted
-    ctx.fillRect(x, 9, 4, 4)
-    ctx.fillRect(x, H - 14, 4, 4)
-  }
+  ctx.fillRect(0, 0, W, 4)
+  ctx.fillRect(0, H - 4, W, 4)
   const viewed = snap?.players?.find(p => p.id === snap.viewedId)
   const cameraX = Number.isFinite(viewed?.x) ? viewed.x - 180 : -180
   for (const gate of snap?.gates ?? []) drawGate(ctx, gate, cameraX, c)
@@ -190,7 +185,7 @@ function draw(ctx, snap, previous, receivedAt, interval, ownId, now, cueUntil, r
     ctx.fillStyle = c.muted
     ctx.font = '18px ui-sans-serif, sans-serif'
     ctx.textAlign = 'center'
-    ctx.fillText('Choose a flight mode to enter the bay', W / 2, H / 2)
+    ctx.fillText(snap ? 'Waiting for launch' : 'Choose a flight mode to enter the bay', W / 2, H / 2)
   }
 }
 
@@ -299,10 +294,10 @@ export default function Ventline() {
         finalCrashesRef.current = null
       }
       setSnap(message)
-      if (previousPhase && previousPhase !== 'lobby' && message.phase === 'lobby') {
-        setReady(false)
-        eventSeqRef.current = 0
-      }
+      // A new run starts its effect count at 0. Reset on leaving the result, not on
+      // pressing Retry: result frames still in flight would replay the last cue.
+      // Ready is cleared by welcome, which the server sends with every new round.
+      if (previousPhase === 'over' && message.phase !== 'over') eventSeqRef.current = 0
       const own = message.players?.find(p => p.id === idRef.current)
       if (own?.event?.seq > eventSeqRef.current) {
         eventSeqRef.current = own.event.seq
@@ -346,9 +341,14 @@ export default function Ventline() {
 
   useEffect(() => {
     const onKeyDown = event => {
-      if (event.code !== 'Space' || event.repeat || ['INPUT', 'BUTTON', 'TEXTAREA'].includes(event.target?.tagName)) return
-      if (snapRef.current?.phase !== 'playing') return
-      event.preventDefault(); press()
+      if (event.code !== 'Space') return
+      const snap = snapRef.current
+      if (snap?.phase !== 'playing' || !snap.players?.find(p => p.id === idRef.current)?.alive) return
+      // While your drone flies, Space flaps wherever focus is. Solo keeps focus after
+      // it is pressed, and a Space it took would restart the run instead of flapping.
+      event.preventDefault()
+      document.activeElement?.blur()
+      if (!event.repeat) press()
     }
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)
@@ -410,7 +410,7 @@ export default function Ventline() {
           {phase === 'lobby' && mode === 'live' && own && !ready &&
             <button type="button" onClick={() => { send('ready'); setReady(true) }} className="mt-4 bg-flare px-5 py-2 font-bold text-on-flare">Ready</button>}
           {phase === 'over' && mode === 'solo' &&
-            <button type="button" onClick={() => { send('retry'); setCue(''); eventSeqRef.current = 0 }} className="mt-4 bg-flare px-5 py-2 font-bold text-on-flare">Retry</button>}
+            <button type="button" onClick={() => { send('retry'); setCue('') }} className="mt-4 bg-flare px-5 py-2 font-bold text-on-flare">Retry</button>}
         </div>
         <button type="button" aria-pressed={muted} onClick={() => { mutedRef.current = !muted; setMuted(!muted) }}
           className="border border-line px-4 py-2 text-sm">Sound {muted ? 'off' : 'on'}</button>
@@ -420,7 +420,7 @@ export default function Ventline() {
         <ul className="mt-3 flex flex-wrap gap-x-6 gap-y-2 text-sm">
           {snap.players?.map(player => <li key={player.id}>
             <strong>{player.name}{player.id === myId ? ' (you)' : ''}</strong>: {player.score} points, {player.clean} clean clears
-            {phase !== 'lobby' && !player.alive ? ' · crashed' : ''}
+            {(phase === 'playing' || phase === 'over') && !player.alive ? ' · crashed' : ''}
           </li>)}
         </ul>
       </section>}

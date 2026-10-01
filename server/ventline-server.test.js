@@ -143,9 +143,9 @@ test('two live players share gates, spectators cannot flap, and live round banks
   const wc = await nextC(m => m.t === 'welcome')
   const watched = await nextC(m => m.t === 'snap' && m.phase === 'playing')
   assert.equal(watched.players.some(p => p.id === wc.id), false)
-  let resultFrames = 0
+  let firstResult = 0
   a.on('message', raw => {
-    if (JSON.parse(raw).phase === 'over') resultFrames++
+    if (JSON.parse(raw).phase === 'over') firstResult ||= Date.now()
   })
   send(c, { t: 'flap' })
   send(c, { t: 'score', score: 9999 })
@@ -160,7 +160,8 @@ test('two live players share gates, spectators cannot flap, and live round banks
   assert.equal(row(dir, 'Live A').bestScore, 0)
   const lobby = await nextA(m => m.t === 'snap' && m.phase === 'lobby' &&
     m.players.some(p => p.id === wc.id), 12000)
-  assert.equal(resultFrames, 250)
+  // 250 steps of 16 ms on the real clock, however often the interval fires.
+  assert.ok(Date.now() - firstResult >= 3800, `results held ${Date.now() - firstResult} ms`)
   assert.deepEqual(lobby.players.map(p => p.id), [wa.id, wb.id, wc.id])
   assert.equal(row(dir, 'Live A').matches, 1)
   assert.equal(row(dir, 'Live B').matches, 1)
