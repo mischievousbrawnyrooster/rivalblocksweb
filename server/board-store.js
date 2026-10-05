@@ -55,11 +55,26 @@ export function save(dir, spec, board) {
   try {
     mkdirSync(dir, { recursive: true })
     writeFileSync(temp, text)
-    renameSync(temp, target)
+    renameOver(temp, target)
     return true
   } catch {
     rmSync(temp, { force: true })
     return false
+  }
+}
+
+// Windows refuses to rename over a file another process has open (EPERM), as
+// when a page or a test is reading the board at that instant. The reader lets go
+// within milliseconds, so wait briefly and try again rather than drop the write:
+// a match server banks a solo run once, and a skipped write stayed skipped.
+function renameOver(from, to) {
+  for (let attempt = 1; ; attempt++) {
+    try {
+      return renameSync(from, to)
+    } catch (error) {
+      if (attempt === 5 || !['EPERM', 'EACCES', 'EBUSY'].includes(error.code)) throw error
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10)
+    }
   }
 }
 

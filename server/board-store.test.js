@@ -3,6 +3,8 @@ import assert from 'node:assert/strict'
 import { mkdtempSync, readdirSync, readFileSync, writeFileSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
+import { spawn } from 'node:child_process'
+import { once } from 'node:events'
 import { boardFor, emptyBoard, merge } from './board.js'
 import { load, save, boardDir, keeper, runKeeper } from './board-store.js'
 
@@ -27,6 +29,21 @@ test('a board survives being written and read back', () => {
   const back = load(d, spec)
   assert.deepEqual(back.players, filled().players)
   assert.equal(back.game, spec.game)
+})
+
+test('a board another process is reading at that moment is still replaced', async () => {
+  const d = fresh()
+  save(d, spec, filled())
+  // Held open for 30 ms, as a page fetching the board would. Windows refuses a
+  // rename over an open file, and the write used to be dropped.
+  const reader = spawn(process.execPath, ['-e', `const fs = require('fs')
+    const fd = fs.openSync(${JSON.stringify(join(d, spec.file))}, 'r')
+    console.log('open'); setTimeout(() => fs.closeSync(fd), 30)`])
+  await once(reader.stdout, 'data')
+  const next = merge(filled(), [{ name: 'bea', won: false, kills: 0, deaths: 1 }], 5678)
+  assert.equal(save(d, spec, next), true)
+  assert.deepEqual(load(d, spec).players.map((p) => p.name).sort(), ['ada', 'bea'])
+  if (reader.exitCode === null) await once(reader, 'exit')
 })
 
 test('a directory that does not exist yet is made, not complained about', () => {
