@@ -2,6 +2,8 @@
 
 *2026-09-25. Player-approved design for implementation planning.*
 
+*Amended 2026-10-01, player-approved:* powerups are spinning spheres floating inside each opening of a pickup shutter, collected the moment the drone touches one rather than granted on a clean clear; a charge lifts a later clear, never the one it was collected on. Speed rises linearly with flight time (0.5 units/s per second) to a ceiling the reachability test proves flyable, instead of per barrier to a plateau. Every drone, the local one included, is interpolated between received snapshots. The game's HUD, map, result and Retry sit on the play area. Four more kinds joined shield and charge: the wide gap now floats a survival kind (shield, coolant: slower, compact: smaller, bumper: one ceiling or floor bounce) and the narrow gap a score kind (charge, overdrive: double points), seeded per shutter; timed kinds last the three shutters after the one they were collected on. CLAUDE.md records the current rules; where this document disagrees, it is out of date.
+
 ## 1. Purpose and pitch
 
 **Ventline** is a short, repeatable, one-button flight game for RivalBlocks. A maintenance drone crosses the block-built ventilation works while shutters keep closing off the route. Each barrier offers a wide service opening and a narrow charged opening. Both keep the drone alive; the charged opening earns an extra point. Occasional shutters add a visible shield to the service route and a score charge to the charged route.
