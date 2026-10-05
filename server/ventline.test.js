@@ -1,6 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { gateAt, makeRun, flap, stepRun, TICK_MS, speedFor,
+import { gateAt, makeRun, flap, stepRun, TICK_MS, speedFor, SPHERE, BASE_SPEED, SPEED_GAIN, TOP_SPEED,
+  SURVIVAL, SCORE, EFFECT_SHUTTERS, COOLANT_SPEED, COMPACT_SCALE, radiusOf,
   makeMatch, joinMatch, setReady, disconnectMatch, stepMatch, matchResults,
   snapshot, soloSnapshot } from './ventline.js'
 
@@ -20,9 +21,11 @@ test('a seed and index reproduce bounded, separate openings and fixed pickups', 
   assert.equal(gateAt(42, 12).pickup, true)
 })
 
-test('each sampled service opening is reachable without a shield from either preceding opening', () => {
+test('each sampled service opening is reachable at top speed without a shield from either preceding opening', () => {
   // Exit states cover each body's safe edges and center, with legal vertical speeds.
   // Search flap decisions on fixed ticks; prune equivalent states at each tick.
+  // Flown at TOP_SPEED, the least time any run ever has between two shutters.
+  const topSpeedMs = (TOP_SPEED - BASE_SPEED) / SPEED_GAIN * 1000
   const tried = new Map()
   for (let seed = 0; seed < 1000; seed++) for (let index = 2; index <= 50; index++) {
     const previous = gateAt(seed, index - 1)
@@ -34,11 +37,12 @@ test('each sampled service opening is reachable without a shield from either pre
       for (const y of [opening.lo + 14, (opening.lo + opening.hi) / 2, opening.hi - 14]) {
         for (const vy of [-160, 0, 160]) {
           const start = makeRun({ seed })
-          Object.assign(start, { x: previous.x + previous.w + 12, y, vy, nextGate: index, lastFlapMs: -Infinity })
+          Object.assign(start, { x: previous.x + previous.w + 12, y, vy, nextGate: index, lastFlapMs: -Infinity,
+            elapsedMs: topSpeedMs })
           let found = false
           for (const horizon of [0.05, 0.1, 0.15, 0.2, 0.3, 0.4, 0.5, 0.6]) {
             for (const aim of [next.service.lo + 20, (next.service.lo + next.service.hi) / 2, next.service.hi - 20]) {
-              const candidate = { ...start, event: { ...start.event } }
+              const candidate = { ...start, event: { ...start.event }, took: { ...start.took } }
               for (let tick = 0; tick < 140 && candidate.alive && candidate.nextGate === index; tick++) {
                 if (candidate.y + candidate.vy * horizon + 425 * horizon * horizon > aim) flap(candidate)
                 stepRun(candidate)
@@ -129,32 +133,180 @@ test('full-body service and charged clears score once; distance alone does not',
   }
 })
 
-test('pickup clear grants route effect after scoring and effects do not stack', () => {
-  const service = clear(approach(42, 5, 'service'))
-  assert.equal(service.score, 1)
-  assert.equal(service.shield, true)
-  assert.equal(service.event.type, 'shield-pickup')
-  const charged = clear(approach(42, 5, 'charged'))
-  assert.equal(charged.score, 2)
-  assert.equal(charged.charge, true)
-  assert.equal(charged.event.type, 'charge-pickup')
-  const held = clear(approach(42, 12, 'service', { shield: true, charge: true }))
-  assert.equal(held.score, 3)
-  assert.equal(held.charge, false)
-  assert.equal(held.shield, true)
-  assert.equal(held.event.seq, 1)
+test('speed rises linearly with flight time and stops at TOP_SPEED', () => {
+  assert.equal(speedFor(0), BASE_SPEED)
+  assert.equal(speedFor(60000), BASE_SPEED + 60 * SPEED_GAIN)
+  assert.equal(speedFor(20000) - speedFor(10000), speedFor(30000) - speedFor(20000))
+  assert.equal(speedFor(10 * 60 * 60 * 1000), TOP_SPEED)
+  const run = makeRun({ seed: 42 })
+  Object.assign(run, { elapsedMs: 120000, y: 300, vy: -100 })
+  const x = run.x
+  stepRun(run)
+  assert.ok(Math.abs(run.x - x - speedFor(run.elapsedMs) * TICK_MS / 1000) < 1e-9)
 })
 
-test('charge scores once and a new charged pickup follows its consumption', () => {
-  const run = clear(approach(42, 12, 'charged', { charge: true }))
-  assert.equal(run.score, 4)
+test('pickup shutters float a survival kind in the wide gap and a score kind in the narrow one', () => {
+  assert.deepEqual(gateAt(42, 5).spheres, gateAt(42, 5).spheres)
+  const seen = new Set()
+  for (let seed = 0; seed < 500; seed++) for (let index = 1; index <= 50; index++) {
+    const gate = gateAt(seed, index)
+    if (!gate.pickup) {
+      assert.deepEqual(gate.spheres, [])
+      continue
+    }
+    const [safe, risky] = gate.spheres
+    assert.ok(SURVIVAL.includes(safe.kind))
+    assert.ok(SCORE.includes(risky.kind))
+    for (const [sphere, opening] of [[safe, gate.service], [risky, gate.charged]]) {
+      assert.equal(sphere.x, gate.x + gate.w / 2)
+      assert.ok(sphere.y >= opening.lo + 20 && sphere.y <= opening.hi - 20)
+      seen.add(sphere.kind)
+    }
+  }
+  assert.deepEqual([...seen].sort(), [...SURVIVAL, ...SCORE].sort())
+})
+
+// The first seed whose shutter 5 floats `kind`, and a drone level with that
+// sphere, just short of touching it.
+const seedWith = (kind) => {
+  for (let seed = 0; ; seed++) if (gateAt(seed, 5).spheres.some(s => s.kind === kind)) return seed
+}
+const onSphere = (kind, extras = {}) => {
+  const seed = seedWith(kind)
+  const sphere = gateAt(seed, 5).spheres.find(s => s.kind === kind)
+  const run = makeRun({ seed })
+  Object.assign(run, { nextGate: 5, x: sphere.x - SPHERE - 14, y: sphere.y, vy: -14, ...extras })
+  return run
+}
+// Flies level through the current shutter: gravity is cancelled before each step.
+const level = (run, index = run.nextGate) => {
+  for (let i = 0; i < 80 && run.alive && run.nextGate === index; i++) {
+    run.vy = -850 * TICK_MS / 2000
+    stepRun(run)
+  }
+  return run
+}
+// Through the middle of the next shutter's service gap.
+const nextClear = (run) => {
+  const gate = gateAt(run.seed, run.nextGate)
+  Object.assign(run, { x: gate.x + gate.w - 2, y: (gate.service.lo + gate.service.hi) / 2 })
+  return level(run)
+}
+
+test('touching a sphere collects it at once, and passing beside it does not', () => {
+  const run = onSphere('shield')
+  stepRun(run)
+  assert.equal(run.nextGate, 5)
+  assert.equal(run.shield, true)
+  assert.equal(run.event.type, 'shield-pickup')
+  assert.equal(soloSnapshot(run, [], 0).gates.find(g => g.index === 5).spheres.some(s => s.kind === 'shield'), false)
+  level(run, 5)
+  assert.equal(run.alive, true)
+  assert.equal(run.score, 1)
+  assert.equal(run.event.seq, 1)
+  const gate = gateAt(run.seed, 5)
+  const sphere = gate.spheres[0]
+  const far = sphere.y - gate.service.lo > gate.service.hi - sphere.y ? gate.service.lo + 14 : gate.service.hi - 14
+  assert.ok(Math.abs(far - sphere.y) > 12 + SPHERE + 10)
+  const beside = level(approach(run.seed, 5, 'service', { y: far }))
+  assert.equal(beside.alive, true)
+  assert.equal(beside.score, 1)
+  assert.equal(beside.shield, false)
+  assert.equal(beside.event.seq, 0)
+})
+
+test('a charge lifts the next clear, not the shutter it was collected on', () => {
+  const run = level(onSphere('charge'), 5)
+  assert.equal(run.alive, true)
+  assert.equal(run.score, 2)
   assert.equal(run.charge, true)
-  assert.equal(run.event.seq, 2)
   assert.equal(run.event.type, 'charge-pickup')
-  const next = clear(approach(42, 13, 'service', { charge: true }))
-  assert.equal(next.score, 3)
-  assert.equal(next.charge, false)
-  assert.equal(next.event.type, 'charge-use')
+  nextClear(run)
+  assert.equal(run.score, 5)
+  assert.equal(run.charge, false)
+  assert.equal(run.event.type, 'charge-use')
+})
+
+test('held effects do not stack, and a touched sphere is spent either way', () => {
+  const run = onSphere('shield', { shield: true })
+  stepRun(run)
+  assert.equal(run.shield, true)
+  assert.equal(run.event.seq, 0)
+  assert.equal(run.took.shield, 5)
+  assert.deepEqual(soloSnapshot(run, [], 0).gates.find(g => g.index === 5).spheres.map(s => s.kind),
+    [gateAt(run.seed, 5).spheres[1].kind])
+})
+
+test('a timed effect refills to EFFECT_SHUTTERS when collected again', () => {
+  const run = onSphere('coolant', { coolant: 1 })
+  for (let i = 0; i < 3; i++) stepRun(run)
+  assert.equal(run.nextGate, 5)
+  assert.equal(run.coolant, EFFECT_SHUTTERS)
+  assert.equal(run.event.type, 'coolant-pickup')
+})
+
+test('coolant slows the drone by a third for the three shutters after it', () => {
+  const run = onSphere('coolant')
+  stepRun(run)
+  const x = run.x
+  stepRun(run)
+  assert.ok(Math.abs(run.x - x - speedFor(run.elapsedMs) * COOLANT_SPEED * TICK_MS / 1000) < 1e-9)
+  level(run, 5)
+  assert.equal(run.alive, true)
+  assert.equal(run.coolant, EFFECT_SHUTTERS)
+  for (let left = EFFECT_SHUTTERS - 1; left >= 0; left--) {
+    nextClear(run)
+    assert.equal(run.coolant, left)
+  }
+  const before = run.x
+  stepRun(run)
+  assert.ok(Math.abs(run.x - before - speedFor(run.elapsedMs) * TICK_MS / 1000) < 1e-9)
+})
+
+test('compact shrinks the body the rules collide, not only the drawing', () => {
+  const gate = gateAt(42, 1)
+  const tight = { x: gate.x - 13, y: gate.charged.lo + 10, vy: 0 }
+  const full = Object.assign(makeRun({ seed: 42 }), tight)
+  level(full, 1)
+  assert.equal(full.alive, false)
+  const small = Object.assign(makeRun({ seed: 42 }), tight, { compact: EFFECT_SHUTTERS })
+  assert.equal(radiusOf(small), 12 * COMPACT_SCALE)
+  level(small, 1)
+  assert.equal(small.alive, true)
+  assert.equal(small.score, 2)
+  assert.equal(small.compact, EFFECT_SHUTTERS - 1)
+})
+
+test('a bumper bounces off the ceiling or floor once, and the next contact crashes', () => {
+  for (const [y, vy, floor] of [[13, -300, false], [587, 300, true]]) {
+    const run = Object.assign(makeRun({ seed: 42 }), { y, vy, bumper: true })
+    stepRun(run)
+    assert.equal(run.alive, true)
+    assert.equal(run.bumper, false)
+    assert.equal(run.event.type, 'bumper-use')
+    assert.equal(floor ? run.vy < 0 : run.vy > 0, true)
+    assert.ok(run.y - 12 > 0 && run.y + 12 < 600)
+    Object.assign(run, { y, vy })
+    stepRun(run)
+    assert.equal(run.alive, false)
+  }
+})
+
+test('overdrive doubles the next three clears, charge included, not the one it was collected on', () => {
+  const run = level(onSphere('overdrive'), 5)
+  assert.equal(run.alive, true)
+  assert.equal(run.score, 2)
+  assert.equal(run.overdrive, EFFECT_SHUTTERS)
+  nextClear(run)
+  assert.equal(run.score, 4)
+  run.charge = true
+  nextClear(run)
+  assert.equal(run.score, 10)
+  nextClear(run)
+  assert.equal(run.score, 12)
+  assert.equal(run.overdrive, 0)
+  nextClear(run)
+  assert.equal(run.score, 13)
 })
 
 test('a shield absorbs one shutter, blocks repeat hits, and keeps a score charge', () => {
@@ -332,7 +484,8 @@ test('live snapshot carries server state and fits the WebSocket payload limit', 
   assert.deepEqual(view.players[0], {
     id: 'p0', name: 'Player 0', slot: 0, x: gateAt(42, 5).x + 1, y: 220,
     alive: true, spectating: false, connected: true, score: 6, clean: 0,
-    shield: true, charge: true, event: { seq: 4, type: 'charge-pickup' },
+    shield: true, charge: true, bumper: false, coolant: 0, compact: 0, overdrive: 0,
+    event: { seq: 4, type: 'charge-pickup' },
   })
   assert.ok(Buffer.byteLength(JSON.stringify(view), 'utf8') < 4096)
 })

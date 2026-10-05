@@ -118,6 +118,9 @@ function step() {
 // Every step is a fixed 16 ms, so take as many as real time owes. setInterval
 // drifts: on Windows a 16 ms interval fires about 33 times a second, which ran
 // the whole game in slow motion. Clamped, so a stall cannot replay seconds at once.
+// Polled every 4 ms rather than every TICK_MS: Windows rounds a 16 ms timer up to
+// two 15.6 ms clock ticks (31 ms gaps), but anything under 15.6 ms fires on every
+// tick, so steps, and the frames sent after them, arrive at about 60 Hz.
 let last = Date.now()
 let owed = 0
 setInterval(() => {
@@ -140,6 +143,6 @@ setInterval(() => {
   } catch (error) {
     console.error('[Ventline Tick Error]', error)
   }
-}, TICK_MS)
+}, 4)
 
 wss.on('listening', () => console.log(`Ventline match server on ws://${HOST}:${PORT}`))

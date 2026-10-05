@@ -19,6 +19,7 @@ export function projectMap(snapshot, width, height) {
       w: gate.w * scaleX,
       service: { lo: gate.service.lo * scaleY, hi: gate.service.hi * scaleY },
       charged: { lo: gate.charged.lo * scaleY, hi: gate.charged.hi * scaleY },
+      spheres: (gate.spheres ?? []).map(sphere => ({ ...sphere, y: sphere.y * scaleY })),
     }))
   const players = snapshot.players.filter(player => !player.spectating &&
     Number.isFinite(player.x) && Number.isFinite(player.y)).map(player => ({

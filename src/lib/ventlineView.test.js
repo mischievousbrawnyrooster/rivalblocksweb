@@ -39,6 +39,8 @@ test('map scales both shutter openings without reversing their vertical order', 
   assert.ok(Math.abs(projected.charged.lo - gate.charged.lo / 6) < 1e-9)
   assert.ok(Math.abs(projected.charged.hi - gate.charged.hi / 6) < 1e-9)
   assert.equal(projected.service.lo < projected.charged.lo, gate.service.lo < gate.charged.lo)
+  assert.deepEqual(projected.spheres.map(s => s.kind), gate.spheres.map(s => s.kind))
+  projected.spheres.forEach((s, i) => assert.ok(Math.abs(s.y - gate.spheres[i].y / 6) < 1e-9))
 })
 
 test('map projects authoritative player coordinates and keeps overlapping slots distinct', () => {

@@ -494,8 +494,8 @@ export const games = [
         body: 'The wide service gap scores one. The narrow charged gap scores two.',
       },
       {
-        title: 'Carry a spare chance',
-        body: 'Pick up a shield to absorb a shutter or a score charge to lift the next clear.',
+        title: 'Six powerups to grab',
+        body: 'Survival spheres float in the wide gap, score spheres in the narrow one. Touch one to take it.',
       },
       {
         title: 'Fly again or fly together',

@@ -1,9 +1,31 @@
 import { useEffect, useRef, useState } from 'react'
 import { useTitle } from '../lib/useTitle.js'
+import { makeBuffer } from '../lib/snapshotBuffer.js'
 import { projectWorld, projectMap, mapMarkers, mapLabelX } from '../lib/ventlineView.js'
+import { SPHERE, SCORE, EFFECT_SHUTTERS, COMPACT_SCALE } from '../../server/ventline.js'
 
 const W = 960
 const H = 600
+// Every drone, yours included, is drawn this far behind the newest snapshot,
+// blended between two the server sent. Drawn at the newest, your drone and the
+// camera locked to it stepped whenever a frame arrived late. Sized to the longest
+// gap between frames (31 ms when a Windows timer skips a tick) plus jitter.
+const DELAY_MS = 40
+const HINT = 'Space, click, or tap to flap. Wide service gaps score 1; narrow ↯ gaps score 2. Touch a sphere to collect it.'
+// Every kind has its own mark, so none is told apart by colour alone. Colour
+// only says the pool: green survival kinds float in the wide gap, amber score
+// kinds in the narrow one.
+// U+FE0E asks for the text form: without it Windows draws the snowflake as a colour emoji.
+const GLYPH = { shield: '◇', bumper: '⇕', coolant: '❄︎', compact: '▣', charge: '↯', overdrive: '×2' }
+const POWERUPS = [
+  ['shield', 'Shield', 'absorbs one shutter'],
+  ['bumper', 'Bumper', 'one bounce off the ceiling or floor'],
+  ['coolant', 'Coolant', `slower for ${EFFECT_SHUTTERS} shutters`],
+  ['compact', 'Compact', `smaller for ${EFFECT_SHUTTERS} shutters`],
+  ['charge', 'Charge', '+2 on your next clear'],
+  ['overdrive', 'Overdrive', `double points for ${EFFECT_SHUTTERS} shutters`],
+]
+const sphereColor = (kind, c) => SCORE.includes(kind) ? c.warn : c.live
 const vars = ['bg', 'surface', 'line', 'fg', 'muted', 'flare', 'live', 'warn', 'tile', 'hole',
   ...Array.from({ length: 8 }, (_, i) => `player-${i + 1}`)]
 const palette = () => {
@@ -23,8 +45,8 @@ function drawGate(ctx, gate, cameraX, c) {
   const x = projectWorld(gate.x, 0, cameraX, 1).x
   if (x < -50 || x > W + 50) return
   const gaps = [
-    { ...gate.service, label: 'SERVICE', color: c.live, symbol: '◇' },
-    { ...gate.charged, label: 'CHARGED', color: c.warn, symbol: '↯' },
+    { ...gate.service, label: 'SERVICE', color: c.live },
+    { ...gate.charged, label: 'CHARGED', color: c.warn },
   ].sort((a, b) => a.lo - b.lo)
   const slabs = [[0, gaps[0].lo], [gaps[0].hi, gaps[1].lo], [gaps[1].hi, H]]
   for (const [top, bottom] of slabs) {
@@ -52,13 +74,62 @@ function drawGate(ctx, gate, cameraX, c) {
       ctx.textAlign = 'center'
       ctx.fillText('↯', x + gate.w / 2, gap.lo + 21)
     }
-    if (gate.pickup) {
-      const center = (gap.lo + gap.hi) / 2
-      ctx.font = 'bold 19px ui-sans-serif, sans-serif'
-      ctx.textAlign = 'center'
-      ctx.fillText(gap.symbol, x + gate.w / 2, center + 6)
-    }
   }
+}
+
+// A pickup sphere spins about a tilted axis that slowly turns, inside a ring that
+// turns the other way. Only the drawing moves: the sphere stays where the server
+// placed it, so what you see is what you can touch.
+function drawSphere(ctx, sphere, cameraX, c, now, reduced) {
+  const { x, y } = projectWorld(sphere.x, sphere.y, cameraX, 1)
+  if (x < -40 || x > W + 40) return
+  const color = sphereColor(sphere.kind, c)
+  const r = SPHERE
+  const spin = reduced ? 0.6 : now / 450
+  const turn = reduced ? -0.35 : now / 1400
+  const ring = (from, to) => {
+    ctx.beginPath(); ctx.ellipse(0, 0, r * 1.7, r * 0.55, -turn * 1.6, from, to); ctx.stroke()
+  }
+  ctx.save()
+  ctx.translate(x, y)
+  ctx.strokeStyle = color
+  ctx.lineWidth = 2
+  ctx.globalAlpha = 0.45
+  ring(Math.PI, Math.PI * 2)
+  ctx.globalAlpha = 1
+  ctx.shadowColor = color
+  ctx.shadowBlur = 16
+  ctx.fillStyle = color
+  ctx.beginPath(); ctx.arc(0, 0, r, 0, Math.PI * 2); ctx.fill()
+  ctx.shadowBlur = 0
+  const shade = ctx.createRadialGradient(-r * 0.35, -r * 0.4, 0, -r * 0.2, -r * 0.2, r * 1.25)
+  shade.addColorStop(0, 'rgba(255,255,255,0.75)')
+  shade.addColorStop(0.3, 'rgba(255,255,255,0)')
+  shade.addColorStop(1, 'rgba(0,0,0,0.55)')
+  ctx.fillStyle = shade
+  ctx.fill()
+  ctx.save()
+  ctx.clip()
+  ctx.rotate(turn)
+  ctx.strokeStyle = c.hole
+  ctx.globalAlpha = 0.45
+  ctx.lineWidth = 1
+  for (let k = 0; k < 3; k++) {
+    ctx.beginPath()
+    ctx.ellipse(0, 0, Math.abs(Math.sin(spin + k * Math.PI / 3)) * r, r, 0, 0, Math.PI * 2)
+    ctx.stroke()
+  }
+  ctx.beginPath(); ctx.ellipse(0, 0, r, r * 0.3, 0, 0, Math.PI * 2); ctx.stroke()
+  ctx.restore()
+  ctx.globalAlpha = 0.9
+  ring(0, Math.PI)
+  ctx.globalAlpha = 1
+  ctx.fillStyle = c.hole
+  ctx.font = `bold ${sphere.kind === 'overdrive' ? 10 : 12}px ui-sans-serif, sans-serif`
+  ctx.textAlign = 'center'
+  ctx.textBaseline = 'middle'
+  ctx.fillText(GLYPH[sphere.kind], 0, 0.5)
+  ctx.restore()
 }
 
 function drawDrone(ctx, player, cameraX, c, flash, alpha = 1, label = '') {
@@ -68,6 +139,10 @@ function drawDrone(ctx, player, cameraX, c, flash, alpha = 1, label = '') {
   ctx.save()
   ctx.translate(x, y)
   ctx.globalAlpha = alpha * (player.alive ? 1 : 0.48)
+  // Compact shrinks the body by the same scale the rules shrink its hitbox.
+  const scale = player.compact ? COMPACT_SCALE : 1
+  ctx.save()
+  ctx.scale(scale, scale)
   polygon(ctx, [[-18, 0], [-6, -11], [13, -10], [21, 0], [13, 10], [-6, 11]], c[`player-${(player.slot ?? 0) + 1}`])
   polygon(ctx, [[-3, -9], [14, -8], [18, 0], [14, 8], [-3, 9]], c.fg)
   ctx.fillStyle = c.bg
@@ -78,15 +153,18 @@ function drawDrone(ctx, player, cameraX, c, flash, alpha = 1, label = '') {
   ctx.moveTo(-10, -13); ctx.lineTo(10, -13)
   ctx.moveTo(-10, 13); ctx.lineTo(10, 13)
   ctx.stroke()
+  ctx.restore()
   if (player.shield) {
     ctx.strokeStyle = c.live
     ctx.lineWidth = 2
-    ctx.beginPath(); ctx.arc(0, 0, 23, 0, Math.PI * 2); ctx.stroke()
+    ctx.beginPath(); ctx.arc(0, 0, 23 * scale, 0, Math.PI * 2); ctx.stroke()
   }
-  if (player.charge) {
-    ctx.fillStyle = c.warn
-    ctx.font = 'bold 16px ui-sans-serif, sans-serif'
-    ctx.fillText('↯', -4, -24)
+  const held = ['charge', 'bumper', 'coolant', 'compact', 'overdrive'].filter(kind => player[kind]).map(kind => GLYPH[kind])
+  if (held.length) {
+    ctx.fillStyle = c.fg
+    ctx.font = 'bold 12px ui-sans-serif, sans-serif'
+    ctx.textAlign = 'center'
+    ctx.fillText(held.join(' '), 0, 33 * scale + 4)
   }
   if (label) {
     if (alpha < 1) ctx.globalAlpha = player.alive ? 0.8 : 0.4
@@ -125,12 +203,10 @@ function drawMap(ctx, snap, c, now, crashUntil, frozenCrashes) {
     ctx.fillRect(gate.x - 1, gate.service.lo, Math.max(5, gate.w + 2), 2)
     ctx.fillStyle = c.warn
     ctx.fillRect(gate.x - 1, gate.charged.lo, Math.max(5, gate.w + 2), 2)
-    if (gate.pickup) {
-      ctx.font = 'bold 10px ui-sans-serif, sans-serif'
-      ctx.fillStyle = c.live
-      ctx.fillText('◇', gate.x + 4, (gate.service.lo + gate.service.hi) / 2 + 3)
-      ctx.fillStyle = c.warn
-      ctx.fillText('↯', gate.x + 4, (gate.charged.lo + gate.charged.hi) / 2 + 3)
+    ctx.font = 'bold 10px ui-sans-serif, sans-serif'
+    for (const sphere of gate.spheres ?? []) {
+      ctx.fillStyle = sphereColor(sphere.kind, c)
+      ctx.fillText(GLYPH[sphere.kind], gate.x + 4, sphere.y + 3)
     }
   }
   for (const marker of mapMarkers(map.players, now, crashUntil, frozenCrashes)) {
@@ -150,8 +226,7 @@ function drawMap(ctx, snap, c, now, crashUntil, frozenCrashes) {
   ctx.restore()
 }
 
-function draw(ctx, snap, previous, receivedAt, interval, ownId, now, cueUntil, reduced) {
-  const c = palette()
+function draw(ctx, snap, ownId, now, cueUntil, reduced, c) {
   ctx.clearRect(0, 0, W, H)
   ctx.fillStyle = c.hole
   ctx.fillRect(0, 0, W, H)
@@ -169,25 +244,22 @@ function draw(ctx, snap, previous, receivedAt, interval, ownId, now, cueUntil, r
   const viewed = snap?.players?.find(p => p.id === snap.viewedId)
   const cameraX = Number.isFinite(viewed?.x) ? viewed.x - 180 : -180
   for (const gate of snap?.gates ?? []) drawGate(ctx, gate, cameraX, c)
+  for (const gate of snap?.gates ?? []) {
+    for (const sphere of gate.spheres ?? []) drawSphere(ctx, sphere, cameraX, c, now, reduced)
+  }
   for (const rival of snap?.players ?? []) {
     if (rival.id === snap.viewedId || rival.spectating) continue
-    const before = previous?.players?.find(player => player.id === rival.id)
-    const t = reduced || !before?.alive || !rival.alive || !Number.isFinite(before.x) ||
-      !Number.isFinite(before.y) ? 1 : Math.min(1, Math.max(0, (now - receivedAt) / interval))
-    const pose = before && t < 1 ? { ...rival,
-      x: before.x + (rival.x - before.x) * t,
-      y: before.y + (rival.y - before.y) * t } : rival
-    drawDrone(ctx, pose, cameraX, c, false, 0.25, `${rival.slot + 1} ${rival.name?.slice(0, 9) ?? ''}`)
+    drawDrone(ctx, rival, cameraX, c, false, 0.25, `${rival.slot + 1} ${rival.name?.slice(0, 9) ?? ''}`)
   }
   if (viewed) drawDrone(ctx, viewed, cameraX, c, !reduced && now < cueUntil, 1,
     ownId && viewed.id !== ownId ? 'VIEW' : '')
-  else {
-    ctx.fillStyle = c.muted
-    ctx.font = '18px ui-sans-serif, sans-serif'
-    ctx.textAlign = 'center'
-    ctx.fillText(snap ? 'Waiting for launch' : 'Choose a flight mode to enter the bay', W / 2, H / 2)
-  }
 }
+
+const Stat = ({ label, children, className = '' }) => (
+  <span className={`border border-line bg-bg/80 px-[0.6em] py-[0.2em] ${className}`}>
+    {label} <strong>{children}</strong>
+  </span>
+)
 
 export default function Ventline() {
   useTitle('Ventline')
@@ -202,10 +274,9 @@ export default function Ventline() {
   const socketRef = useRef(null)
   const canvasRef = useRef(null)
   const mapCanvasRef = useRef(null)
+  const retryRef = useRef(null)
   const snapRef = useRef(null)
-  const previousRef = useRef(null)
-  const receivedAtRef = useRef(0)
-  const intervalRef = useRef(50)
+  const bufRef = useRef(makeBuffer(DELAY_MS))
   const finalMapRef = useRef(null)
   const finalCrashesRef = useRef(null)
   const crashUntilRef = useRef(new Map())
@@ -251,7 +322,7 @@ export default function Ventline() {
     const socket = new WebSocket(`${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ventline-ws`, 'ventline.v1')
     socketRef.current = socket
     snapRef.current = null
-    previousRef.current = null
+    bufRef.current = makeBuffer(DELAY_MS)
     finalMapRef.current = null
     finalCrashesRef.current = null
     crashUntilRef.current.clear()
@@ -280,10 +351,11 @@ export default function Ventline() {
           crashUntilRef.current.set(player.id, performance.now() + 900)
         }
       }
-      previousRef.current = snapRef.current
       const receivedAt = performance.now()
-      if (receivedAtRef.current) intervalRef.current = Math.max(16, receivedAt - receivedAtRef.current)
-      receivedAtRef.current = receivedAt
+      // A run starts again from x 0. Blended with the last run's final frame, the
+      // drone would sweep back across the whole bay.
+      if (message.phase === 'playing' && previousPhase !== 'playing') bufRef.current = makeBuffer(DELAY_MS)
+      bufRef.current.push(message, receivedAt)
       snapRef.current = message
       if (message.phase === 'over' && !finalMapRef.current) {
         finalMapRef.current = message
@@ -302,7 +374,11 @@ export default function Ventline() {
       if (own?.event?.seq > eventSeqRef.current) {
         eventSeqRef.current = own.event.seq
         const labels = { 'shield-pickup': 'Shield collected', 'charge-pickup': 'Score charge collected',
-          'shield-use': 'Shield absorbed a shutter', 'charge-use': 'Score charge used' }
+          'shield-use': 'Shield absorbed a shutter', 'charge-use': 'Score charge used',
+          'bumper-pickup': 'Bumper ready: one bounce off the ceiling or floor', 'bumper-use': 'Bumper bounced you back',
+          'coolant-pickup': `Coolant: slower for ${EFFECT_SHUTTERS} shutters`,
+          'compact-pickup': `Compact: smaller for ${EFFECT_SHUTTERS} shutters`,
+          'overdrive-pickup': `Overdrive: double points for ${EFFECT_SHUTTERS} shutters` }
         setCue(labels[own.event.type] ?? '')
         clearTimeout(cueTimerRef.current)
         cueTimerRef.current = setTimeout(() => setCue(''), 1800)
@@ -327,23 +403,38 @@ export default function Ventline() {
     const media = window.matchMedia('(prefers-reduced-motion: reduce)')
     const updateMotion = () => { reducedRef.current = media.matches }
     updateMotion(); media.addEventListener('change', updateMotion)
+    // Read once and again on a theme flip, not every frame: reading computed style
+    // per frame forced a style pass whenever the HUD had just re-rendered.
+    let colors = palette()
+    const theme = new MutationObserver(() => { colors = palette() })
+    theme.observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] })
     let frame
     const render = now => {
-      draw(ctx, snapRef.current, previousRef.current, receivedAtRef.current, intervalRef.current,
-        idRef.current, now, cueUntilRef.current, reducedRef.current)
-      drawMap(mapCtx, finalMapRef.current ?? snapRef.current, palette(), now,
-        crashUntilRef.current, finalCrashesRef.current)
+      // Lobby and countdown frames carry no positions (x is null), which a blend
+      // would turn into 0 and draw every pilot in the corner.
+      const flying = ['playing', 'over'].includes(snapRef.current?.phase)
+      const view = (flying && bufRef.current.sample(now)) || snapRef.current
+      draw(ctx, view, idRef.current, now, cueUntilRef.current, reducedRef.current, colors)
+      drawMap(mapCtx, finalMapRef.current ?? view, colors, now, crashUntilRef.current, finalCrashesRef.current)
       frame = requestAnimationFrame(render)
     }
     frame = requestAnimationFrame(render)
-    return () => { cancelAnimationFrame(frame); media.removeEventListener('change', updateMotion) }
+    return () => {
+      cancelAnimationFrame(frame)
+      media.removeEventListener('change', updateMotion)
+      theme.disconnect()
+    }
   }, [])
 
   useEffect(() => {
     const onKeyDown = event => {
       if (event.code !== 'Space') return
       const snap = snapRef.current
-      if (snap?.phase !== 'playing' || !snap.players?.find(p => p.id === idRef.current)?.alive) return
+      if (snap?.phase !== 'playing' || !snap.players?.find(p => p.id === idRef.current)?.alive) {
+        // Off a control, Space belongs to the game and never scrolls the page.
+        if (snap && event.target === document.body) event.preventDefault()
+        return
+      }
       // While your drone flies, Space flaps wherever focus is. Solo keeps focus after
       // it is pressed, and a Space it took would restart the run instead of flapping.
       event.preventDefault()
@@ -364,66 +455,132 @@ export default function Ventline() {
   const isSpectator = mode === 'live' && snap && !own
   const score = own?.score ?? 0
   const phase = snap?.phase
+
+  // Retry takes focus once the result has been on screen a moment, so Space flies
+  // again without the mouse. Focused at once, a flap still being pressed as the
+  // drone crashed would skip the result.
+  useEffect(() => {
+    if (phase !== 'over' || mode !== 'solo') return
+    const timer = setTimeout(() => retryRef.current?.focus(), 700)
+    return () => clearTimeout(timer)
+  }, [phase, mode])
+
   const status = connection === 'error' || connection === 'closed'
     ? 'Connection lost. Choose Solo or Live to reconnect.'
     : connection === 'connecting' ? 'Connecting to the flight bay…'
       : !mode ? 'Choose Solo for an immediate run, or Live to fly with others.'
-        : isSpectator ? `Spectating ${viewed?.name ?? 'the next pilot'}. Join the next round when it resets.`
+        : isSpectator ? `Spectating ${viewed?.name ?? 'the next pilot'}. You fly the next round.`
           : phase === 'lobby' ? ready ? 'Ready. Waiting for another pilot.' : 'Lobby. Ready when you are.'
             : phase === 'countdown' ? 'Launch countdown. Get ready to flap.'
-              : phase === 'playing' ? own?.alive ? 'Flying. Press Space or tap the bay to flap.' : 'Drone crashed. Watching the remaining pilots.'
-                : phase === 'over' ? mode === 'solo' ? 'Run complete. Retry to launch again.' : 'Round complete. The next lobby opens shortly.'
+              : phase === 'playing' ? own?.alive ? 'Flying. Press Space or tap the bay to flap.' : `Crashed. Watching ${viewed?.name ?? 'the remaining pilots'}.`
+                : phase === 'over' ? mode === 'solo' ? `Run complete. ${score} points.` : 'Round complete. The next lobby opens shortly.'
                   : 'Joining the flight bay…'
 
+  const button = 'bg-flare px-[1.2em] py-[0.45em] font-bold text-on-flare'
+  const legend = (
+    <ul className="mt-[0.75em] grid grid-cols-1 gap-x-[1.2em] gap-y-[0.2em] text-left sm:grid-cols-2">
+      {POWERUPS.map(([kind, title, body]) => (
+        <li key={kind}><span className={SCORE.includes(kind) ? 'text-warn' : 'text-live'}>{GLYPH[kind]}</span> <strong>{title}</strong> {body}</li>
+      ))}
+    </ul>
+  )
+  const lost = connection === 'error' || connection === 'closed'
+  const panel = !mode ? (
+    <>
+      <p className="display text-[1.6em]">Choose Solo or Live</p>
+      <p className="mt-[0.5em] text-muted">{HINT}</p>
+      {legend}
+    </>
+  ) : lost || connection === 'connecting' || !snap ? (
+    <p>{lost ? status : connection === 'connecting' ? status : 'Joining the flight bay…'}</p>
+  ) : phase === 'lobby' ? (
+    <>
+      <p className="display text-[1.6em]">Lobby</p>
+      <ul className="mt-[0.5em]">
+        {snap.players.map(p => <li key={p.id}>{p.slot + 1} {p.name}{p.id === myId ? ' (you)' : ''}</li>)}
+      </ul>
+      {!own ? <p className="mt-[0.75em]">The lobby is full. You fly the next round.</p>
+        : ready ? <p className="mt-[0.75em]">Ready. Waiting for another pilot.</p>
+          : <button type="button" autoFocus onClick={() => { send('ready'); setReady(true) }} className={`mt-[0.75em] ${button}`}>Ready</button>}
+      <p className="mt-[0.75em] text-muted">{HINT}</p>
+      {legend}
+    </>
+  ) : phase === 'countdown' ? (
+    <>
+      <p className="display text-[1.6em]">Launch countdown</p>
+      <p className="mt-[0.5em]">{isSpectator ? 'You fly the next round.' : 'Get ready to flap.'}</p>
+    </>
+  ) : phase === 'over' && mode === 'solo' ? (
+    <>
+      <p className="display text-[1.6em]">Run complete</p>
+      <p className="mt-[0.5em]">{score} points, {own?.clean ?? 0} clean clears. Best {snap.personalBest ?? 0}.</p>
+      <button ref={retryRef} type="button" onClick={() => { send('retry'); setCue('') }} className={`mt-[0.75em] ${button}`}>Retry</button>
+    </>
+  ) : phase === 'over' ? (
+    <>
+      <p className="display text-[1.6em]">Round complete</p>
+      <ol className="mt-[0.5em] text-left">
+        {[...snap.players].sort((a, b) => b.score - a.score || b.clean - a.clean).map(p => (
+          <li key={p.id}>{p.slot + 1} {p.name}{p.id === myId ? ' (you)' : ''}: {p.score} points, {p.clean} clears{p.connected ? '' : ', left'}</li>
+        ))}
+      </ol>
+      <p className="mt-[0.5em] text-muted">The next lobby opens shortly.</p>
+    </>
+  ) : null
+  const banner = phase === 'playing' && mode === 'live' && !own?.alive ? status : ''
+
   return (
-    <main className="mx-auto max-w-6xl px-4 py-8 sm:px-6 sm:py-12">
-      <div className="mb-6 flex flex-wrap items-end justify-between gap-5">
-        <div><h1 className="display text-4xl sm:text-6xl">Ventline</h1><p className="mt-2 text-sm text-muted">Every gap is a choice.</p></div>
-        <form onSubmit={event => { event.preventDefault(); connect('solo') }} className="flex flex-wrap items-end gap-2">
-          <label className="text-sm text-muted">Pilot name
-            <input value={name} maxLength={24} onChange={event => setName(event.target.value)} className="mt-1 block w-36 border border-line bg-surface px-3 py-2 text-fg" />
+    <main className="mx-auto max-w-6xl px-4 py-3 sm:px-6">
+      <div className="mb-3 flex flex-wrap items-center justify-between gap-x-5 gap-y-2">
+        <div className="flex items-baseline gap-3">
+          <h1 className="display text-3xl">Ventline</h1>
+          <p className="hidden text-sm text-muted sm:block">Every gap is a choice.</p>
+        </div>
+        <form onSubmit={event => { event.preventDefault(); connect('solo') }} className="flex flex-wrap items-center gap-2">
+          <label className="flex items-center gap-2 text-sm text-muted">Pilot
+            <input value={name} maxLength={24} onChange={event => setName(event.target.value)} className="w-32 border border-line bg-surface px-3 py-1.5 text-fg" />
           </label>
-          <button type="submit" className="bg-flare px-5 py-2 font-bold text-on-flare">Solo</button>
-          <button type="button" onClick={() => connect('live')} className="border border-line bg-surface px-5 py-2 font-bold text-fg">Live</button>
+          <button type="submit" className="bg-flare px-4 py-1.5 font-bold text-on-flare">Solo</button>
+          <button type="button" onClick={() => connect('live')} className="border border-line bg-surface px-4 py-1.5 font-bold text-fg">Live</button>
         </form>
       </div>
-      <div className="flex flex-wrap gap-x-6 gap-y-2 border-y border-line bg-surface px-4 py-3 font-mono text-sm">
-        <span>Score <strong className="text-flare">{score}</strong></span>
-        <span>Clean clears <strong>{own?.clean ?? 0}</strong></span>
-        <span>Best <strong>{snap?.personalBest ?? 0}</strong></span>
-        <span>Shield <strong>{own?.shield ? '◇ held' : 'empty'}</strong></span>
-        <span>Charge <strong>{own?.charge ? '↯ held' : 'empty'}</strong></span>
-      </div>
+      {/* Sized to fit the screen below the bar. Everything the game shows sits on it:
+          the top and bottom eighths are always solid shutter, so nothing there can
+          hide an opening, and the HUD starts right of the column the drone flies in. */}
       <div onPointerDown={event => { if (event.target === canvasRef.current && (event.button === 0 || event.pointerType === 'touch')) press() }}
-        className="relative cursor-pointer overflow-hidden border-x border-b border-line bg-bg"
-        style={{ touchAction: 'none' }} aria-label="Ventline flight area. Tap or click to flap">
-        <div className="relative h-32 border-b border-line bg-surface">
-          <canvas ref={mapCanvasRef} className="pointer-events-none absolute right-1 top-0 h-32 w-44" aria-hidden="true" />
+        className="@container relative mx-auto cursor-pointer select-none overflow-hidden border border-line bg-bg"
+        style={{ touchAction: 'none', width: 'min(100%, calc((100dvh - 9rem) * 1.6))', aspectRatio: '8 / 5' }}
+        aria-label="Ventline flight area. Tap or click to flap">
+        <canvas ref={canvasRef} className="absolute inset-0 block h-full w-full" aria-hidden="true" />
+        <div className="pointer-events-none absolute inset-0 font-mono text-fg" style={{ fontSize: 'clamp(10px, 1.45cqw, 16px)' }}>
+          <div className="absolute left-[24%] right-[22%] top-[2%] flex flex-wrap gap-[0.5em]">
+            <Stat label="Score" className="text-[1.15em]"><span className="text-flare">{score}</span></Stat>
+            <Stat label="Best">{snap?.personalBest ?? 0}</Stat>
+            <Stat label="Clears">{own?.clean ?? 0}</Stat>
+            {POWERUPS.filter(([kind]) => own?.[kind]).map(([kind, title]) => (
+              <span key={kind} className={`border border-line bg-bg/80 px-[0.6em] py-[0.2em] ${SCORE.includes(kind) ? 'text-warn' : 'text-live'}`}>
+                {GLYPH[kind]} <strong>{title}{typeof own[kind] === 'number' ? ` ${own[kind]}` : ''}</strong>
+              </span>
+            ))}
+          </div>
+          <canvas ref={mapCanvasRef} className="absolute right-[1.5%] top-[2%] h-auto w-[18%] min-w-[110px] opacity-90" aria-hidden="true" />
+          {banner && <p className="absolute left-1/2 top-[14%] -translate-x-1/2 border border-line bg-bg/85 px-[0.8em] py-[0.3em] whitespace-nowrap">{banner}</p>}
+          {cue && <p className="absolute left-1/2 top-[22%] -translate-x-1/2 border border-line bg-bg/85 px-[0.8em] py-[0.3em] whitespace-nowrap text-live">{cue}</p>}
+          {mode === 'live' && (phase === 'playing' || phase === 'countdown') &&
+            <ul className="absolute bottom-[2%] left-[24%] right-[18%] flex flex-wrap gap-[0.5em]">
+              {snap.players.map(p => (
+                <li key={p.id} className="border border-line bg-bg/80 px-[0.6em] py-[0.2em]">
+                  <span style={{ color: `var(--player-${p.slot + 1})` }}>{p.slot + 1}</span> {p.name.slice(0, 10)}{p.id === myId ? ' (you)' : ''} {phase === 'playing' && !p.alive ? '× ' : ''}{p.score}
+                </li>
+              ))}
+            </ul>}
+          {panel && <div className="pointer-events-auto absolute left-1/2 top-1/2 max-w-[70%] -translate-x-1/2 -translate-y-1/2 border border-line bg-surface/90 px-[1.6em] py-[1.2em] text-center font-sans">{panel}</div>}
+          <button type="button" aria-pressed={muted} onClick={() => { mutedRef.current = !muted; setMuted(!muted) }}
+            className="pointer-events-auto absolute bottom-[2%] right-[1.5%] border border-line bg-bg/80 px-[0.8em] py-[0.25em]">Sound {muted ? 'off' : 'on'}</button>
         </div>
-        <canvas ref={canvasRef} className="block h-auto w-full" style={{ aspectRatio: '8 / 5' }} aria-hidden="true" />
       </div>
-      <div className="mt-4 flex flex-wrap items-start justify-between gap-4">
-        <div>
-          <p role="status" className="font-semibold">{status}</p>
-          <p className="mt-1 text-sm text-muted">Space, click, or tap to flap. Wide service gaps score 1; narrow ↯ gaps score 2.</p>
-          {cue && <p role="status" className="mt-2 text-sm text-live">{cue}</p>}
-          {phase === 'lobby' && mode === 'live' && own && !ready &&
-            <button type="button" onClick={() => { send('ready'); setReady(true) }} className="mt-4 bg-flare px-5 py-2 font-bold text-on-flare">Ready</button>}
-          {phase === 'over' && mode === 'solo' &&
-            <button type="button" onClick={() => { send('retry'); setCue('') }} className="mt-4 bg-flare px-5 py-2 font-bold text-on-flare">Retry</button>}
-        </div>
-        <button type="button" aria-pressed={muted} onClick={() => { mutedRef.current = !muted; setMuted(!muted) }}
-          className="border border-line px-4 py-2 text-sm">Sound {muted ? 'off' : 'on'}</button>
-      </div>
-      {mode && snap && <section className="mt-8 border-t border-line pt-5">
-        <h2 className="display text-xl">{phase === 'over' ? 'Results' : 'Pilots'}</h2>
-        <ul className="mt-3 flex flex-wrap gap-x-6 gap-y-2 text-sm">
-          {snap.players?.map(player => <li key={player.id}>
-            <strong>{player.name}{player.id === myId ? ' (you)' : ''}</strong>: {player.score} points, {player.clean} clean clears
-            {(phase === 'playing' || phase === 'over') && !player.alive ? ' · crashed' : ''}
-          </li>)}
-        </ul>
-      </section>}
+      <p role="status" className="sr-only">{status}</p>
+      {cue && <p role="status" className="sr-only">{cue}</p>}
     </main>
   )
 }
